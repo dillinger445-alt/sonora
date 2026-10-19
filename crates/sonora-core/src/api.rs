@@ -191,6 +191,26 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             app.events.emit("library.changed", &obj! { "reason" => "removed", "count" => n });
             Ok(obj! { "removed" => n })
         }
+        "tracks.editDj" => {
+            let ids = ids_param(p, "ids")?;
+            let edit = crate::dj::Edit::from_json(p).map_err(ApiError::invalid)?;
+            if edit.is_empty() {
+                return Err(ApiError::invalid("nothing to change: give bpm, bpmFactor, key, genre or reset"));
+            }
+            let cfg = app.settings().dj_config();
+            let n = crate::dj::apply_edit(&app.db.write(), &ids, &edit, &cfg)?;
+            app.events.emit("library.changed", &obj! { "reason" => "dj_edit", "count" => n as i64 });
+            Ok(obj! { "updated" => n as i64 })
+        }
+        "tracks.analyzeDj" => {
+            // Analyses made before tempo and key detection existed.
+            let ids = app.db.read().query(
+                "SELECT id FROM tracks WHERE status = 'done' AND dj_version IS NULL AND missing_since IS NULL ORDER BY id",
+                params![],
+                |r| r.i64(0),
+            )?;
+            queued_json(app.scans.enqueue_tracks("dj", &ids))
+        }
         "tracks.reveal" => {
             let id = id_param(p, "id")?;
             let t = library::get_track(&app.db.read(), id)?.ok_or_else(|| ApiError::not_found(format!("track {id} not found")))?;
@@ -255,8 +275,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                 params![id, limit, offset],
                 |r| {
                     let mut v = TrackRow::from_row(r).to_json();
-                    v.set("outcome", r.text(43));
-                    v.set("finishedAt", r.opt_i64(44));
+                    v.set("outcome", r.text(crate::model::TRACK_COLUMN_COUNT));
+                    v.set("finishedAt", r.opt_i64(crate::model::TRACK_COLUMN_COUNT + 1));
                     v
                 },
             )?;
@@ -271,6 +291,51 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         }
         "duplicates.scan" => Ok(obj! { "accepted" => app.start_duplicate_scan() }),
 
+        // ---------------------------------------------------- DJ export
+        "djexport.plan" => {
+            let ids = ids_param(p, "ids")?;
+            let opts = crate::djexport::ExportOptions::from_json(p).map_err(ApiError::invalid)?;
+            let items = crate::djexport::plan(&app.db.read(), &ids, &opts)?;
+            let tools = app.scans.shared.tools.read().unwrap_or_else(|e| e.into_inner()).clone();
+            let problem = crate::djexport::check_tools(&opts, &items, &tools).err();
+            let exported = items.iter().filter(|i| i.skip.is_none()).count();
+            Ok(obj! {
+                "items" => Value::Array(items.iter().map(ToJson::to_json).collect()),
+                "exported" => exported,
+                "skipped" => items.len() - exported,
+                "betterCopies" => items.iter().filter(|i| i.skip.is_none() && i.source.id != i.track.id).count(),
+                "withWarnings" => items.iter().filter(|i| i.skip.is_none() && !i.warnings.is_empty()).count(),
+                "problem" => problem,
+                "running" => app.exporter.is_running(),
+            })
+        }
+        "djexport.start" => {
+            let ids = ids_param(p, "ids")?;
+            let opts = crate::djexport::ExportOptions::from_json(p).map_err(ApiError::invalid)?;
+            let folder = PathBuf::from(p.req_str("folder").map_err(|e| ApiError::invalid(e.to_string()))?);
+            if !folder.is_absolute() {
+                return Err(ApiError::invalid("folder must be an absolute path"));
+            }
+            if !folder.is_dir() {
+                return Err(ApiError::new("not_found", format!("the folder {} does not exist", folder.display())));
+            }
+            let items = crate::djexport::plan(&app.db.read(), &ids, &opts)?;
+            let tools = app.scans.shared.tools.read().unwrap_or_else(|e| e.into_inner()).clone();
+            crate::djexport::check_tools(&opts, &items, &tools).map_err(|m| ApiError::new("tool_missing", m))?;
+            let total = items.iter().filter(|i| i.skip.is_none()).count();
+            if total == 0 {
+                return Err(ApiError::invalid("none of these tracks can be exported (their files are missing)"));
+            }
+            let playlist = p.get("playlistName").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(|s| s.chars().take(120).collect());
+            let job = crate::djexport::Job { items, folder, options: opts, app_version: app.config.app_version.clone(), playlist };
+            if !app.exporter.start(job, Arc::clone(&app.events), tools) {
+                return Err(ApiError::new("busy", "Another export is still running."));
+            }
+            Ok(obj! { "accepted" => true, "total" => total })
+        }
+        "djexport.cancel" => Ok(obj! { "ok" => app.exporter.cancel() }),
+        "djexport.status" => Ok(obj! { "running" => app.exporter.is_running(), "last" => app.exporter.last() }),
+
         // ------------------------------------------------------ settings
         "settings.get" => Ok(app.settings().to_json()),
         "settings.update" => {
@@ -279,8 +344,14 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             for (k, v) in values.iter() {
                 s.apply(k, v).map_err(ApiError::invalid)?;
             }
+            let before = app.settings().dj_config();
             s.save(&app.db.write())?;
             *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s.clone();
+            if s.dj_config() != before {
+                // The tempo range or folder genres changed what is shown.
+                let n = crate::dj::refresh(&app.db.write(), None, &s.dj_config())?;
+                app.events.emit("library.changed", &obj! { "reason" => "dj_settings", "count" => n as i64 });
+            }
             Ok(s.to_json())
         }
         "tools.refresh" => {

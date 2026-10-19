@@ -42,6 +42,7 @@ pub struct App {
     pub scans: ScanManager,
     pub dup_running: Arc<AtomicBool>,
     dup_cancel: Arc<AtomicBool>,
+    pub exporter: Arc<crate::djexport::Exporter>,
 }
 
 impl App {
@@ -64,10 +65,32 @@ impl App {
                 "recoveredTracks" => recovered,
             },
         );
+        // After the upgrade that added DJ metadata, fill in the values in use
+        // (from tags until tracks are analyzed again).
+        {
+            let c = db.write();
+            let pending = c.query_row("SELECT value FROM meta WHERE key = 'dj_refresh'", crate::params![], |r| r.text(0)).ok().flatten().is_some();
+            if pending {
+                match crate::dj::refresh(&c, None, &settings.dj_config()) {
+                    Ok(_) => {
+                        let _ = c.execute("DELETE FROM meta WHERE key = 'dj_refresh'", crate::params![]);
+                    }
+                    Err(e) => logging::log("error", "app", &format!("could not prepare DJ metadata: {e}")),
+                }
+            }
+        }
         let events = Arc::new(EventBus::default());
         let rescan = settings.rescan_on_launch == "changed";
         let scans = ScanManager::new(Arc::clone(&db), Arc::clone(&events), tools, settings);
-        let app = Arc::new(App { config, db, events, scans, dup_running: Arc::new(AtomicBool::new(false)), dup_cancel: Arc::new(AtomicBool::new(false)) });
+        let app = Arc::new(App {
+            config,
+            db,
+            events,
+            scans,
+            dup_running: Arc::new(AtomicBool::new(false)),
+            dup_cancel: Arc::new(AtomicBool::new(false)),
+            exporter: Arc::new(crate::djexport::Exporter::default()),
+        });
         // Work interrupted by a crash or by quitting mid-scan continues where
         // it stopped. Cancelled work is not resumed.
         match app.interrupted_work() {
@@ -156,6 +179,7 @@ impl App {
     /// Cancels running work and waits briefly for workers to stop.
     pub fn shutdown(&self) {
         self.dup_cancel.store(true, Ordering::Relaxed);
+        self.exporter.cancel();
         self.scans.shutdown(Duration::from_secs(5));
         logging::log("info", "app", "core stopped");
     }

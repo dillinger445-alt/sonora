@@ -1,7 +1,9 @@
 //! User settings, persisted as JSON values in the `settings` table.
 
 use crate::db::sqlite::Connection;
+use crate::dj::{DjConfig, FolderGenre};
 use crate::params;
+use sonora_engine::analysis::key::Notation;
 use sonora_json::{obj, ToJson, Value};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +24,12 @@ pub struct Settings {
     pub keep_visuals: bool,
     /// Interface theme: only "dark" is implemented.
     pub theme: String,
+    /// How keys are written: "camelot" | "openkey" | "musical" | "sharps" | "flats".
+    pub key_notation: String,
+    /// Tempos are shown within this range (at least an octave wide).
+    pub bpm_range: (f64, f64),
+    /// Genre from folder names when the tags have none: "off" | "top" | "parent".
+    pub genre_from_folders: String,
 }
 
 pub fn default_workers() -> usize {
@@ -42,6 +50,9 @@ impl Default for Settings {
             max_duration_min: 240.0,
             keep_visuals: true,
             theme: "dark".into(),
+            key_notation: "camelot".into(),
+            bpm_range: sonora_engine::analysis::tempo::DEFAULT_RANGE,
+            genre_from_folders: "off".into(),
         }
     }
 }
@@ -49,6 +60,11 @@ impl Default for Settings {
 pub const MAX_WORKERS: usize = 16;
 
 impl Settings {
+    /// The settings that shape the tempo, key and genre shown.
+    pub fn dj_config(&self) -> DjConfig {
+        DjConfig { bpm_range: self.bpm_range, folder_genre: FolderGenre::from_id(&self.genre_from_folders).unwrap_or(FolderGenre::Off) }
+    }
+
     pub fn load(c: &Connection) -> Settings {
         let mut s = Settings::default();
         let rows = c.query("SELECT key, value FROM settings", params![], |r| (r.text(0), r.text(1))).unwrap_or_default();
@@ -102,6 +118,32 @@ impl Settings {
                 }
                 self.theme = s.into();
             }
+            "keyNotation" => {
+                let s = v.as_str().ok_or("keyNotation must be a string")?;
+                if Notation::from_id(s).is_none() {
+                    return Err("keyNotation must be camelot, openkey, musical, sharps or flats".into());
+                }
+                self.key_notation = s.into();
+            }
+            "bpmRange" => {
+                let a = v.as_array().filter(|a| a.len() == 2).ok_or("bpmRange must be [lowest, highest]")?;
+                let (lo, hi) = (a[0].as_f64().ok_or("bpmRange must hold numbers")?, a[1].as_f64().ok_or("bpmRange must hold numbers")?);
+                if !(40.0..=150.0).contains(&lo) || hi > 300.0 {
+                    return Err("bpmRange must lie between 40 and 300 BPM".into());
+                }
+                // Narrower than an octave, some tempos could not be shown at all.
+                if hi < lo * 1.95 {
+                    return Err("bpmRange must span at least an octave (the highest about twice the lowest)".into());
+                }
+                self.bpm_range = (lo, hi);
+            }
+            "genreFromFolders" => {
+                let s = v.as_str().ok_or("genreFromFolders must be a string")?;
+                if FolderGenre::from_id(s).is_none() {
+                    return Err("genreFromFolders must be off, top or parent".into());
+                }
+                self.genre_from_folders = s.into();
+            }
             other => return Err(format!("unknown setting '{other}'")),
         }
         Ok(())
@@ -130,6 +172,9 @@ impl ToJson for Settings {
             "maxDurationMin" => self.max_duration_min,
             "keepVisuals" => self.keep_visuals,
             "theme" => self.theme,
+            "keyNotation" => self.key_notation,
+            "bpmRange" => Value::Array(vec![Value::from(self.bpm_range.0), Value::from(self.bpm_range.1)]),
+            "genreFromFolders" => self.genre_from_folders,
         }
     }
 }
@@ -153,5 +198,25 @@ mod tests {
         let loaded = Settings::load(&c);
         assert_eq!(loaded.workers, 3);
         assert_eq!(loaded.default_score, "dj");
+    }
+
+    #[test]
+    fn dj_settings() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)").unwrap();
+        let mut s = Settings::default();
+        let range = |a: f64, b: f64| Value::Array(vec![Value::from(a), Value::from(b)]);
+        assert!(s.apply("bpmRange", &range(90.0, 120.0)).is_err(), "narrower than an octave");
+        assert!(s.apply("bpmRange", &range(10.0, 200.0)).is_err());
+        assert!(s.apply("keyNotation", &Value::String("solfege".into())).is_err());
+        assert!(s.apply("genreFromFolders", &Value::String("all".into())).is_err());
+        s.apply("bpmRange", &range(88.0, 175.0)).unwrap();
+        s.apply("keyNotation", &Value::String("openkey".into())).unwrap();
+        s.apply("genreFromFolders", &Value::String("top".into())).unwrap();
+        s.save(&c).unwrap();
+        let loaded = Settings::load(&c);
+        assert_eq!(loaded.bpm_range, (88.0, 175.0));
+        assert_eq!(loaded.key_notation, "openkey");
+        assert_eq!(loaded.dj_config().folder_genre, FolderGenre::Top);
     }
 }

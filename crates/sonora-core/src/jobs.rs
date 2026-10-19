@@ -709,7 +709,10 @@ fn process(shared: &Arc<Shared>, slot: usize, track_id: i64) {
         let tools = shared.tools.read().unwrap_or_else(|p| p.into_inner()).clone();
         (AnalyzeOptions { tools, max_duration_secs: s.max_duration_min * 60.0, hash_file: true, ..Default::default() }, s.max_duration_min * 60.0)
     };
-    let keep_visuals = shared.settings.read().unwrap_or_else(|p| p.into_inner()).keep_visuals;
+    let (keep_visuals, dj) = {
+        let s = shared.settings.read().unwrap_or_else(|p| p.into_inner());
+        (s.keep_visuals, s.dj_config())
+    };
     let sh = Arc::clone(shared);
     let mut last = Instant::now() - PROGRESS_INTERVAL;
     let mut progress = move |f: f64| {
@@ -742,7 +745,7 @@ fn process(shared: &Arc<Shared>, slot: usize, track_id: i64) {
         Ok(analysis) => {
             let stored = {
                 let c = shared.db.write();
-                library::store_analysis(&c, track_id, &analysis, keep_visuals)
+                library::store_analysis(&c, track_id, &analysis, keep_visuals, &dj)
             };
             match stored {
                 Ok(()) => record_outcome(shared, slot, track_id, "done", None, started),

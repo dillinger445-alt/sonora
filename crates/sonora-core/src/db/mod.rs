@@ -13,7 +13,7 @@ use sqlite::{Connection, DbError};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -132,6 +132,35 @@ CREATE TABLE fp_matches (
 );
 "#;
 
+/// DJ metadata: detected tempo and key, the user's edits, and the values in
+/// use (see `dj.rs`).
+const MIGRATION_2: &str = r#"
+ALTER TABLE tracks ADD COLUMN dj_version INTEGER;
+ALTER TABLE tracks ADD COLUMN bpm_detected REAL;
+ALTER TABLE tracks ADD COLUMN bpm_confidence REAL;
+ALTER TABLE tracks ADD COLUMN tempo_variable INTEGER;
+ALTER TABLE tracks ADD COLUMN tempo_candidates TEXT;
+ALTER TABLE tracks ADD COLUMN key_detected INTEGER;
+ALTER TABLE tracks ADD COLUMN key_confidence REAL;
+ALTER TABLE tracks ADD COLUMN key_second INTEGER;
+ALTER TABLE tracks ADD COLUMN bpm_edit REAL;
+ALTER TABLE tracks ADD COLUMN key_edit INTEGER;
+ALTER TABLE tracks ADD COLUMN genre_edit TEXT;
+ALTER TABLE tracks ADD COLUMN genre_edit_source TEXT;
+ALTER TABLE tracks ADD COLUMN discogs_url TEXT;
+ALTER TABLE tracks ADD COLUMN dj_bpm REAL;
+ALTER TABLE tracks ADD COLUMN dj_bpm_source TEXT;
+ALTER TABLE tracks ADD COLUMN dj_key INTEGER;
+ALTER TABLE tracks ADD COLUMN dj_key_source TEXT;
+ALTER TABLE tracks ADD COLUMN dj_key_order INTEGER;
+ALTER TABLE tracks ADD COLUMN dj_genre TEXT;
+ALTER TABLE tracks ADD COLUMN dj_genre_source TEXT;
+CREATE INDEX idx_tracks_dj_bpm ON tracks(dj_bpm);
+CREATE INDEX idx_tracks_dj_key ON tracks(dj_key);
+CREATE INDEX idx_tracks_dj_genre ON tracks(dj_genre COLLATE NOCASE);
+INSERT OR REPLACE INTO meta (key, value) VALUES ('dj_refresh', '1');
+"#;
+
 #[derive(Debug)]
 pub enum StoreError {
     Db(DbError),
@@ -236,6 +265,13 @@ fn migrate(c: &Connection) -> Result<(), DbError> {
         c.transaction(|tx| {
             tx.execute_batch(MIGRATION_1)?;
             tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["1"])?;
+            Ok::<(), DbError>(())
+        })?;
+    }
+    if version < 2 {
+        c.transaction(|tx| {
+            tx.execute_batch(MIGRATION_2)?;
+            tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["2"])?;
             Ok::<(), DbError>(())
         })?;
     }

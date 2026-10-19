@@ -3,6 +3,7 @@
 
 use crate::db::sqlite::{Connection, SqlValue, ToSql};
 use crate::db::{now_ms, Db, StoreError};
+use crate::dj::DjConfig;
 use crate::index::{self, Candidate, WalkOptions};
 use crate::model::{flags_to_column, format_label, status, TrackRow, TRACK_COLUMNS};
 use crate::params;
@@ -303,8 +304,8 @@ pub fn rescan_folders(db: &Db, ids: Option<&[i64]>, opts: &ImportOptions, cancel
 
 // ----------------------------------------------------------------- results
 
-/// Stores a completed analysis atomically.
-pub fn store_analysis(c: &Connection, track_id: i64, a: &FileAnalysis, keep_visuals: bool) -> Result<(), StoreError> {
+/// Stores a completed analysis atomically, and refreshes the track's DJ values.
+pub fn store_analysis(c: &Connection, track_id: i64, a: &FileAnalysis, keep_visuals: bool, dj: &DjConfig) -> Result<(), StoreError> {
     let f = &a.facts;
     let m = &a.signal.measurements;
     let s = &a.assessment;
@@ -320,6 +321,8 @@ pub fn store_analysis(c: &Connection, track_id: i64, a: &FileAnalysis, keep_visu
     let assess_json = s.to_json().to_string_compact();
     let visuals_json = if keep_visuals { Some(a.signal.visuals.to_json().to_string_compact()) } else { None };
     let fp = sonora_engine::analysis::fingerprint::to_bytes(&a.signal.fingerprint);
+    let tempo = m.tempo.as_ref();
+    let key = m.key.as_ref();
     c.transaction(|tx| {
         tx.execute(
             "UPDATE tracks SET status = ?, error_code = NULL, error_message = NULL, analyzed_at = ?, file_hash = ?, audio_hash = ?, \
@@ -365,6 +368,21 @@ pub fn store_analysis(c: &Connection, track_id: i64, a: &FileAnalysis, keep_visu
                 track_id
             ],
         )?;
+        tx.execute(
+            "UPDATE tracks SET dj_version = 1, bpm_detected = ?, bpm_confidence = ?, tempo_variable = ?, tempo_candidates = ?, key_detected = ?, \
+             key_confidence = ?, key_second = ? WHERE id = ?",
+            params![
+                tempo.map(|t| t.bpm),
+                tempo.map(|t| t.confidence),
+                tempo.map(|t| t.variable as i64),
+                tempo.map(|t| crate::dj::candidates_to_column(&t.candidates)),
+                key.map(|k| k.key as i64),
+                key.map(|k| k.confidence),
+                key.map(|k| k.second as i64),
+                track_id
+            ],
+        )?;
+        crate::dj::refresh_within(tx, Some(&[track_id]), dj)?;
         tx.execute(
             "INSERT INTO analyses (track_id, facts, measurements, assessment, visuals, fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(track_id) DO UPDATE SET facts = excluded.facts, measurements = excluded.measurements, assessment = excluded.assessment, \
@@ -447,6 +465,15 @@ pub struct Filter {
     pub statuses: Vec<String>,
     pub folder_id: Option<i64>,
     pub attention: bool,
+    /// Tempo range (inclusive), on the tempo in use.
+    pub bpm_min: Option<f64>,
+    pub bpm_max: Option<f64>,
+    /// Also match half and double the tempo range (mixing at another metre).
+    pub bpm_half_double: bool,
+    /// Keys (0–23) in use.
+    pub keys: Vec<u8>,
+    /// Genres in use (case-insensitive exact match).
+    pub genres: Vec<String>,
 }
 
 impl Filter {
@@ -477,6 +504,18 @@ impl Filter {
         f.statuses = strings("statuses")?;
         f.folder_id = v.get("folderId").and_then(Value::as_i64);
         f.attention = v.get("attention").and_then(Value::as_bool).unwrap_or(false);
+        f.bpm_min = v.get("bpmMin").and_then(Value::as_f64);
+        f.bpm_max = v.get("bpmMax").and_then(Value::as_f64);
+        f.bpm_half_double = v.get("bpmHalfDouble").and_then(Value::as_bool).unwrap_or(false);
+        f.keys = match v.get("keys") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(a)) => a
+                .iter()
+                .map(|k| k.as_i64().filter(|k| (0..24).contains(k)).map(|k| k as u8).ok_or("keys must contain numbers 0–23".to_string()))
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err("keys must be an array".into()),
+        };
+        f.genres = strings("genres")?;
         Ok(f)
     }
 
@@ -488,10 +527,11 @@ impl Filter {
             for tok in s.split_whitespace().take(8) {
                 let like = format!("%{}%", escape_like(tok));
                 w.push(
-                    "(title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\' OR genre LIKE ? ESCAPE '\\')"
+                    "(title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\' OR genre LIKE ? ESCAPE '\\' \
+                     OR dj_genre LIKE ? ESCAPE '\\')"
                         .into(),
                 );
-                for _ in 0..5 {
+                for _ in 0..6 {
                     p.push(SqlValue::Text(like.clone()));
                 }
             }
@@ -549,6 +589,33 @@ impl Filter {
         if self.attention {
             w.push("(flags LIKE '%,attention,%' OR flags LIKE '%,review,%' OR status = 'failed' OR missing_since IS NOT NULL)".into());
         }
+        if self.bpm_min.is_some() || self.bpm_max.is_some() {
+            let lo = self.bpm_min.unwrap_or(0.0);
+            let hi = self.bpm_max.unwrap_or(10_000.0);
+            if self.bpm_half_double {
+                w.push("(dj_bpm BETWEEN ? AND ? OR dj_bpm BETWEEN ? AND ? OR dj_bpm BETWEEN ? AND ?)".into());
+                for (a, b) in [(lo, hi), (lo / 2.0, hi / 2.0), (lo * 2.0, hi * 2.0)] {
+                    p.push(SqlValue::Real(a));
+                    p.push(SqlValue::Real(b));
+                }
+            } else {
+                w.push("dj_bpm BETWEEN ? AND ?".into());
+                p.push(SqlValue::Real(lo));
+                p.push(SqlValue::Real(hi));
+            }
+        }
+        if !self.keys.is_empty() {
+            w.push(format!("dj_key IN ({})", vec!["?"; self.keys.len()].join(",")));
+            for &k in &self.keys {
+                p.push(SqlValue::Int(k as i64));
+            }
+        }
+        if !self.genres.is_empty() {
+            w.push(format!("({})", vec!["dj_genre = ? COLLATE NOCASE"; self.genres.len()].join(" OR ")));
+            for g in &self.genres {
+                p.push(SqlValue::Text(g.clone()));
+            }
+        }
         if w.is_empty() {
             ("1 = 1".into(), p)
         } else {
@@ -580,6 +647,9 @@ pub fn sort_expr(key: &str) -> Option<&'static str> {
         "analyzed" => "analyzed_at",
         "path" => "path",
         "status" => "status",
+        "bpm" => "dj_bpm",
+        "key" => "dj_key_order",
+        "genre" => "lower(dj_genre)",
         _ => return None,
     })
 }
@@ -665,6 +735,15 @@ pub fn facets(c: &Connection) -> Result<Value, StoreError> {
         }
     }
     let lossless = c.query_row("SELECT SUM(lossless = 1), SUM(lossless = 0) FROM tracks", params![], |r| (r.opt_i64(0).unwrap_or(0), r.opt_i64(1).unwrap_or(0)))?.unwrap_or((0, 0));
+    let genres = c.query(
+        "SELECT MIN(dj_genre), COUNT(*) FROM tracks WHERE dj_genre IS NOT NULL GROUP BY dj_genre COLLATE NOCASE ORDER BY COUNT(*) DESC, 1 LIMIT 300",
+        params![],
+        |r| obj! { "id" => r.text(0), "count" => r.i64(1) },
+    )?;
+    let keys = c.query("SELECT dj_key, COUNT(*) FROM tracks WHERE dj_key IS NOT NULL GROUP BY dj_key ORDER BY dj_key", params![], |r| obj! { "key" => r.i64(0), "count" => r.i64(1) })?;
+    let dj_pending = c
+        .query_row("SELECT COUNT(*) FROM tracks WHERE status = 'done' AND dj_version IS NULL AND missing_since IS NULL", params![], |r| r.i64(0))?
+        .unwrap_or(0);
     Ok(obj! {
         "formats" => Value::Array(formats),
         "statuses" => Value::Array(statuses),
@@ -672,6 +751,9 @@ pub fn facets(c: &Connection) -> Result<Value, StoreError> {
         "flags" => Value::Array(flags),
         "lossless" => lossless.0,
         "lossy" => lossless.1,
+        "genres" => Value::Array(genres),
+        "keys" => Value::Array(keys),
+        "djPending" => dj_pending,
     })
 }
 

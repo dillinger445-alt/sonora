@@ -324,10 +324,11 @@ pub fn probe_file(path: &Path, tools: &ToolPaths) -> Result<FileFacts, AnalysisE
             facts.sample_rate = h.sample_rate;
             facts.channels = h.channels;
             facts.header_truncated = h.truncated;
-            native_tags.extend(h.info_tags.iter().cloned());
+            // ID3 first: it states its text encoding, INFO does not.
             if let Some((off, len)) = h.id3_chunk {
                 native_tags.extend(read_id3_at(path, off, len));
             }
+            native_tags.extend(h.info_tags.iter().cloned());
             if let Some(enc) = h.encoding {
                 native_ok = true;
                 facts.float_samples = enc.is_float();
@@ -354,10 +355,10 @@ pub fn probe_file(path: &Path, tools: &ToolPaths) -> Result<FileFacts, AnalysisE
             facts.channels = h.channels;
             facts.header_truncated = h.truncated;
             facts.header_duration_secs = Some(h.frames as f64 / h.sample_rate);
-            native_tags.extend(h.text_tags.iter().cloned());
             if let Some((off, len)) = h.id3_chunk {
                 native_tags.extend(read_id3_at(path, off, len));
             }
+            native_tags.extend(h.text_tags.iter().cloned());
             if let Some(enc) = h.encoding {
                 native_ok = true;
                 facts.float_samples = enc.is_float();

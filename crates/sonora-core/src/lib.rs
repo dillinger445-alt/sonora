@@ -8,6 +8,8 @@
 pub mod api;
 pub mod app;
 pub mod db;
+pub mod dj;
+pub mod djexport;
 pub mod duplicates;
 pub mod events;
 pub mod export;

@@ -128,16 +128,39 @@ impl FfmpegSource {
     /// channel count are whatever the decoder produces (no resampling or
     /// remixing is ever requested).
     pub fn spawn(ffmpeg: &Path, path: &Path, lossless_int: bool, lossless_float: bool, frames_hint: Option<u64>) -> Result<Self, AnalysisError> {
+        Self::spawn_shaped(ffmpeg, path, lossless_int, lossless_float, frames_hint, None, None)
+    }
+
+    /// Like [`FfmpegSource::spawn`], but resampled to `sample_rate` (with a
+    /// high-quality 64-tap filter) and/or mixed down to `channels`, as 32-bit
+    /// float. Used for exports; the analysis never alters the audio.
+    pub fn spawn_converted(ffmpeg: &Path, path: &Path, sample_rate: Option<u32>, channels: Option<u16>, frames_hint: Option<u64>) -> Result<Self, AnalysisError> {
+        Self::spawn_shaped(ffmpeg, path, false, true, frames_hint, sample_rate, channels)
+    }
+
+    fn spawn_shaped(
+        ffmpeg: &Path,
+        path: &Path,
+        lossless_int: bool,
+        lossless_float: bool,
+        frames_hint: Option<u64>,
+        sample_rate: Option<u32>,
+        channels: Option<u16>,
+    ) -> Result<Self, AnalysisError> {
         let codec = if lossless_int { "pcm_s32le" } else { "pcm_f32le" };
         let mut cmd = quiet_command(ffmpeg);
         cmd.args(["-nostdin", "-hide_banner", "-nostats", "-loglevel", "error", "-threads", "1"])
             .args(["-protocol_whitelist", "file,pipe"])
             .arg("-i")
             .arg(input_arg(path))
-            .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", "-fflags", "+bitexact"])
-            .args(["-acodec", codec, "-f", "wav", "pipe:1"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", "-fflags", "+bitexact"]);
+        if let Some(rate) = sample_rate {
+            cmd.arg("-af").arg(format!("aresample={rate}:filter_size=64:phase_shift=10:cutoff=0.97"));
+        }
+        if let Some(ch) = channels {
+            cmd.arg("-ac").arg(ch.to_string());
+        }
+        cmd.args(["-acodec", codec, "-f", "wav", "pipe:1"]).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
             .map_err(|e| AnalysisError::DecoderUnavailable(format!("could not start FFmpeg: {e}")))?;

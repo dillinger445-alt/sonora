@@ -17,11 +17,16 @@ pub struct SynthOptions {
     pub peak_dbfs: f64,
     /// Pattern variation (changes bass line and hat pattern).
     pub variant: u32,
+    /// Semitones added to every pitched part (bass and pads).
+    pub transpose: f64,
+    /// Major-key harmony (a major-seventh pad over I–V–vi–IV roots, C major
+    /// before transposing) instead of the default A minor.
+    pub major: bool,
 }
 
 impl Default for SynthOptions {
     fn default() -> Self {
-        SynthOptions { seconds: 45.0, sample_rate: 44_100, seed: 1, bpm: 124.0, peak_dbfs: -1.0, variant: 0 }
+        SynthOptions { seconds: 45.0, sample_rate: 44_100, seed: 1, bpm: 124.0, peak_dbfs: -1.0, variant: 0, transpose: 0.0, major: false }
     }
 }
 
@@ -83,9 +88,17 @@ pub fn render(o: &SynthOptions) -> Vec<f32> {
     let mut pad_l = [BiquadState::default(), BiquadState::default()];
     let mut pad_r = [BiquadState::default(), BiquadState::default()];
 
-    let bass_lines: [[f64; 4]; 3] = [[55.0, 55.0, 65.41, 49.0], [41.2, 55.0, 49.0, 61.74], [55.0, 73.42, 65.41, 55.0]];
-    let bass_notes = bass_lines[(o.variant % 3) as usize];
-    let chord = [220.0, 261.63, 329.63, 392.0];
+    // A minor (Am7 pad) by default; C major (Cmaj7 pad) when asked.
+    let bass_lines: [[f64; 4]; 3] = if o.major {
+        [[65.41, 49.0, 55.0, 43.65], [65.41, 43.65, 49.0, 65.41], [65.41, 55.0, 43.65, 49.0]]
+    } else {
+        [[55.0, 55.0, 65.41, 49.0], [41.2, 55.0, 49.0, 61.74], [55.0, 73.42, 65.41, 55.0]]
+    };
+    let chord = if o.major { [261.63, 329.63, 392.0, 493.88] } else { [220.0, 261.63, 329.63, 392.0] };
+    // Exactly 1.0 without transposition, so default renders are unchanged.
+    let ratio = 2f64.powf(o.transpose / 12.0);
+    let bass_notes = bass_lines[(o.variant % 3) as usize].map(|f| f * ratio);
+    let chord = chord.map(|f| f * ratio);
     let ride_freqs = [2520.0, 3215.0, 4710.0, 5940.0, 7130.0, 8390.0];
 
     let mut kick_phase = 0.0;

@@ -8,12 +8,14 @@
 
 pub mod bandwidth;
 pub mod fingerprint;
+pub mod key;
 pub mod levels;
 pub mod loudness;
 pub mod measure;
 pub mod silence;
 pub mod spectral;
 pub mod stereo;
+pub mod tempo;
 pub mod waveform;
 
 use crate::decode::{PcmSource, SampleKind};
@@ -153,6 +155,8 @@ pub fn analyze_source(
     let mut sil = silence::SilenceMeter::new(fs, ch);
     let mut spec = spectral::SpectralAnalyzer::new(fs, ch, frames_hint);
     let mut wave = waveform::WaveformBuilder::new(fs, ch, frames_hint);
+    let mut tempo_m = tempo::TempoMeter::new(fs, ch);
+    let mut key_m = key::KeyMeter::new(fs, ch);
     let mut hasher = Hash128::new();
     hasher.update(&fs.to_le_bytes());
     hasher.update(&(in_ch as u32).to_le_bytes());
@@ -197,6 +201,8 @@ pub fn analyze_source(
         sil.process(data);
         spec.process(data);
         wave.process(data);
+        tempo_m.process(data);
+        key_m.process(data);
         (ctl.progress)(match frames_hint {
             Some(total) if total > 0 => (frames as f64 / total as f64).min(1.0),
             _ => -1.0,
@@ -318,6 +324,8 @@ pub fn analyze_source(
             .iter()
             .map(|b| BandShare { id: b.id.to_string(), label: b.label.to_string(), lo_hz: b.lo_hz, hi_hz: b.hi_hz, share: b.share, rel_db: round_to(b.rel_db, 2) })
             .collect(),
+        tempo: tempo_m.finish(),
+        key: key_m.finish(),
         analysis_ms: started.elapsed().as_millis() as u64,
     };
     let visuals = Visuals {

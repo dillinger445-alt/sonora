@@ -5,6 +5,7 @@ pub mod assess;
 pub mod decode;
 pub mod dsp;
 pub mod error;
+pub mod export;
 pub mod hash;
 pub mod md5;
 pub mod meta;

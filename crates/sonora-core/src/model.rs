@@ -16,7 +16,12 @@ pub mod status {
 pub const TRACK_COLUMNS: &str = "id, path, folder_id, file_name, ext, size, mtime, status, error_code, error_message, \
 added_at, analyzed_at, missing_since, title, artist, album, genre, bpm, musical_key, container, codec, codec_name, \
 format, lossless, sample_rate, bit_depth, bitrate_kbps, channels, duration, integrated_lufs, true_peak, cutoff_hz, upper_hz, \
-overall, dj, listening, confidence, confidence_label, verdict, flags, model_version, file_hash, audio_hash";
+overall, dj, listening, confidence, confidence_label, verdict, flags, model_version, file_hash, audio_hash, \
+dj_bpm, dj_bpm_source, dj_key, dj_key_source, dj_genre, dj_genre_source, bpm_detected, bpm_confidence, tempo_variable, \
+key_detected, key_confidence, key_second, discogs_url, dj_version";
+
+/// Number of columns in [`TRACK_COLUMNS`]; extra columns selected after them start here.
+pub const TRACK_COLUMN_COUNT: usize = 57;
 
 /// One library row (no analysis payload).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -65,6 +70,22 @@ pub struct TrackRow {
     pub model_version: Option<String>,
     pub file_hash: Option<String>,
     pub audio_hash: Option<String>,
+    /// Tempo, key and genre in use, and where each came from (see `dj.rs`).
+    pub dj_bpm: Option<f64>,
+    pub dj_bpm_source: Option<String>,
+    pub dj_key: Option<i64>,
+    pub dj_key_source: Option<String>,
+    pub dj_genre: Option<String>,
+    pub dj_genre_source: Option<String>,
+    pub bpm_detected: Option<f64>,
+    pub bpm_confidence: Option<f64>,
+    pub tempo_variable: Option<bool>,
+    pub key_detected: Option<i64>,
+    pub key_confidence: Option<f64>,
+    pub key_second: Option<i64>,
+    pub discogs_url: Option<String>,
+    /// The stored analysis includes tempo and key detection.
+    pub dj_analyzed: bool,
 }
 
 pub fn flags_to_column(flags: &[String]) -> String {
@@ -125,6 +146,20 @@ impl TrackRow {
             model_version: r.opt_text(40),
             file_hash: r.opt_text(41),
             audio_hash: r.opt_text(42),
+            dj_bpm: r.opt_f64(43),
+            dj_bpm_source: r.opt_text(44),
+            dj_key: r.opt_i64(45),
+            dj_key_source: r.opt_text(46),
+            dj_genre: r.opt_text(47),
+            dj_genre_source: r.opt_text(48),
+            bpm_detected: r.opt_f64(49),
+            bpm_confidence: r.opt_f64(50),
+            tempo_variable: r.opt_bool(51),
+            key_detected: r.opt_i64(52),
+            key_confidence: r.opt_f64(53),
+            key_second: r.opt_i64(54),
+            discogs_url: r.opt_text(55),
+            dj_analyzed: r.opt_i64(56).is_some(),
         }
     }
 
@@ -183,6 +218,20 @@ impl ToJson for TrackRow {
             "verdict" => self.verdict,
             "flags" => self.flags,
             "modelVersion" => self.model_version,
+            "djBpm" => opt_num(self.dj_bpm, 2),
+            "djBpmSource" => self.dj_bpm_source,
+            "djKey" => self.dj_key,
+            "djKeySource" => self.dj_key_source,
+            "djGenre" => self.dj_genre,
+            "djGenreSource" => self.dj_genre_source,
+            "bpmDetected" => opt_num(self.bpm_detected, 3),
+            "bpmConfidence" => opt_num(self.bpm_confidence, 2),
+            "tempoVariable" => self.tempo_variable,
+            "keyDetected" => self.key_detected,
+            "keyConfidence" => opt_num(self.key_confidence, 2),
+            "keySecond" => self.key_second,
+            "discogsUrl" => self.discogs_url,
+            "djAnalyzed" => self.dj_analyzed,
         }
     }
 }

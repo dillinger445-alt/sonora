@@ -8,11 +8,13 @@
 
 use super::bandwidth::{ArtifactMeasure, BandwidthChange, BandwidthMeasure, Edge, NoiseMeasure, SegmentBandwidth};
 use super::silence::Dropout;
+use super::key::{format_key, KeyResult, Notation};
 use super::stereo::StereoResult;
+use super::tempo::TempoResult;
 use sonora_json::{num, obj, opt_num, ToJson, Value};
 
 /// Version of the measurement schema. Bump when fields change meaning.
-pub const MEASUREMENT_SCHEMA: u32 = 1;
+pub const MEASUREMENT_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClipMeasure {
@@ -99,6 +101,10 @@ pub struct Measurements {
     pub bandwidth_changes: Vec<BandwidthChange>,
     pub noise: NoiseMeasure,
     pub bands: Vec<BandShare>,
+    /// Tempo; `None` when there is no regular pulse (or for schema 1 records).
+    pub tempo: Option<TempoResult>,
+    /// Musical key; `None` without enough tonal material (or for schema 1 records).
+    pub key: Option<KeyResult>,
     pub analysis_ms: u64,
 }
 
@@ -226,6 +232,21 @@ impl ToJson for Measurements {
                 "id" => b.id, "label" => b.label, "loHz" => num(b.lo_hz, 0),
                 "hiHz" => num(b.hi_hz, 0), "share" => num(b.share, 5), "relDb" => num(b.rel_db, 2),
             }).collect()),
+            "tempo" => match &m.tempo {
+                None => Value::Null,
+                Some(t) => obj! {
+                    "bpm" => num(t.bpm, 3), "confidence" => num(t.confidence, 3), "variable" => t.variable,
+                    "candidates" => Value::Array(t.candidates.iter().map(|c| Value::Array(vec![num(c.0, 3), num(c.1, 3)])).collect()),
+                },
+            },
+            "key" => match &m.key {
+                None => Value::Null,
+                Some(k) => obj! {
+                    "key" => k.key, "name" => format_key(k.key, Notation::Musical, true), "camelot" => format_key(k.key, Notation::Camelot, true),
+                    "confidence" => num(k.confidence, 3), "second" => k.second, "tuningCents" => num(k.tuning_cents, 1),
+                    "chroma" => nums(&k.chroma, 3), "changes" => k.changes,
+                },
+            },
             "analysisMs" => m.analysis_ms,
         }
     }
@@ -414,6 +435,40 @@ impl Measurements {
                         .collect()
                 })
                 .unwrap_or_default(),
+            tempo: obj_at(v, "tempo").and_then(|t| {
+                Some(TempoResult {
+                    bpm: f(t, "bpm")?,
+                    confidence: fz(t, "confidence"),
+                    variable: b(t, "variable"),
+                    candidates: t
+                        .get("candidates")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|c| {
+                                    let c = c.as_array()?;
+                                    Some((c.first()?.as_f64()?, c.get(1)?.as_f64()?))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+            }),
+            key: obj_at(v, "key").and_then(|k| {
+                let key = k.get("key").and_then(Value::as_u64).filter(|&x| x < 24)? as u8;
+                let mut chroma = [0.0; 12];
+                for (o, x) in chroma.iter_mut().zip(fv(k, "chroma")) {
+                    *o = x;
+                }
+                Some(KeyResult {
+                    key,
+                    confidence: fz(k, "confidence"),
+                    second: k.get("second").and_then(Value::as_u64).filter(|&x| x < 24).unwrap_or(key as u64) as u8,
+                    tuning_cents: fz(k, "tuningCents"),
+                    chroma,
+                    changes: b(k, "changes"),
+                })
+            }),
             analysis_ms: u(v, "analysisMs"),
         })
     }
