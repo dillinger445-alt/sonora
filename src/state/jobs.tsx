@@ -1,13 +1,14 @@
 /**
- * Background jobs besides analysis: DJ exports and Discogs genre lookups.
+ * Background jobs besides analysis: DJ exports, sending playlists to a USB
+ * drive, and Discogs genre lookups.
  * Both run in the core; this follows their events so the status bar can
  * show progress from any view, and reports the outcome when nobody is
  * watching it in a dialog.
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { CoreEvents, DiscogsReport, ExportProgress, ExportReport } from '../api/types.ts';
-import { plural } from '../lib/format.ts';
+import type { CoreEvents, DiscogsReport, ExportProgress, ExportReport, UsbProgress, UsbReport } from '../api/types.ts';
+import { formatCount, plural } from '../lib/format.ts';
 import { revealLabel } from '../lib/platform.ts';
 import { navigate } from '../lib/router.ts';
 import { useCore, useCoreEvent } from './core.tsx';
@@ -21,14 +22,29 @@ export interface Jobs {
   exportReport: ExportReport | null;
   discogsRunning: boolean;
   discogsProgress: DiscogsProgress | null;
+  usbRunning: boolean;
+  usbProgress: UsbProgress | null;
   /** While a dialog shows the export, its outcome is not announced again. Returns the release. */
   watchExport: () => () => void;
+  /** The same for sending to a drive. */
+  watchUsb: () => () => void;
   /** Marks a job as started, before asking the core: a short job may finish before the answer arrives. */
-  started: (job: 'export' | 'discogs') => void;
+  started: (job: 'export' | 'discogs' | 'usb') => void;
   /** Asks the core which jobs run (after a start call failed). */
   resync: () => void;
   cancelExport: () => void;
   cancelDiscogs: () => void;
+  cancelUsb: () => void;
+}
+
+/** One line describing a finished send to a drive. */
+export function describeUsb(r: UsbReport): { tone: 'success' | 'warning' | 'error' | 'info'; title: string; body?: string } {
+  if (r.error) return { tone: 'error', title: 'Sending stopped', body: r.error };
+  const parts = [r.written ? `${plural(r.written, 'file')} written` : null, r.renamed ? `${formatCount(r.renamed)} renamed` : null, r.removed ? `${formatCount(r.removed)} removed` : null, r.kept ? `${formatCount(r.kept)} unchanged` : null].filter(Boolean);
+  const body = parts.join(', ') || undefined;
+  if (r.cancelled) return { tone: 'info', title: 'Sending stopped', body };
+  if (r.failed.length) return { tone: 'warning', title: `Sent, but ${plural(r.failed.length, 'track')} failed`, body: r.failed[0]?.error };
+  return { tone: 'success', title: `Sent ${plural(r.playlists, 'playlist')} to the drive`, body };
 }
 
 const JobsContext = createContext<Jobs | null>(null);
@@ -59,7 +75,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [discogsRunning, setDiscogsRunning] = useState(false);
   const [discogsProgress, setDiscogsProgress] = useState<DiscogsProgress | null>(null);
+  const [usbRunning, setUsbRunning] = useState(false);
+  const [usbProgress, setUsbProgress] = useState<UsbProgress | null>(null);
   const watchers = useRef(0);
+  const usbWatchers = useRef(0);
 
   const resync = useCallback(() => {
     client.exportStatus().then(
@@ -70,13 +89,31 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       (s) => setDiscogsRunning(s.running),
       () => undefined,
     );
+    client.usbStatus().then(
+      (s) => setUsbRunning(s.running),
+      () => undefined,
+    );
   }, [client]);
 
   // A job may already run (the interface was reloaded during it).
   useEffect(resync, [resync]);
 
-  useCoreEvent(['djexport.progress', 'djexport.finished', 'discogs.progress', 'discogs.finished'], (name, payload) => {
+  useCoreEvent(['djexport.progress', 'djexport.finished', 'discogs.progress', 'discogs.finished', 'usb.progress', 'usb.finished'], (name, payload) => {
     switch (name) {
+      case 'usb.progress':
+        setUsbRunning(true);
+        setUsbProgress(payload as UsbProgress);
+        break;
+      case 'usb.finished': {
+        setUsbRunning(false);
+        setUsbProgress(null);
+        if (usbWatchers.current > 0) break;
+        const r = payload as UsbReport;
+        const d = describeUsb(r);
+        const folder = r.folder;
+        toast({ ...d, action: folder && !r.error ? { label: revealLabel(bridge.platform), run: () => void bridge.reveal(folder).catch(() => undefined) } : undefined, timeout: d.tone === 'error' ? 0 : 8000 });
+        break;
+      }
       case 'djexport.progress':
         setExportRunning(true);
         setExportProgress(payload as ExportProgress);
@@ -125,10 +162,23 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const started = useCallback((job: 'export' | 'discogs') => {
+  const watchUsb = useCallback(() => {
+    usbWatchers.current += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      usbWatchers.current -= 1;
+    };
+  }, []);
+
+  const started = useCallback((job: 'export' | 'discogs' | 'usb') => {
     if (job === 'export') {
       setExportRunning(true);
       setExportProgress(null);
+    } else if (job === 'usb') {
+      setUsbRunning(true);
+      setUsbProgress(null);
     } else {
       setDiscogsRunning(true);
       setDiscogsProgress(null);
@@ -141,10 +191,28 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const cancelDiscogs = useCallback(() => {
     client.discogsCancel().catch(() => undefined);
   }, [client]);
+  const cancelUsb = useCallback(() => {
+    client.usbCancel().catch(() => undefined);
+  }, [client]);
 
   const value = useMemo<Jobs>(
-    () => ({ exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, watchExport, started, resync, cancelExport, cancelDiscogs }),
-    [exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, watchExport, started, resync, cancelExport, cancelDiscogs],
+    () => ({
+      exportRunning,
+      exportProgress,
+      exportReport,
+      discogsRunning,
+      discogsProgress,
+      usbRunning,
+      usbProgress,
+      watchExport,
+      watchUsb,
+      started,
+      resync,
+      cancelExport,
+      cancelDiscogs,
+      cancelUsb,
+    }),
+    [exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, usbRunning, usbProgress, watchExport, watchUsb, started, resync, cancelExport, cancelDiscogs, cancelUsb],
   );
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;
 }

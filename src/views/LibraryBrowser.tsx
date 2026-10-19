@@ -5,8 +5,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LuAudioLines, LuChevronDown, LuDownload, LuPanelRightClose, LuPanelRightOpen, LuPencil, LuRefreshCw, LuTrash2, LuUsb, LuX } from 'react-icons/lu';
+import { LuAudioLines, LuChevronDown, LuDownload, LuListFilter, LuPanelRightClose, LuPanelRightOpen, LuPencil, LuRefreshCw, LuTrash2, LuUsb, LuX } from 'react-icons/lu';
 import type { LibraryFilter, ScoreKind, Sort, SortKey, TrackRow } from '../api/types.ts';
+import { AddToPlaylist } from '../components/AddToPlaylist.tsx';
 import { Button, IconButton } from '../components/Button.tsx';
 import { SearchField, Segmented } from '../components/Controls.tsx';
 import { BpmFilter, bpmActive, KeyFilter, keysFor, NO_BPM, NO_KEYS, type BpmRange, type KeySelection } from '../components/DjFilters.tsx';
@@ -15,9 +16,11 @@ import { TrackTable, type TrackTableHandle } from '../components/TrackTable.tsx'
 import { formatCount, plural } from '../lib/format.ts';
 import { debounce, usePref } from '../lib/persist.ts';
 import { navigate } from '../lib/router.ts';
+import { formatBpm, formatKey } from '../lib/keys.ts';
 import { flagInfo, SCORE_HINT, SCORE_KINDS, SCORE_LABEL } from '../lib/scores.ts';
 import { useCore } from '../state/core.tsx';
 import { usePlayer } from '../state/player.tsx';
+import { usePlaylists } from '../state/playlists.tsx';
 import { describeQueued, useTrackActions } from '../state/trackActions.tsx';
 import { useToast } from '../state/toasts.tsx';
 import { useResource } from '../state/useResource.ts';
@@ -90,6 +93,7 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
   const { client, settings, bridge } = useCore();
   const actions = useTrackActions();
   const player = usePlayer();
+  const playlists = usePlaylists();
   const toast = useToast();
   const [bpm, setBpm] = useState<BpmRange>(NO_BPM);
   const [keySel, setKeySel] = useState<KeySelection>(NO_KEYS);
@@ -244,6 +248,17 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
     }
   };
 
+  /** A name for a smart playlist made of the filters shown: "House 120–125 BPM". */
+  const suggestName = () => {
+    const parts: string[] = [];
+    if (genres.length) parts.push(genres.slice(0, 2).join(' + '));
+    if (bpmActive(bpm)) parts.push(`${bpm.min != null ? formatBpm(bpm.min) : '…'}–${bpm.max != null ? formatBpm(bpm.max) : '…'} BPM`);
+    const keys = keySel.keys.map((k) => formatKey(k, notation));
+    if (keys.length) parts.push(keys.length <= 3 ? keys.join(' ') : `${keys.length} keys`);
+    if (search) parts.push(`“${search}”`);
+    return parts.join(' ') || 'Smart playlist';
+  };
+
   const filterButton = (text: string, n: number) => (p: Parameters<Parameters<typeof Menu>[0]['trigger']>[0]) => (
     <Button size="sm" variant={n > 0 ? 'secondary' : 'ghost'} className={n > 0 ? 'is-filtered' : ''} trailing={<LuChevronDown className="btn-chevron" aria-hidden />} {...p}>
       {text}
@@ -340,9 +355,20 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
             trigger={filterButton('Genre', genres.length)}
           />
           {filtersActive ? (
-            <Button size="sm" variant="ghost" icon={LuX} onClick={clearFilters}>
-              Clear
-            </Button>
+            <>
+              <Button size="sm" variant="ghost" icon={LuX} onClick={clearFilters}>
+                Clear
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={LuListFilter}
+                data-tip="A playlist of the tracks these filters show, that keeps up as the library changes"
+                onClick={() => playlists.saveFilters(filter, sort, suggestName())}
+              >
+                Save as smart playlist
+              </Button>
+            </>
           ) : null}
         </div>
       </div>
@@ -378,6 +404,7 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
             // Floats over the table instead of pushing it down.
             <div className="selection-bar" role="region" aria-label="Selection actions">
               <span>{plural(selection.size, 'track')} selected</span>
+              <AddToPlaylist ids={selectedIds} size="sm" />
               <Button size="sm" icon={LuPencil} onClick={() => actions.editDj({ ids: selectedIds })}>
                 Edit…
               </Button>

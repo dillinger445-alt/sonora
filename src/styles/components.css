@@ -518,6 +518,27 @@
   max-width: calc(100vw - 48px);
 }
 
+/* Long dialogs scroll inside; the title and the buttons stay in view. */
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+}
+
+.dialog-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .dialog::backdrop {
   background: rgb(10 11 13 / 0.62);
 }

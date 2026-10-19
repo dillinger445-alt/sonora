@@ -45,8 +45,26 @@ function JobItems() {
   const jobs = useJobs();
   const ex = jobs.exportProgress;
   const dg = jobs.discogsProgress;
+  const usb = jobs.usbProgress;
   return (
     <>
+      {jobs.usbRunning ? (
+        <span className="sb-item sb-job" role="status">
+          <LuUsb aria-hidden />
+          <span>Sending to drive</span>
+          {usb && usb.total > 0 ? (
+            <span className="num">
+              {formatCount(Math.min(usb.done + 1, usb.total))}/{formatCount(usb.total)}
+            </span>
+          ) : null}
+          <span className="sb-job-bar">
+            <ProgressBar value={usb?.fraction ?? 0} label="Sending progress" size="sm" />
+          </span>
+          <button type="button" className="sb-job-stop" aria-label="Stop sending" data-tip="Stop sending" onClick={jobs.cancelUsb}>
+            <LuX aria-hidden />
+          </button>
+        </span>
+      ) : null}
       {jobs.exportRunning ? (
         <span className="sb-item sb-job" role="status">
           <LuUsb aria-hidden />

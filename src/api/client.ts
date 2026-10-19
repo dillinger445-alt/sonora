@@ -6,18 +6,25 @@
 import type { Bridge } from './bridge.ts';
 import type {
   AppInfo,
+  ArrangeResult,
   CacheStats,
   CoreEventName,
   CoreEvents,
   DiscogsStatus,
+  Drive,
   DuplicateList,
   ExportOptions,
   ExportPlan,
   ExportReport,
   Facets,
   Folder,
+  KeyNotation,
   LibraryFilter,
+  OrganizeBy,
+  OrganizeResult,
   Overview,
+  PlaylistKind,
+  PlaylistNode,
   PreparedPlayback,
   QueryResult,
   ScanItemFilter,
@@ -25,8 +32,13 @@ import type {
   ScanRecord,
   ScanStatus,
   Settings,
+  SmartRules,
   Sort,
   TrackDetail,
+  TrackRow,
+  UsbOptions,
+  UsbPlan,
+  UsbReport,
 } from './types.ts';
 
 export type EventHandler = <K extends CoreEventName>(name: K, payload: CoreEvents[K]) => void;
@@ -94,6 +106,33 @@ export class Client {
     this.call<{ accepted: boolean; total: number }>('djexport.start', { ids, ...options, folder, playlistName });
   exportCancel = () => this.call<{ ok: boolean }>('djexport.cancel');
   exportStatus = () => this.call<{ running: boolean; last: ExportReport | null }>('djexport.status');
+
+  // Playlists
+  playlists = () => this.call<{ nodes: PlaylistNode[] }>('playlists.list');
+  createPlaylist = (kind: PlaylistKind, name: string, opts: { parentId?: number | null; index?: number; rules?: SmartRules; trackIds?: number[] } = {}) =>
+    this.call<PlaylistNode>('playlists.create', { kind, name, ...opts });
+  updatePlaylist = (id: number, values: { name?: string; rules?: SmartRules }) => this.call<PlaylistNode>('playlists.update', { id, ...values });
+  movePlaylist = (id: number, parentId: number | null, index: number) => this.call<{ ok: boolean }>('playlists.move', { id, parentId, index });
+  deletePlaylist = (id: number) => this.call<{ deleted: number }>('playlists.delete', { id });
+  duplicatePlaylist = (id: number) => this.call<PlaylistNode>('playlists.duplicate', { id });
+  playlistTracks = (id: number) => this.call<{ id: number; rows: TrackRow[]; total: number }>('playlists.tracks', { id });
+  addToPlaylist = (id: number, trackIds: number[], index?: number) =>
+    this.call<{ added: number; already: number }>('playlists.addTracks', index == null ? { id, trackIds } : { id, trackIds, index });
+  removeFromPlaylist = (id: number, trackIds: number[]) => this.call<{ removed: number }>('playlists.removeTracks', { id, trackIds });
+  reorderPlaylist = (id: number, trackIds: number[]) => this.call<{ ok: boolean }>('playlists.reorder', { id, trackIds });
+  moveInPlaylist = (id: number, trackIds: number[], index: number) => this.call<{ ok: boolean }>('playlists.moveTracks', { id, trackIds, index });
+  arrangePlaylist = (id: number, opts: { start?: number | null; tempo?: 'any' | 'rising' } = {}) => this.call<ArrangeResult>('playlists.arrange', { id, ...opts });
+  freezePlaylist = (id: number) => this.call<{ tracks: number }>('playlists.freeze', { id });
+  organize = (by: OrganizeBy, opts: { smart?: boolean; trackIds?: number[]; keyNotation?: KeyNotation } = {}) =>
+    this.call<OrganizeResult>('playlists.organize', { by, ...opts });
+  playlistsContaining = (trackId: number) => this.call<{ ids: number[] }>('playlists.containing', { trackId });
+
+  // USB
+  drives = () => this.call<{ drives: Drive[] }>('usb.drives');
+  usbPlan = (root: string, playlistIds: number[], options: UsbOptions) => this.call<UsbPlan>('usb.plan', { root, playlistIds, ...options });
+  usbStart = (root: string, playlistIds: number[], options: UsbOptions) => this.call<{ accepted: boolean; total: number }>('usb.start', { root, playlistIds, ...options });
+  usbCancel = () => this.call<{ ok: boolean }>('usb.cancel');
+  usbStatus = () => this.call<{ running: boolean; last: UsbReport | null }>('usb.status');
 
   // Discogs
   discogsStatus = () => this.call<DiscogsStatus>('discogs.status');

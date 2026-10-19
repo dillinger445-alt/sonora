@@ -1,16 +1,18 @@
 /** Right-hand panel with a quick read of the focused track. */
 
-import { LuDisc3, LuExternalLink, LuFolderSearch, LuLoaderCircle, LuPause, LuPencil, LuPlay, LuRefreshCw, LuTrash2, LuUsb } from 'react-icons/lu';
+import { LuDisc3, LuExternalLink, LuFolderSearch, LuListMinus, LuListMusic, LuLoaderCircle, LuPause, LuPencil, LuPlay, LuRefreshCw, LuTrash2, LuUsb } from 'react-icons/lu';
 import type { KeyNotation, TrackDetail, TrackRow } from '../api/types.ts';
+import { AddToPlaylist } from '../components/AddToPlaylist.tsx';
 import { Button } from '../components/Button.tsx';
 import { BpmText, KeyBadge, SourceNote } from '../components/DjMarks.tsx';
 import { EvidenceMark, ScoreMeter, SeverityIcon, StatusMark } from '../components/Marks.tsx';
 import { DASH, encodingShort, formatBytes, formatDb, formatDuration, formatHz, formatKbps, middleEllipsis, plural } from '../lib/format.ts';
 import { useDebouncedValue } from '../lib/persist.ts';
-import { navigate } from '../lib/router.ts';
+import { formatRoute, navigate } from '../lib/router.ts';
 import { SCORE_HINT, SCORE_KINDS, SCORE_LABEL, SEVERITY } from '../lib/scores.ts';
 import { useCore } from '../state/core.tsx';
 import { usePlayer } from '../state/player.tsx';
+import { usePlaylists } from '../state/playlists.tsx';
 import type { TrackActions } from '../state/trackActions.tsx';
 import { useResource } from '../state/useResource.ts';
 
@@ -56,6 +58,31 @@ export function DiscogsLink({ url }: { url: string }) {
   );
 }
 
+/** The playlists that hold a track, as links. */
+function InPlaylists({ id }: { id: number }) {
+  const { client } = useCore();
+  const pl = usePlaylists();
+  const holding = useResource(() => client.playlistsContaining(id), [id], { events: ['playlists.changed'], throttleMs: 400 });
+  const names = (holding.data?.ids ?? []).map((x) => pl.byId.get(x)).filter((n) => n != null);
+  if (!names.length) return null;
+  return (
+    <p className="insp-playlists">
+      <LuListMusic aria-hidden />
+      <span>
+        In{' '}
+        {names.map((n, i) => (
+          <span key={n.id}>
+            {i > 0 ? ', ' : ''}
+            <a className="link" href={formatRoute({ view: 'playlist', id: n.id })}>
+              {n.name}
+            </a>
+          </span>
+        ))}
+      </span>
+    </p>
+  );
+}
+
 export function Inspector({
   row,
   selectionCount,
@@ -63,6 +90,7 @@ export function Inspector({
   onRemove,
   onClearSelection,
   selectedIds,
+  playlist,
 }: {
   row: TrackRow | null;
   selectionCount: number;
@@ -70,6 +98,8 @@ export function Inspector({
   actions: TrackActions;
   onRemove: (ids: number[], what?: string) => Promise<void>;
   onClearSelection: () => void;
+  /** Shown inside a playlist: taking tracks out of it. */
+  playlist?: { id: number; name: string; remove: (ids: number[]) => void };
 }) {
   const { client, settings } = useCore();
   const player = usePlayer();
@@ -90,6 +120,12 @@ export function Inspector({
           <p className="insp-sub">Actions apply to every selected track. Files on disk are never changed.</p>
         </div>
         <div className="insp-actions is-stacked">
+          {playlist ? (
+            <Button icon={LuListMinus} onClick={() => playlist.remove(selectedIds)}>
+              Take out of “{playlist.name}”
+            </Button>
+          ) : null}
+          <AddToPlaylist ids={selectedIds} />
           <Button icon={LuPencil} onClick={() => actions.editDj({ ids: selectedIds })}>
             Edit BPM, key and genre…
           </Button>
@@ -172,6 +208,12 @@ export function Inspector({
       <section className="insp-dj" aria-label="Tempo, key and genre">
         <DjStrip row={row} notation={notation} />
         <div className="insp-dj-actions">
+          <AddToPlaylist ids={[row.id]} size="sm" label="Add to playlist" />
+          {playlist ? (
+            <Button size="sm" icon={LuListMinus} variant="ghost" onClick={() => playlist.remove([row.id])} data-tip={`Take it out of “${playlist.name}”; it stays in the library`}>
+              Take out
+            </Button>
+          ) : null}
           <Button size="sm" icon={LuPencil} onClick={() => actions.editDj({ ids: [row.id], row })}>
             Edit…
           </Button>
@@ -182,6 +224,7 @@ export function Inspector({
             Discogs
           </Button>
         </div>
+        <InPlaylists id={row.id} />
       </section>
 
       {row.verdict ? (

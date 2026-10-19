@@ -9,8 +9,10 @@ import { TooltipLayer } from './components/TooltipLayer.tsx';
 import { navigate, useRoute, type Route } from './lib/router.ts';
 import { CoreProvider, useCore } from './state/core.tsx';
 import { ImportProvider, useImports } from './state/imports.tsx';
+import { DndProvider } from './state/dnd.tsx';
 import { JobsProvider } from './state/jobs.tsx';
 import { PlayerProvider, usePlayer } from './state/player.tsx';
+import { PlaylistsProvider } from './state/playlists.tsx';
 import { ToastProvider } from './state/toasts.tsx';
 import { UpdatesProvider } from './state/updates.tsx';
 import { AttentionView } from './views/Attention.tsx';
@@ -19,6 +21,7 @@ import { FoldersView } from './views/Folders.tsx';
 import { HistoryView } from './views/History.tsx';
 import { LibraryView } from './views/Library.tsx';
 import { OverviewView } from './views/Overview.tsx';
+import { PlaylistView } from './views/Playlist.tsx';
 import { QueueView } from './views/Queue.tsx';
 import { SettingsView } from './views/Settings.tsx';
 import { TrackView } from './views/Track.tsx';
@@ -32,7 +35,11 @@ export function App({ bridge }: { bridge: Bridge }) {
           <JobsProvider>
             <UpdatesProvider>
               <PlayerProvider>
-                <Shell />
+                <DndProvider>
+                  <PlaylistsProvider>
+                    <Shell />
+                  </PlaylistsProvider>
+                </DndProvider>
               </PlayerProvider>
             </UpdatesProvider>
           </JobsProvider>
@@ -62,6 +69,8 @@ function renderView(route: Route) {
       return <SettingsView />;
     case 'track':
       return <TrackView key={route.id} id={route.id} />;
+    case 'playlist':
+      return <PlaylistView key={route.id} id={route.id} />;
   }
 }
 
@@ -127,6 +136,7 @@ function Shell() {
       history: 'Analysis history',
       settings: 'Settings',
       track: 'Track analysis',
+      playlist: 'Playlist',
     };
     document.title = `${names[route.view] ?? ''} – SONORA`;
   }, [route.view]);

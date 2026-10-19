@@ -14,7 +14,8 @@ export type Route =
   | { view: 'duplicates' }
   | { view: 'history'; scanId?: number }
   | { view: 'settings' }
-  | { view: 'track'; id: number };
+  | { view: 'track'; id: number }
+  | { view: 'playlist'; id: number };
 
 export type View = Route['view'];
 
@@ -30,6 +31,10 @@ export function parseRoute(hash: string): Route {
     const id = Number(parts[1]);
     return Number.isInteger(id) && id > 0 ? { view: 'track', id } : { view: 'library' };
   }
+  if (head === 'playlist') {
+    const id = Number(parts[1]);
+    return Number.isInteger(id) && id > 0 ? { view: 'playlist', id } : { view: 'library' };
+  }
   if (head === 'history') {
     const id = Number(parts[1]);
     return Number.isInteger(id) && id > 0 ? { view: 'history', scanId: id } : { view: 'history' };
@@ -42,7 +47,7 @@ export function parseRoute(hash: string): Route {
     const flag = params.get('flag');
     return flag ? { view: 'attention', flag } : { view: 'attention' };
   }
-  if ((SIMPLE as string[]).includes(head)) return { view: head as Exclude<View, 'track' | 'history' | 'attention' | 'library'> } as Route;
+  if ((SIMPLE as string[]).includes(head)) return { view: head as Exclude<View, 'track' | 'history' | 'attention' | 'library' | 'playlist'> } as Route;
   return { view: 'overview' };
 }
 
@@ -50,6 +55,8 @@ export function formatRoute(r: Route): string {
   switch (r.view) {
     case 'track':
       return `#/track/${r.id}`;
+    case 'playlist':
+      return `#/playlist/${r.id}`;
     case 'history':
       return r.scanId ? `#/history/${r.scanId}` : '#/history';
     case 'attention':

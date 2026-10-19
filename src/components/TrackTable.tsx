@@ -28,7 +28,9 @@ import {
 } from 'react';
 import { LuArrowDown, LuArrowUp } from 'react-icons/lu';
 import type { LibraryFilter, ScoreKind, Sort, TrackRow } from '../api/types.ts';
+import { plural } from '../lib/format.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
+import { useDragStart } from '../state/dnd.tsx';
 import { throttle } from '../state/emitter.ts';
 import { usePlayer } from '../state/player.tsx';
 import { Checkbox } from './Controls.tsx';
@@ -95,6 +97,7 @@ export function TrackTable({
 }: TrackTableProps) {
   const { client, settings } = useCore();
   const player = usePlayer();
+  const beginDrag = useDragStart();
   const gridId = useId();
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -630,6 +633,14 @@ export function TrackTable({
           style={{ top, gridTemplateColumns: template }}
           onClick={(e) => onRowClick(e, i, r)}
           onDoubleClick={() => onOpen(r)}
+          onPointerDown={(e) => {
+            // Rows drag onto playlists in the sidebar: the selection, or this row.
+            if ((e.target as HTMLElement).closest('button, input, a')) return;
+            beginDrag(e, () => {
+              const ids = selectionRef.current.has(r.id) ? [...selectionRef.current] : [r.id];
+              return { kind: 'tracks', ids, label: ids.length === 1 ? r.displayTitle : plural(ids.length, 'track') };
+            });
+          }}
         >
           <div role="gridcell" className="tcell tcell-check" onClick={(e) => e.stopPropagation()}>
             <Checkbox checked={selected} tabIndex={-1} aria-label={`Select ${r.displayTitle}`} onChange={() => toggleOne(i, r)} />

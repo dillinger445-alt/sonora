@@ -24,7 +24,7 @@ export interface ExportTarget {
   ids: number[];
 }
 
-const FORMATS: { value: ExportFormat; label: string; hint: string; about: string }[] = [
+export const FORMATS: { value: ExportFormat; label: string; hint: string; about: string }[] = [
   {
     value: 'aiff',
     label: 'AIFF',
@@ -45,7 +45,7 @@ const FORMATS: { value: ExportFormat; label: string; hint: string; about: string
   },
 ];
 
-const QUALITY: { value: ExportQuality; label: string; hint: string; about: string }[] = [
+export const QUALITY: { value: ExportQuality; label: string; hint: string; about: string }[] = [
   { value: 'universal', label: '16-bit / 44.1 kHz', hint: 'Every player', about: 'CD quality, readable by every CDJ, controller and USB player.' },
   {
     value: 'high',
@@ -61,8 +61,8 @@ function defaultPlaylist(): string {
   return `SONORA ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-const isFormat = (v: unknown): v is ExportFormat => v === 'aiff' || v === 'wav' || v === 'mp3';
-const isQuality = (v: unknown): v is ExportQuality => v === 'universal' || v === 'high';
+export const isFormat = (v: unknown): v is ExportFormat => v === 'aiff' || v === 'wav' || v === 'mp3';
+export const isQuality = (v: unknown): v is ExportQuality => v === 'universal' || v === 'high';
 
 type Phase = 'setup' | 'running' | 'done';
 

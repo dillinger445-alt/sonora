@@ -24,6 +24,9 @@ const EVENT_NAMES = [
   'djexport.finished',
   'discogs.progress',
   'discogs.finished',
+  'playlists.changed',
+  'usb.progress',
+  'usb.finished',
 ] as const;
 
 interface CallResponse {

@@ -6,6 +6,7 @@ import { formatCount } from '../lib/format.ts';
 import { formatRoute, type Route, type View } from '../lib/router.ts';
 import { useCore, useScan } from '../state/core.tsx';
 import { useImports } from '../state/imports.tsx';
+import { PlaylistTree } from './PlaylistTree.tsx';
 
 type IconComponent = ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
 
@@ -125,12 +126,13 @@ export function Sidebar({ active }: { active: View }) {
           )}
         />
       </div>
-      <div className="sidebar-scroll">
+      <div className="sidebar-scroll" data-autoscroll>
         {GROUPS.map((g, i) => (
           <ul key={i} className="nav-group">
             {g.map(link)}
           </ul>
         ))}
+        <PlaylistTree />
       </div>
       <ul className="nav-group nav-bottom">
         {link({ view: 'settings', route: { view: 'settings' }, label: 'Settings', icon: LuSettings, shortcut: ',' })}

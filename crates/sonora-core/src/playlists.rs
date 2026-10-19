@@ -749,13 +749,10 @@ pub fn organize(c: &Connection, by: OrganizeBy, ids: Option<&[i64]>, smart: bool
         let name = (1..).map(|n| if n == 1 { base.to_string() } else { format!("{base} {n}") }).find(|n| !taken.contains(&n.to_lowercase())).unwrap_or(base.to_string());
         let folder = insert_node(tx, Kind::Folder, &name, None, None, None)?;
         let mut tracks = 0;
-        let sort = match by {
-            OrganizeBy::Tempo => "key",
-            _ => "bpm",
-        };
+        // Slowest first inside each playlist, smart or not.
         for (_, title, filter, members) in &list {
             if smart {
-                let rules = obj! { "filter" => filter.clone(), "sort" => obj! { "key" => sort, "desc" => false } };
+                let rules = obj! { "filter" => filter.clone(), "sort" => obj! { "key" => "bpm", "desc" => false } };
                 insert_node(tx, Kind::Smart, title, Some(folder), None, Some(&rules))?;
             } else {
                 let p = insert_node(tx, Kind::Playlist, title, Some(folder), None, None)?;

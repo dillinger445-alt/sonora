@@ -5,8 +5,8 @@
  * corpus through the interface, the rest work with the analyzed tracks.
  */
 
-import { expect, test, type Page } from '@playwright/test';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA, MUSIC } from './paths.ts';
 
@@ -43,6 +43,28 @@ async function columnValues(page: Page, column: string): Promise<string[]> {
 
 function row(page: Page, title: string) {
   return page.locator('.tbody .trow').filter({ has: page.locator('.cell-title', { hasText: new RegExp(`^${title}$`) }) });
+}
+
+/** The titles in the open playlist, in order. */
+function playlistTitles(page: Page): Promise<string[]> {
+  return page.locator('.pt .tbody .trow .cell-title > span.ellipsis').allInnerTexts();
+}
+
+/**
+ * Drags with the mouse as a person would: press, move a little, move over
+ * the target (its middle, or `at` from its top left corner), let go.
+ */
+async function drag(page: Page, from: Locator, to: Locator, at?: { x?: number; y?: number }): Promise<void> {
+  const a = await from.boundingBox();
+  const b = await to.boundingBox();
+  if (!a || !b) throw new Error('drag: the source or the target is not on screen');
+  const x = a.x + a.width / 2;
+  const y = a.y + a.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 8, y + 8, { steps: 2 });
+  await page.mouse.move(b.x + (at?.x ?? b.width / 2), b.y + (at?.y ?? b.height / 2), { steps: 10 });
+  await page.mouse.up();
 }
 
 test('starts empty, imports a folder by path and analyzes it in the background', async ({ page }) => {
@@ -576,3 +598,236 @@ test('updates: found on request, explained, installed with a restart; the browse
   await expect(auto).toBeChecked();
 });
 
+
+test('playlists: made in the sidebar, filled by dragging or from the details panel, put in order', async ({ page }) => {
+  await page.goto('/#/library');
+  await expect(page.getByText('Sort tracks into sets, then send them to a USB drive.')).toBeVisible();
+
+  // A new playlist opens with its name ready to type.
+  await page.getByRole('button', { name: 'New playlist, folder or smart playlist' }).click();
+  await page.getByRole('menuitem', { name: 'New playlist', exact: true }).click();
+  const naming = page.getByRole('textbox', { name: 'New name for New playlist' });
+  await expect(naming).toBeFocused();
+  await naming.fill('Warm-up');
+  await naming.press('Enter');
+  const tree = page.getByRole('tree', { name: 'Playlists' });
+  const warmup = tree.getByRole('treeitem', { name: /Warm-up/ });
+  await expect(warmup).toHaveAttribute('aria-current', 'page');
+  await expect(warmup).toBeFocused();
+  await expect(page.locator('.view-title')).toHaveText('Warm-up');
+  await expect(page.getByText('In the library, drag tracks onto “Warm-up” in the sidebar')).toBeVisible();
+  await page.getByRole('button', { name: 'Go to the library' }).click();
+
+  // Tracks dragged onto it in the sidebar, each once.
+  const search = page.getByRole('searchbox', { name: 'Search tracks' });
+  await search.fill('other_track');
+  await expect(rows(page)).toHaveCount(1);
+  await drag(page, row(page, 'other_track').locator('.tcell-bpm'), warmup);
+  await expect(page.getByText('Added 1 track to “Warm-up”')).toBeVisible();
+  await expect(warmup.locator('.pl-count')).toHaveText('1');
+  await drag(page, row(page, 'other_track').locator('.tcell-bpm'), warmup);
+  await expect(page.getByText('Already in “Warm-up”')).toBeVisible();
+  await search.fill('radio_edit');
+  await expect(rows(page)).toHaveCount(1);
+  await drag(page, row(page, 'radio_edit').locator('.tcell-bpm'), warmup);
+  await expect(warmup.locator('.pl-count')).toHaveText('2');
+
+  // Or from the details panel, which then lists the playlists holding the track.
+  await search.fill('dark_master');
+  await expect(rows(page)).toHaveCount(1);
+  await row(page, 'dark_master').click();
+  const details = page.getByRole('complementary', { name: 'Track details' });
+  await details.getByRole('button', { name: 'Add to playlist' }).click();
+  await page.getByRole('menuitem', { name: /^Warm-up/ }).click();
+  await expect(warmup.locator('.pl-count')).toHaveText('3');
+  await expect(details.getByRole('link', { name: 'Warm-up' })).toBeVisible();
+
+  // A playlist made of a selection.
+  await search.fill('master');
+  await row(page, 'clipped_master').click();
+  await row(page, 'dark_master').click({ modifiers: ['Control'] });
+  const selection = page.getByRole('complementary', { name: 'Selection' });
+  await expect(selection).toContainText('2 tracks selected');
+  await selection.getByRole('button', { name: 'Add to playlist' }).click();
+  await page.getByRole('menuitem', { name: 'New playlist of 2 tracks' }).click();
+  const naming2 = page.getByRole('textbox', { name: 'New name for New playlist' });
+  await expect(naming2).toBeFocused();
+  await naming2.fill('Peak time');
+  await naming2.press('Enter');
+  const peak = tree.getByRole('treeitem', { name: /Peak time/ });
+  await expect(peak.locator('.pl-count')).toHaveText('2');
+
+  // The playlist: the set at a glance, then its tracks in order.
+  await warmup.click();
+  await expect(page.getByRole('img', { name: /^The set: 3 tracks/ })).toBeVisible();
+  await expect.poll(() => playlistTitles(page)).toEqual(['other_track', 'radio_edit', 'dark_master']);
+  await expect(row(page, 'other_track').locator('.tcell-mix')).toHaveText('Opener');
+
+  // Alt+↑ moves a track up a place; dragging moves it anywhere. The order is kept.
+  await row(page, 'dark_master').click();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(() => playlistTitles(page)).toEqual(['other_track', 'dark_master', 'radio_edit']);
+  await drag(page, row(page, 'radio_edit').locator('.tcell-bpm'), row(page, 'other_track'), { y: 4 });
+  await expect.poll(() => playlistTitles(page)).toEqual(['radio_edit', 'other_track', 'dark_master']);
+  await page.reload();
+  await expect.poll(() => playlistTitles(page)).toEqual(['radio_edit', 'other_track', 'dark_master']);
+
+  // Delete takes a track out (the library keeps it); Undo puts it back in its place.
+  await row(page, 'other_track').click();
+  await page.keyboard.press('Delete');
+  await expect.poll(() => playlistTitles(page)).toEqual(['radio_edit', 'dark_master']);
+  await expect(page.getByText('Removed 1 track from the playlist')).toBeVisible();
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => playlistTitles(page)).toEqual(['radio_edit', 'other_track', 'dark_master']);
+
+  // Arranging shows the set before and after, and changes nothing unless asked.
+  await page.getByRole('button', { name: 'Arrange for mixing…' }).click();
+  const arrange = page.getByRole('dialog', { name: 'Arrange for mixing' });
+  await expect(arrange.getByRole('img', { name: 'The set in the arranged order' })).toBeVisible();
+  await expect(arrange).toContainText('Key clashes');
+  await arrange.getByRole('button', { name: 'Cancel' }).click();
+  await expect(arrange).toBeHidden();
+  await expect.poll(() => playlistTitles(page)).toEqual(['radio_edit', 'other_track', 'dark_master']);
+
+  // Playlists move among their neighbours from the keyboard too, keeping the focus.
+  await warmup.focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(tree.getByRole('treeitem').first()).toContainText('Peak time');
+  await expect(warmup).toBeFocused();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect(tree.getByRole('treeitem').first()).toContainText('Warm-up');
+});
+
+test('smart playlists keep up with their rules; folders hold playlists', async ({ page }) => {
+  // The library's filters, saved as a smart playlist.
+  await page.goto('/#/library');
+  const toolbar = page.getByRole('toolbar', { name: 'Filters' });
+  await toolbar.getByRole('button', { name: /^BPM/ }).click();
+  const tempo = page.getByRole('dialog', { name: 'Tempo filter' });
+  await tempo.getByRole('textbox', { name: 'Lowest BPM' }).fill('126');
+  await tempo.getByRole('textbox', { name: 'Highest BPM' }).fill('130');
+  await page.keyboard.press('Escape');
+  await expect.poll(() => columnValues(page, 'bpm')).toEqual(['128']);
+  const matching = await rows(page).count();
+  await page.getByRole('button', { name: 'Save as smart playlist' }).click();
+  const rules = page.getByRole('dialog', { name: 'New smart playlist' });
+  await expect(rules.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('126–130 BPM');
+  await expect(rules).toContainText(matching === 1 ? '1 track matches now' : `${matching} tracks match now`);
+  await rules.getByRole('button', { name: 'Make smart playlist' }).click();
+  const tree = page.getByRole('tree', { name: 'Playlists' });
+  const smart = tree.getByRole('treeitem', { name: /126–130 BPM/ });
+  await expect(smart).toHaveAttribute('aria-current', 'page');
+  await expect(rows(page)).toHaveCount(matching);
+
+  // Wider rules, more tracks.
+  await page.getByRole('button', { name: 'Edit rules…' }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit smart playlist' });
+  await edit.getByRole('textbox', { name: 'Lowest BPM' }).fill('120');
+  await edit.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(edit).toBeHidden();
+  await expect(page.locator('.view-sub')).toContainText('120–130 BPM');
+  await expect.poll(() => rows(page).count()).toBeGreaterThan(matching);
+
+  // Converted, it is an ordinary playlist; deleting it asks first and keeps the tracks.
+  await page.getByRole('button', { name: 'More playlist actions' }).click();
+  await page.getByRole('menuitem', { name: 'Convert to a playlist' }).click();
+  await expect(page.getByText(/^Now a playlist of \d+ tracks$/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Arrange for mixing…' })).toBeVisible();
+  await page.getByRole('button', { name: 'More playlist actions' }).click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
+  const confirm = page.getByRole('dialog', { name: 'Delete the playlist “126–130 BPM”?' });
+  await expect(confirm).toContainText('The tracks stay in your library');
+  await confirm.getByRole('button', { name: 'Delete playlist' }).click();
+  await expect(smart).toBeHidden();
+  await expect(page).toHaveURL(/#\/library/);
+
+  // A folder, and playlists dragged into it.
+  await page.getByRole('button', { name: 'New playlist, folder or smart playlist' }).click();
+  await page.getByRole('menuitem', { name: 'New folder' }).click();
+  const naming = page.getByRole('textbox', { name: 'New name for New folder' });
+  await expect(naming).toBeFocused();
+  await naming.fill('Friday');
+  await naming.press('Enter');
+  const friday = tree.getByRole('treeitem', { name: /Friday/ });
+  await expect(friday).toHaveAttribute('aria-level', '1');
+  const warmup = tree.getByRole('treeitem', { name: /Warm-up/ });
+  const peak = tree.getByRole('treeitem', { name: /Peak time/ });
+  await drag(page, warmup, friday);
+  await expect(warmup).toHaveAttribute('aria-level', '2');
+  await expect(friday).toHaveAttribute('aria-expanded', 'true');
+  await drag(page, peak, friday);
+  await expect(peak).toHaveAttribute('aria-level', '2');
+
+  await friday.click();
+  await expect(page.locator('.view-title')).toHaveText('Friday');
+  await expect(page.locator('.view-sub')).toHaveText('2 items, 5 tracks');
+  await expect(page.locator('.folder-list')).toContainText('Warm-up');
+
+  // ← closes a folder and → opens it.
+  await friday.focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(friday).toHaveAttribute('aria-expanded', 'false');
+  await expect(warmup).toBeHidden();
+  await page.keyboard.press('ArrowRight');
+  await expect(warmup).toBeVisible();
+});
+
+test('Send to USB writes numbered folders of DJ-ready files and playlists, and changes only the files it wrote', async ({ page }) => {
+  const usb = join(DATA, 'usb');
+  rmSync(usb, { recursive: true, force: true });
+  mkdirSync(usb, { recursive: true });
+  // The owner's own file on the drive.
+  writeFileSync(join(usb, 'notes.txt'), 'mine');
+
+  await page.goto('/#/library');
+  const tree = page.getByRole('tree', { name: 'Playlists' });
+  await tree.getByRole('treeitem', { name: /Friday/ }).click();
+  await page.getByRole('button', { name: 'Send to USB…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Send playlists to a USB drive' });
+  const picker = dialog.getByRole('group', { name: 'Playlists to send' });
+  await expect(picker.getByRole('checkbox', { name: /Friday/ })).toBeChecked();
+  // What is inside a chosen folder goes with it.
+  await expect(picker.getByRole('checkbox', { name: /Warm-up/ })).toBeChecked();
+  await expect(picker.getByRole('checkbox', { name: /Warm-up/ })).toBeDisabled();
+  await dialog.getByRole('textbox', { name: 'Drive or folder (full path)' }).fill(usb);
+  const plan = dialog.getByRole('region', { name: 'What happens' });
+  await expect(plan).toContainText('5 files to write');
+  await expect(dialog.getByRole('region', { name: 'Files on the drive' })).toContainText('SONORA/01 Friday/01 Warm-up');
+  // Serato finds crates only at the top of a drive.
+  await expect(dialog).toContainText('only when sending to the top of a drive');
+  await dialog.getByRole('button', { name: 'Send to usb' }).click();
+  const done = page.getByRole('dialog', { name: 'Sent to the drive' });
+  await expect(done).toContainText('Sent 2 playlists to the drive', { timeout: 60_000 });
+  await expect(done).toContainText('SONORA/rekordbox.xml');
+  await done.getByRole('button', { name: 'Done' }).click();
+
+  const warm = join(usb, 'SONORA', '01 Friday', '01 Warm-up');
+  expect(readdirSync(warm).sort()).toEqual(['001 - radio_edit.aiff', '002 - other_track.aiff', '003 - dark_master.aiff', 'Warm-up.m3u8']);
+  const m3u = readFileSync(join(warm, 'Warm-up.m3u8'), 'utf8');
+  expect(m3u.startsWith('#EXTM3U\n')).toBe(true);
+  expect(m3u.indexOf('001 - radio_edit.aiff')).toBeLessThan(m3u.indexOf('002 - other_track.aiff'));
+  expect(readdirSync(join(usb, 'SONORA', '01 Friday', '02 Peak time')).filter((f) => f.endsWith('.aiff'))).toHaveLength(2);
+  const xml = readFileSync(join(usb, 'SONORA', 'rekordbox.xml'), 'utf8');
+  // rekordbox lists the playlists by their names on the drive, in the same order.
+  expect(xml).toContain('Name="01 Friday"');
+  expect(xml).toContain('Name="01 Warm-up"');
+  expect(existsSync(join(usb, 'SONORA', '.sonora-sync.json'))).toBe(true);
+
+  // A track taken out of the playlist: its file goes only when asked, and
+  // files that are not SONORA's stay, even in its folders.
+  writeFileSync(join(warm, 'my edit.aiff'), 'mine too');
+  await tree.getByRole('treeitem', { name: /Warm-up/ }).click();
+  await row(page, 'other_track').click();
+  await page.keyboard.press('Delete');
+  await expect.poll(() => playlistTitles(page)).toEqual(['radio_edit', 'dark_master']);
+  await page.getByRole('button', { name: 'Send to USB…' }).click();
+  await dialog.getByRole('textbox', { name: 'Drive or folder (full path)' }).fill(usb);
+  await expect(plan).toContainText('1 to move, 1 already there');
+  await dialog.getByRole('checkbox', { name: /^Remove the 1 file/ }).check();
+  await dialog.getByRole('button', { name: 'Send to usb' }).click();
+  await expect(done).toContainText('Sent 1 playlist to the drive', { timeout: 60_000 });
+  await done.getByRole('button', { name: 'Done' }).click();
+  expect(readdirSync(warm).sort()).toEqual(['001 - radio_edit.aiff', '002 - dark_master.aiff', 'Warm-up.m3u8', 'my edit.aiff']);
+  expect(readFileSync(join(usb, 'notes.txt'), 'utf8')).toBe('mine');
+  rmSync(usb, { recursive: true, force: true });
+});

@@ -1,0 +1,1063 @@
+/*
+ * Playlists: the sidebar tree, dragging, the set timeline, the playlist
+ * table, and the dialogs to arrange, sort, filter and send to a drive.
+ *
+ * The timeline is the one loud element: the set as a strip of blocks in
+ * their keys' hues, the tempo drawn across, and a signal mark at every
+ * change (lime mixes, amber stretches, red clashes), like a mixer's
+ * overview. Everything around it stays graphite.
+ */
+
+/* -------------------------------------------------------------- sidebar */
+
+.pl {
+  padding: 6px 0 12px;
+  border-top: 1px solid var(--c-line-faint);
+}
+
+.pl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 4px 0 8px;
+}
+
+.pl-title {
+  font-size: 11.5px;
+  font-weight: var(--w-medium);
+  color: var(--c-text-3);
+}
+
+.pl-add {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: transparent;
+  color: var(--c-text-3);
+}
+
+.pl-add:hover,
+.pl-add[aria-expanded='true'] {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+
+.pl-add svg {
+  width: 15px;
+  height: 15px;
+}
+
+.pl-empty {
+  margin: 2px 4px 0 8px;
+  padding: 10px 10px 12px;
+  border: 1px dashed var(--c-line);
+  border-radius: var(--r-ctl);
+  color: var(--c-text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pl-empty p {
+  margin-bottom: 6px;
+}
+
+.pl-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 24px;
+  padding-bottom: 8px;
+}
+
+.pl-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding-right: 4px;
+  border-radius: var(--r-ctl);
+  color: var(--c-text-2);
+  font-size: 13px;
+  cursor: default;
+  user-select: none;
+  outline: none;
+}
+
+.pl-row:hover {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+
+.pl-row:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--c-lime-line);
+}
+
+.pl-row.is-active {
+  background: var(--c-raised);
+  color: var(--c-text);
+  font-weight: var(--w-medium);
+}
+
+.pl-row.is-active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: var(--c-lime);
+}
+
+.pl-row.is-dragged {
+  opacity: 0.4;
+}
+
+.pl-row.has-problem .pl-name {
+  color: var(--c-amber);
+}
+
+/* Drop places: a line before or after, or the row lit for "into". */
+.pl-row.drop-before::after,
+.pl-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c-lime);
+  pointer-events: none;
+}
+
+.pl-row.drop-before::after {
+  top: -1.5px;
+}
+
+.pl-row.drop-after::after {
+  bottom: -1.5px;
+}
+
+.pl-row.drop-inside {
+  background: var(--c-lime-dim);
+  box-shadow: inset 0 0 0 1px var(--c-lime-line);
+  color: var(--c-text);
+}
+
+.pl-tree.is-drop-end::after {
+  content: '';
+  display: block;
+  height: 2px;
+  margin: 2px 4px 0;
+  border-radius: 1px;
+  background: var(--c-lime);
+}
+
+.pl-chevron,
+.pl-chevron-slot {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.pl-chevron {
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--c-text-3);
+}
+
+.pl-chevron:hover {
+  color: var(--c-text);
+}
+
+.pl-chevron svg {
+  width: 13px;
+  height: 13px;
+  transition: transform var(--t-fast);
+}
+
+.pl-chevron.is-open svg {
+  transform: rotate(90deg);
+}
+
+.pl-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--c-text-3);
+}
+
+.pl-row.is-smart .pl-icon {
+  color: var(--c-data-1);
+}
+
+.pl-row.is-active .pl-icon,
+.pl-row:hover .pl-icon {
+  color: var(--c-text-2);
+}
+
+.pl-name {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.pl-count {
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+
+.pl-more {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--c-text-3);
+  opacity: 0;
+}
+
+.pl-row:hover .pl-more,
+.pl-row:focus-visible .pl-more,
+.pl-more[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.pl-more:hover {
+  background: var(--c-active);
+  color: var(--c-text);
+}
+
+.pl-more svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Counts give way to the menu button on hover. */
+.pl-row:hover .pl-count,
+.pl-row:focus-visible .pl-count {
+  display: none;
+}
+
+.pl-rename {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--c-lime-line);
+  border-radius: 2px;
+  background: var(--c-well);
+  color: var(--c-text);
+  font: inherit;
+  outline: none;
+}
+
+/* ------------------------------------------------------------- dragging */
+
+body.is-dragging,
+body.is-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 300px;
+  height: 28px;
+  padding: 0 10px 0 9px;
+  border-radius: var(--r-ctl);
+  background: var(--c-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--c-text);
+  font-size: 12.5px;
+  pointer-events: none;
+}
+
+.drag-ghost svg {
+  width: 14px;
+  height: 14px;
+  color: var(--c-text-3);
+}
+
+.drag-ghost.is-over svg {
+  color: var(--c-lime);
+}
+
+.drag-ghost-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drag-ghost-plus {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -4px;
+  border-radius: 50%;
+  background: var(--c-lime);
+  color: var(--c-lime-ink);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* -------------------------------------------------------- playlist view */
+
+.pl-view-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pl-view-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--c-text-3);
+}
+
+.pl-view-meta {
+  color: var(--c-text-3);
+}
+
+.pl-timeline {
+  position: relative;
+  flex-shrink: 0;
+  margin-bottom: 14px;
+}
+
+.tl {
+  position: relative;
+}
+
+.tl svg {
+  display: block;
+  overflow: visible;
+  outline: none;
+}
+
+.tl svg:focus-visible {
+  outline: 1px solid var(--c-lime-line);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.tl-seg {
+  cursor: pointer;
+}
+
+.tl-seg.is-hover rect:first-child {
+  filter: brightness(1.45);
+}
+
+.tl-key {
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-num);
+  font-size: 10px;
+  fill: var(--c-text-2);
+  pointer-events: none;
+}
+
+.tl-bpm {
+  fill: none;
+  stroke: var(--c-data-1);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.tl-mark {
+  pointer-events: none;
+}
+
+.tl-mark.is-good {
+  fill: var(--c-lime);
+}
+
+.tl-mark.is-stretch {
+  fill: var(--c-amber);
+}
+
+.tl-mark.is-clash {
+  fill: var(--c-red);
+}
+
+.tl-mark.is-unknown {
+  fill: var(--c-text-off);
+}
+
+.tl-playhead {
+  stroke: var(--c-text);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.tl-range {
+  position: absolute;
+  right: 0;
+  top: -16px;
+  font-size: 10.5px;
+}
+
+.tl-tip {
+  position: absolute;
+  top: calc(100% + 2px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 260px;
+  padding: 8px 10px;
+  border-radius: var(--r-ctl);
+  background: var(--c-raised);
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.tl-tip-title {
+  color: var(--c-text);
+}
+
+.tl-tip-mix.is-good {
+  color: var(--c-lime);
+}
+
+.tl-tip-mix.is-stretch {
+  color: var(--c-amber);
+}
+
+.tl-tip-mix.is-clash {
+  color: var(--c-red);
+}
+
+.tl-tip-mix.is-unknown {
+  color: var(--c-text-3);
+}
+
+/* ------------------------------------------------------- playlist table */
+
+.pt .tcell-pos {
+  justify-content: flex-end;
+}
+
+.pt-pos {
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+
+.pt-row.is-dragged {
+  opacity: 0.35;
+}
+
+.pt-insert {
+  position: absolute;
+  left: 30px;
+  right: 0;
+  height: 2px;
+  background: var(--c-lime);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.pt-insert::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--c-lime);
+  background: var(--c-canvas);
+}
+
+.mix-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.mix-mark {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  background: var(--c-text-off);
+}
+
+.mix-mark.is-good {
+  background: var(--c-lime);
+}
+
+.mix-mark.is-stretch {
+  background: var(--c-amber);
+}
+
+.mix-mark.is-clash {
+  background: var(--c-red);
+}
+
+.mix-hd {
+  font-size: 10.5px;
+}
+
+.pt-empty {
+  flex: 1;
+  display: flex;
+  border-top: 1px solid var(--c-line);
+}
+
+.pt-empty > * {
+  flex: 1;
+}
+/* --------------------------------------------------------- folder view */
+
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--c-line);
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--c-line-faint);
+  color: var(--c-text);
+  text-decoration: none;
+  font-size: 13.5px;
+}
+
+.folder-item:hover {
+  background: var(--c-panel);
+}
+
+.folder-item-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--c-text-3);
+}
+
+.folder-item-name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* -------------------------------------------------------------- inspector */
+
+.insp-playlists {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.insp-playlists svg {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------- dialogs */
+
+.select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-ctl);
+  background: var(--c-well);
+  color: var(--c-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.organize {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.organize-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.organize-example {
+  margin-top: -4px;
+  padding-left: 110px;
+  font-size: 12px;
+}
+
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rules-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 236px;
+  gap: 20px;
+}
+
+.rules-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rules-order,
+.rules-limit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rules-limit .text-input {
+  width: 90px;
+}
+
+.rules .bpm-inputs .text-input {
+  width: 80px;
+}
+
+.rules-count {
+  margin-right: auto;
+  font-size: 12.5px;
+}
+
+.rules-kept {
+  font-size: 12px;
+}
+
+.genre-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.genre-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--c-text-2);
+  font-size: 12px;
+}
+
+.genre-chip:hover {
+  border-color: var(--c-line-strong);
+  color: var(--c-text);
+}
+
+.genre-chip.is-on {
+  border-color: var(--c-lime-line);
+  background: var(--c-lime-dim);
+  color: var(--c-text);
+}
+
+.arr {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.arr-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+
+.arr-sets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.arr-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11.5px;
+  font-weight: var(--w-medium);
+}
+
+.arr-wait {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+
+.arr-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--c-line-faint);
+}
+
+.arr-stat dt {
+  font-size: 11.5px;
+  color: var(--c-text-3);
+}
+
+.arr-stat dd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+.arr-arrow {
+  color: var(--c-text-off);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------ USB dialog */
+
+.usb {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.usb-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.usb-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  align-self: stretch;
+}
+
+.usb-h {
+  font-size: 12px;
+  font-weight: var(--w-medium);
+  color: var(--c-text-2);
+}
+
+.drives {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  align-self: stretch;
+}
+
+.drive {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px 11px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-ctl);
+  background: var(--c-panel);
+  color: var(--c-text);
+  text-align: left;
+  font: inherit;
+}
+
+.drive:hover {
+  border-color: var(--c-line-strong);
+}
+
+.drive.is-on {
+  border-color: var(--c-lime-line);
+  box-shadow: inset 0 0 0 1px var(--c-lime-line);
+}
+
+.drive-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.drive-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--c-text-3);
+}
+
+.drive.is-on .drive-icon {
+  color: var(--c-lime);
+}
+
+.drive-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: var(--w-medium);
+}
+
+.drive-fs {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--c-line);
+  border-radius: 2px;
+  color: var(--c-text-3);
+  font-size: 10.5px;
+}
+
+.drive-space {
+  font-size: 11.5px;
+}
+
+/* Capacity: used in grey, about to be written in lime, the rest dark. */
+.cap {
+  position: relative;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--c-well);
+  overflow: hidden;
+}
+
+.cap-used,
+.cap-write {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.cap-used {
+  left: 0;
+  background: var(--c-text-off);
+}
+
+.cap-write {
+  background: var(--c-lime);
+}
+
+.cap.is-over .cap-write {
+  background: var(--c-red);
+}
+
+.cap-unknown {
+  background: repeating-linear-gradient(90deg, var(--c-well) 0 6px, var(--c-line-faint) 6px 8px);
+}
+
+.usb-none {
+  font-size: 12.5px;
+}
+
+.usb-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 22px;
+}
+
+.pick {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0;
+  border: 1px solid var(--c-line-faint);
+  border-radius: var(--r-ctl);
+  background: var(--c-well);
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+}
+
+.pick-row.is-implied {
+  color: var(--c-text-3);
+}
+
+.pick-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--c-text-3);
+}
+
+.pick-count {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.usb-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.check-row.is-disabled {
+  color: var(--c-text-3);
+}
+
+.usb-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--c-line-faint);
+}
+
+.usb-summary strong {
+  font-weight: var(--w-medium);
+}
+
+.usb-stale {
+  align-items: flex-start;
+}
+
+.usb-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.usb-warnings li {
+  display: flex;
+  gap: 6px;
+}
+
+.usb-warnings svg {
+  width: 13px;
+  height: 13px;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.usb-preview {
+  max-height: 210px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--c-line-faint);
+  border-radius: var(--r-ctl);
+  background: var(--c-well);
+  font-size: 12px;
+}
+
+.usb-dir + .usb-dir {
+  margin-top: 8px;
+}
+
+.usb-dir-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-text-2);
+}
+
+.usb-dir-name svg {
+  width: 13px;
+  height: 13px;
+  color: var(--c-text-3);
+}
+
+.usb-dir ul {
+  padding-left: 19px;
+}
+
+.usb-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 20px;
+  color: var(--c-text-3);
+}
+
+.usb-file.is-new,
+.usb-file.is-update,
+.usb-file.is-rename {
+  color: var(--c-text);
+}
+
+.usb-tag {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 2px;
+  font-size: 10.5px;
+  line-height: 16px;
+  color: var(--c-text-2);
+  background: var(--c-active);
+}
+
+.usb-file.is-new .usb-tag {
+  color: var(--c-lime-ink);
+  background: var(--c-lime);
+}
+
+.usb-file.is-update .usb-tag {
+  color: var(--c-amber);
+  background: var(--c-amber-dim);
+}
+
+/* Checkbox rows in these dialogs sit close together. */
+.pick .check-row,
+.usb-checks .check-row,
+.arr-options .check-row,
+.organize .check-row,
+.rules .check-row {
+  margin-top: 0;
+}
+
+.rules .field .check-row {
+  margin-top: 6px;
+}
+
+.rules .field > .segmented,
+.organize .segmented {
+  align-self: flex-start;
+}

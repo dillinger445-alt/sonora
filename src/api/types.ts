@@ -659,6 +659,124 @@ export interface ExportProgress {
   current: string;
 }
 
+// ------------------------------------------------------------ playlists
+
+export type PlaylistKind = 'folder' | 'playlist' | 'smart';
+
+/** What a smart playlist lists: a library filter and its order. */
+export interface SmartRules {
+  filter: LibraryFilter;
+  sort: Sort;
+  limit?: number | null;
+}
+
+export interface PlaylistNode {
+  id: number;
+  parentId: number | null;
+  kind: PlaylistKind;
+  name: string;
+  position: number;
+  rules: SmartRules | null;
+  /** Tracks (folders: everything under them, a track in two playlists twice). */
+  count: number;
+  /** Seconds. */
+  duration: number;
+  /** Folders: playlists and folders directly inside. */
+  children: number;
+  /** A smart playlist whose rules this version cannot read. */
+  problem: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MixSummary {
+  transitions: number;
+  harmonic: number;
+  clashes: number;
+  unknown: number;
+  /** Mean tempo change between neighbours, in percent. */
+  tempoChange: number | null;
+}
+
+export interface ArrangeResult {
+  order: number[];
+  before: MixSummary;
+  after: MixSummary;
+}
+
+export type OrganizeBy = 'genre' | 'key' | 'tempo';
+
+export interface OrganizeResult {
+  folderId: number;
+  playlists: number;
+  tracks: number;
+  without: number;
+  leftOut: number;
+}
+
+// ---------------------------------------------------------------- USB
+
+export interface Drive {
+  path: string;
+  name: string;
+  fs: string | null;
+  fsLabel: string | null;
+  total: number | null;
+  free: number | null;
+  removable: boolean;
+}
+
+export interface UsbOptions extends ExportOptions {
+  m3u: boolean;
+  serato: boolean;
+  removeStale: boolean;
+  numberFolders: boolean;
+}
+
+export type UsbAction = 'new' | 'update' | 'rename' | 'keep';
+
+export interface UsbPlan {
+  root: string;
+  folder: string;
+  playlists: { id: number; name: string; kind: PlaylistKind; dir: string; tracks: number; skipped: number; bytes: number }[];
+  files: { total: number; new: number; update: number; rename: number; keep: number; stale: number; staleBytes: number };
+  preview: { path: string; action: UsbAction; from: string | null; trackId: number; warnings: ExportWarning[] }[];
+  bytes: { write: number; freed: number; free: number | null; total: number | null };
+  fs: string | null;
+  fsLabel: string | null;
+  seratoPossible: boolean;
+  problem: string | null;
+  warnings: string[];
+  running: boolean;
+}
+
+export interface UsbProgress {
+  done: number;
+  total: number;
+  fraction: number;
+  current: string;
+  phase: 'preparing' | 'writing' | 'done';
+}
+
+export interface UsbReport {
+  root: string;
+  folder: string;
+  playlists: number;
+  written: number;
+  renamed: number;
+  kept: number;
+  removed: number;
+  bytes: number;
+  failed: { trackId: number; title: string; error: string }[];
+  m3u: number;
+  crates: number;
+  rekordboxXml: string | null;
+  warnings: string[];
+  cancelled: boolean;
+  elapsedMs: number;
+  error?: string;
+}
+
 // -------------------------------------------------------------- Discogs
 
 export interface DiscogsReport {
@@ -704,6 +822,9 @@ export interface CoreEvents {
   'djexport.finished': ExportReport;
   'discogs.progress': { done: number; total: number; found: number; current: string };
   'discogs.finished': DiscogsReport & { error?: string | null };
+  'playlists.changed': { reason: string; id?: number };
+  'usb.progress': UsbProgress;
+  'usb.finished': UsbReport;
 }
 
 export type CoreEventName = keyof CoreEvents;
