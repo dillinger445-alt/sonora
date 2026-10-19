@@ -30,6 +30,9 @@ pub struct Settings {
     pub bpm_range: (f64, f64),
     /// Genre from folder names when the tags have none: "off" | "top" | "parent".
     pub genre_from_folders: String,
+    /// The desktop app asks GitHub for a newer release on launch and every
+    /// few hours (the interface does the asking; the core only keeps the choice).
+    pub check_updates: bool,
 }
 
 pub fn default_workers() -> usize {
@@ -53,6 +56,7 @@ impl Default for Settings {
             key_notation: "camelot".into(),
             bpm_range: sonora_engine::analysis::tempo::DEFAULT_RANGE,
             genre_from_folders: "off".into(),
+            check_updates: true,
         }
     }
 }
@@ -103,6 +107,7 @@ impl Settings {
             "reanalyzeChanged" => self.reanalyze_changed = v.as_bool().ok_or("reanalyzeChanged must be true or false")?,
             "skipHidden" => self.skip_hidden = v.as_bool().ok_or("skipHidden must be true or false")?,
             "followSymlinks" => self.follow_symlinks = v.as_bool().ok_or("followSymlinks must be true or false")?,
+            "checkUpdates" => self.check_updates = v.as_bool().ok_or("checkUpdates must be true or false")?,
             "keepVisuals" => self.keep_visuals = v.as_bool().ok_or("keepVisuals must be true or false")?,
             "maxDurationMin" => {
                 let m = v.as_f64().ok_or("maxDurationMin must be a number")?;
@@ -175,6 +180,7 @@ impl ToJson for Settings {
             "keyNotation" => self.key_notation,
             "bpmRange" => Value::Array(vec![Value::from(self.bpm_range.0), Value::from(self.bpm_range.1)]),
             "genreFromFolders" => self.genre_from_folders,
+            "checkUpdates" => self.check_updates,
         }
     }
 }
@@ -213,8 +219,12 @@ mod tests {
         s.apply("bpmRange", &range(88.0, 175.0)).unwrap();
         s.apply("keyNotation", &Value::String("openkey".into())).unwrap();
         s.apply("genreFromFolders", &Value::String("top".into())).unwrap();
+        assert!(s.check_updates, "update checks are on unless turned off");
+        assert!(s.apply("checkUpdates", &Value::String("yes".into())).is_err());
+        s.apply("checkUpdates", &Value::Bool(false)).unwrap();
         s.save(&c).unwrap();
         let loaded = Settings::load(&c);
+        assert!(!loaded.check_updates);
         assert_eq!(loaded.bpm_range, (88.0, 175.0));
         assert_eq!(loaded.key_notation, "openkey");
         assert_eq!(loaded.dj_config().folder_genre, FolderGenre::Top);

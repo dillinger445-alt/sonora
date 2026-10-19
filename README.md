@@ -29,11 +29,13 @@ playlist. [docs/DJ.md](docs/DJ.md) describes how.
 
 SONORA is local-first. Analysis and playback run on your computer, and
 audio, results and file paths never leave it. There are no uploads,
-analytics, telemetry or update checks. The one network feature is optional
-and runs only when you start it: looking up genres on Discogs sends the
-artist and title of the tracks you chose (and your Discogs token) to
-Discogs, nothing else. Without a token, SONORA makes no network requests.
-The desktop build's content-security policy blocks remote content. Your
+analytics or telemetry. SONORA goes online for two things only. It asks
+GitHub whether a newer version exists, on launch and every six hours; the
+request carries nothing about you or your music, and Settings → Updates
+turns it off. And looking up genres on Discogs, which runs only when you
+start it, sends the artist and title of the tracks you chose (and your
+Discogs token) to Discogs, nothing else. The desktop build's
+content-security policy blocks remote content. Your
 audio files are only ever read, never modified, moved or deleted: tempo,
 key and genre corrections stay in SONORA's library, and exports write new
 files without replacing any. "Remove from library" removes SONORA's index
@@ -90,6 +92,10 @@ entry only.
 - **Listening**: play any track inside the app, with a waveform seek bar,
   P to play and pause, media keys, click-to-play on the analysis charts,
   and play buttons in Duplicates to compare copies by ear.
+- **Updates**: a new version shows in the status bar with its release
+  notes; **Install and restart** downloads it, checks its signature,
+  replaces the installed version and restarts, keeping the library and
+  settings. See [docs/RELEASING.md](docs/RELEASING.md).
 - **Needs attention**: problem tracks grouped by clipping, lossy source, low
   bitrate, integrity, weak-evidence issues, failures and missing files.
 - **Duplicates**: identical files (same file hash), identical audio in
@@ -100,8 +106,8 @@ entry only.
 - **History**: every scan with its summary and results.
 - **Settings**: parallel workers, longest file analyzed, rescan behaviour,
   hidden files and symlinks, default score view, key notation, BPM range,
-  folder genres, the Discogs token, database location and backup, cache
-  management, FFmpeg status, version and privacy information.
+  folder genres, the Discogs token, update checks, database location and
+  backup, cache management, FFmpeg status, version and privacy information.
 - **Accessibility**: full keyboard use (table, menus, dialogs, tabs, chart
   cursor), visible focus, labels and tooltips, confirmation before
   destructive actions, and reduced-motion support.
@@ -151,10 +157,13 @@ This builds for the current machine and bundles FFmpeg. It produces
 Windows, in `src-tauri/target/release/bundle/`. Build each platform on that
 platform. Cross-compiling is not supported, and CI uses one runner per OS.
 
-CI also builds the installers for macOS (Apple silicon and Intel) and
-Windows x64 on every push to `main`. Download them from the *Artifacts*
-section of a CI run on GitHub's Actions tab. GitHub keeps them for 14 days
-and asks you to sign in to download.
+Releases are published on GitHub's *Releases* page: pushing a tag
+`v<version>` builds, signs and publishes the installers and the update
+manifest the app reads ([docs/RELEASING.md](docs/RELEASING.md)). CI also
+builds the installers on every push to `main`; download them from the
+*Artifacts* section of a CI run on GitHub's Actions tab. GitHub keeps them
+for 14 days and asks you to sign in to download. Those test builds are not
+signed for updates, but they still find and install published releases.
 
 Signing and notarization are optional: on macOS through environment
 variables, on Windows through Tauri configuration (a certificate thumbprint

@@ -537,3 +537,42 @@ test('genre lookups ask for a Discogs token first and send nothing without one',
   await expect(page.getByRole('textbox', { name: 'Discogs personal access token' })).toBeVisible();
   await expect(page.getByText('not affiliated with, sponsored or endorsed by Discogs')).toBeVisible();
 });
+
+test('updates: found on request, explained, installed with a restart; the browser build says it cannot update', async ({ page }) => {
+  await page.goto('/#/settings');
+  await expect(page.getByText('This window cannot update SONORA')).toBeVisible();
+
+  // The browser bridge simulates a release when asked to (development and tests only).
+  await page.goto('/?simulate-update=9.9.9#/settings');
+  const updates = page.getByRole('region', { name: 'Updates' });
+  await expect(updates.getByText('Not checked yet.')).toBeVisible();
+  await updates.getByRole('button', { name: 'Check now' }).click();
+  const dialog = page.getByRole('dialog', { name: 'SONORA 9.9.9 is available' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('listitem').filter({ hasText: 'Playlists you can sort by dragging' })).toBeVisible();
+  await expect(dialog).toContainText('Your library, settings and edits are kept');
+  await dialog.getByRole('button', { name: 'Later' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(updates.getByText('Version 9.9.9 is available.')).toBeVisible();
+
+  // The status bar offers it from anywhere.
+  await page.goto('/?simulate-update=9.9.9#/library');
+  await page.getByRole('button', { name: 'Update to 9.9.9' }).click();
+  const reloaded = page.waitForEvent('load');
+  await page.getByRole('button', { name: 'Install and restart' }).click();
+  await expect(page.getByRole('dialog', { name: 'Updating SONORA' })).toContainText(/Downloading|Checking the signature|Restarting/);
+  await reloaded;
+
+  // Automatic checks can be turned off, and stay off.
+  await page.goto('/?simulate-update=9.9.9#/settings');
+  const auto = page.getByRole('switch', { name: /Check for updates automatically/ });
+  await expect(auto).toBeChecked();
+  // Saved by the core first, then shown.
+  await auto.click();
+  await expect(auto).not.toBeChecked();
+  await page.reload();
+  await expect(auto).not.toBeChecked();
+  await auto.click();
+  await expect(auto).toBeChecked();
+});
+

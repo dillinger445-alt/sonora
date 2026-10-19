@@ -12,6 +12,7 @@ import { ImportProvider, useImports } from './state/imports.tsx';
 import { JobsProvider } from './state/jobs.tsx';
 import { PlayerProvider, usePlayer } from './state/player.tsx';
 import { ToastProvider } from './state/toasts.tsx';
+import { UpdatesProvider } from './state/updates.tsx';
 import { AttentionView } from './views/Attention.tsx';
 import { DuplicatesView } from './views/Duplicates.tsx';
 import { FoldersView } from './views/Folders.tsx';
@@ -21,6 +22,7 @@ import { OverviewView } from './views/Overview.tsx';
 import { QueueView } from './views/Queue.tsx';
 import { SettingsView } from './views/Settings.tsx';
 import { TrackView } from './views/Track.tsx';
+import { UpdateDialog } from './views/UpdateDialog.tsx';
 
 export function App({ bridge }: { bridge: Bridge }) {
   return (
@@ -28,9 +30,11 @@ export function App({ bridge }: { bridge: Bridge }) {
       <CoreProvider bridge={bridge}>
         <ImportProvider>
           <JobsProvider>
-            <PlayerProvider>
-              <Shell />
-            </PlayerProvider>
+            <UpdatesProvider>
+              <PlayerProvider>
+                <Shell />
+              </PlayerProvider>
+            </UpdatesProvider>
           </JobsProvider>
         </ImportProvider>
       </CoreProvider>
@@ -158,6 +162,7 @@ function Shell() {
       </main>
       <PlayerBar />
       <StatusBar />
+      <UpdateDialog />
       <TooltipLayer />
     </div>
   );

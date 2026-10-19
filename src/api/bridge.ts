@@ -31,6 +31,34 @@ export interface DropHandlers {
   onHover: (over: boolean) => void;
 }
 
+/** A newer SONORA release found on GitHub. */
+export interface UpdateInfo {
+  version: string;
+  currentVersion: string;
+  /** Release date (ISO 8601), when the release gives one. */
+  date: string | null;
+  /** Release notes as written on GitHub (Markdown). */
+  notes: string | null;
+}
+
+/** Where an installation stands. */
+export type UpdateStep = { step: 'downloading'; downloaded: number; total: number | null } | { step: 'installing' } | { step: 'restarting' };
+
+/** In-app updates from SONORA's GitHub releases. */
+export interface Updater {
+  /** Asks GitHub for the newest release; `null` when this version is the newest. */
+  check(): Promise<UpdateInfo | null>;
+  /**
+   * Downloads the release `check` found, verifies its signature, stops the
+   * core's background work, installs it over this version and restarts
+   * SONORA. Settings and the library stay where they are. Resolves only when
+   * the restart did not happen.
+   */
+  install(onStep: (s: UpdateStep) => void): Promise<void>;
+  /** Restarts SONORA (after an installation that stopped half-way). */
+  restart(): Promise<void>;
+}
+
 export interface Bridge {
   readonly kind: 'tauri' | 'http';
   readonly platform: Platform;
@@ -56,4 +84,6 @@ export interface Bridge {
   reveal(path: string): Promise<void>;
   /** Registers file drag-and-drop handlers; resolves to an unregister function. */
   onFileDrop(handlers: DropHandlers): Promise<() => void>;
+  /** In-app updates; `null` where SONORA cannot update itself (the browser bridge). */
+  readonly updater: Updater | null;
 }

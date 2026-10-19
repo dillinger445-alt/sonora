@@ -316,6 +316,8 @@ export interface Settings {
   /** Tempos are shown within this range, e.g. [70, 180]. */
   bpmRange: [number, number];
   genreFromFolders: 'off' | 'top' | 'parent';
+  /** Desktop app: look for a newer release on GitHub on launch and every few hours. */
+  checkUpdates: boolean;
 }
 
 export interface CacheStats {

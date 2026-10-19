@@ -13,8 +13,10 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check, type Update } from '@tauri-apps/plugin-updater';
 import { CoreError } from './bridge.ts';
-import type { Bridge, DropHandlers, Platform } from './bridge.ts';
+import type { Bridge, DropHandlers, Platform, UpdateInfo, Updater, UpdateStep } from './bridge.ts';
 import type { PreparedPlayback } from './types.ts';
 
 const EVENT_CHANNEL = 'sonora://event';
@@ -58,6 +60,54 @@ async function native<T>(code: string, action: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Updates from GitHub releases through Tauri's updater: the release's
+ * `latest.json` names a signed installer per platform, and the signature is
+ * checked against the public key in tauri.conf.json before anything runs.
+ */
+function createUpdater(): Updater {
+  let found: Update | null = null;
+  return {
+    async check(): Promise<UpdateInfo | null> {
+      const update = await native('update_check_failed', () => check({ timeout: 30_000 }));
+      const previous = found;
+      found = update;
+      if (previous && previous !== update) void previous.close().catch(() => undefined);
+      return update ? { version: update.version, currentVersion: update.currentVersion, date: update.date ?? null, notes: update.body ?? null } : null;
+    },
+
+    async install(onStep: (s: UpdateStep) => void): Promise<void> {
+      const update = found;
+      if (!update) throw new CoreError('update_missing', 'Check for updates again: the release found earlier is no longer at hand.');
+      let downloaded = 0;
+      let total: number | null = null;
+      onStep({ step: 'downloading', downloaded, total });
+      await native('update_download_failed', () =>
+        update.download(
+          (e) => {
+            if (e.event === 'Started') total = e.data.contentLength ?? null;
+            else if (e.event === 'Progress') downloaded += e.data.chunkLength;
+            onStep({ step: 'downloading', downloaded, total });
+          },
+          { timeout: 15 * 60_000 },
+        ),
+      );
+      onStep({ step: 'installing' });
+      // Scans, exports and lookups stop before the files are replaced.
+      await native('update_install_failed', () => invoke('prepare_update'));
+      // Windows: the installer replaces this version, ends this process and
+      // starts the new one. macOS: the app bundle is replaced in place.
+      await native('update_install_failed', () => update.install());
+      onStep({ step: 'restarting' });
+      await native('update_restart_failed', () => relaunch());
+    },
+
+    restart(): Promise<void> {
+      return native('update_restart_failed', () => relaunch());
+    },
+  };
+}
+
 export function createTauriBridge(): Bridge {
   const platform = detectPlatform();
   // GTK file filters are case-sensitive; macOS and Windows ignore case.
@@ -68,6 +118,7 @@ export function createTauriBridge(): Bridge {
     kind: 'tauri',
     platform,
     native: true,
+    updater: platform === 'linux' ? null : createUpdater(),
 
     async call(method: string, params?: unknown): Promise<unknown> {
       try {

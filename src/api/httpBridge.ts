@@ -8,7 +8,7 @@
  * interface asks for paths instead.
  */
 
-import { CoreError, type Bridge, type DropHandlers } from './bridge.ts';
+import { CoreError, type Bridge, type DropHandlers, type Updater, type UpdateStep } from './bridge.ts';
 import type { PreparedPlayback } from './types.ts';
 
 const EVENT_NAMES = [
@@ -115,6 +115,7 @@ export function createHttpBridge(base = ''): Bridge {
     kind: 'http',
     platform: 'web',
     native: false,
+    updater: simulatedUpdater(call),
     call,
     subscribe,
     pickFiles: () => Promise.resolve(null),
@@ -130,5 +131,44 @@ export function createHttpBridge(base = ''): Bridge {
       await call('system.reveal', { path });
     },
     onFileDrop,
+  };
+}
+
+/**
+ * The browser cannot update anything. For developing and testing the update
+ * screens, `?simulate-update=<version>` in the address makes checks find that
+ * version; installing it walks through the steps and reloads the page.
+ */
+function simulatedUpdater(call: (method: string, params?: unknown) => Promise<unknown>): Updater | null {
+  const version = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('simulate-update');
+  if (!version) return null;
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  return {
+    async check() {
+      await wait(400);
+      const info = (await call('app.info')) as { version: string };
+      return {
+        version,
+        currentVersion: info.version,
+        date: new Date().toISOString(),
+        notes: '### New\n- Playlists you can sort by dragging\n- Send playlists to a USB stick\n\n### Fixed\n- Pausing while a track loads',
+      };
+    },
+    async install(onStep: (s: UpdateStep) => void) {
+      const total = 24_000_000;
+      for (let downloaded = 0; downloaded <= total; downloaded += 3_000_000) {
+        onStep({ step: 'downloading', downloaded, total });
+        await wait(150);
+      }
+      onStep({ step: 'installing' });
+      await wait(600);
+      onStep({ step: 'restarting' });
+      await wait(400);
+      location.reload();
+    },
+    restart() {
+      location.reload();
+      return Promise.resolve();
+    },
   };
 }

@@ -1,9 +1,44 @@
-import { LuDisc3, LuShieldCheck, LuTriangleAlert, LuUsb, LuX } from 'react-icons/lu';
-import { formatCount, formatEta } from '../lib/format.ts';
+import { LuCircleArrowUp, LuDisc3, LuShieldCheck, LuTriangleAlert, LuUsb, LuX } from 'react-icons/lu';
+import { formatCount, formatEta, formatPercent } from '../lib/format.ts';
 import { formatRoute } from '../lib/router.ts';
 import { useCore, useScan } from '../state/core.tsx';
 import { useJobs } from '../state/jobs.tsx';
+import { useUpdates } from '../state/updates.tsx';
 import { ProgressBar } from './Controls.tsx';
+
+/** A newer version, or one being installed. */
+function UpdateItem() {
+  const u = useUpdates();
+  if (!u.supported) return null;
+  if (u.status === 'installing') {
+    const s = u.step;
+    const pct = s?.step === 'downloading' && s.total ? formatPercent(s.downloaded / s.total) : null;
+    return (
+      <button type="button" className="sb-item sb-job sb-button" onClick={u.openDialog}>
+        <LuCircleArrowUp aria-hidden />
+        <span>Updating</span>
+        {pct ? <span className="num">{pct}</span> : null}
+      </button>
+    );
+  }
+  if (u.status === 'error' && u.info) {
+    return (
+      <button type="button" className="sb-item sb-button t-amber" onClick={u.openDialog}>
+        <LuTriangleAlert aria-hidden />
+        Update stopped
+      </button>
+    );
+  }
+  if (u.status === 'available' && u.info) {
+    return (
+      <button type="button" className="sb-item sb-button sb-update" onClick={u.openDialog} data-tip={`SONORA ${u.info.version} is available: see what is new`}>
+        <LuCircleArrowUp aria-hidden />
+        Update to {u.info.version}
+      </button>
+    );
+  }
+  return null;
+}
 
 /** Exports and Discogs lookups running in the background. */
 function JobItems() {
@@ -101,6 +136,7 @@ export function StatusBar() {
         {left}
       </a>
       <div className="sb-right">
+        <UpdateItem />
         <JobItems />
         {ffmpeg && !ffmpeg.available ? (
           <a className="sb-item t-amber" href={formatRoute({ view: 'settings' })} data-tip="Without FFmpeg, only WAV, AIFF and FLAC can be analyzed. See Settings.">
@@ -110,7 +146,7 @@ export function StatusBar() {
         ) : null}
         <span
           className="sb-item"
-          data-tip="Analysis and playback run on this computer. Audio, results and file paths are never uploaded. SONORA goes online only for Discogs genre lookups you start, which send artist and title."
+          data-tip="Analysis and playback run on this computer. Audio, results and file paths are never uploaded. SONORA goes online only to ask GitHub for a newer version (can be turned off in Settings) and for Discogs genre lookups you start, which send artist and title."
         >
           <LuShieldCheck aria-hidden />
           Local only

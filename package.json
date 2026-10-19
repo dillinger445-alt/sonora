@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "npm run test:unit && npm run test:rust",
-    "test:unit": "node --test \"src/**/*.test.ts\"",
+    "test:unit": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
     "test:rust": "cargo test --workspace",
     "test:e2e": "playwright test",
     "fixtures": "cargo run --release -p sonora-cli -- fixtures fixtures/library",

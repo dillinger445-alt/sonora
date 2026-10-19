@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { LuDatabaseBackup, LuFolderSearch, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
+import { LuCircleArrowUp, LuDatabaseBackup, LuFolderSearch, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
 import type { KeyNotation, Settings } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { Segmented, Switch } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
 import { ViewHeader } from '../components/Layout.tsx';
-import { formatBytes, formatCount, plural } from '../lib/format.ts';
+import { formatBytes, formatCount, formatRelative, plural } from '../lib/format.ts';
 import { formatKey, KEY_NOTATIONS } from '../lib/keys.ts';
 import { formatRoute } from '../lib/router.ts';
 import { SCORE_HINT, SCORE_KINDS, SCORE_LABEL } from '../lib/scores.ts';
@@ -14,6 +14,7 @@ import { isAbsolutePath } from '../lib/paths.ts';
 import { useToast } from '../state/toasts.tsx';
 import { revealLabel } from '../lib/platform.ts';
 import { useResource } from '../state/useResource.ts';
+import { useUpdates } from '../state/updates.tsx';
 import { DiscogsSettings } from './DiscogsSettings.tsx';
 
 /** Tempo ranges DJs commonly use (each spans an octave, so every tempo has one reading in it). */
@@ -55,6 +56,53 @@ function Row({ label, description, children }: { label: string; description?: Re
       </div>
       <div className="setting-control">{children}</div>
     </div>
+  );
+}
+
+/** Version, update checks and installing a newer release. */
+function UpdateSettings({ version, checkUpdates, onAutoChange }: { version: string; checkUpdates: boolean; onAutoChange: (v: boolean) => void }) {
+  const u = useUpdates();
+  if (!u.supported) {
+    return (
+      <Row label={`Version ${version}`} description="This window cannot update SONORA. The desktop app for macOS and Windows checks for new versions and installs them.">
+        {null}
+      </Row>
+    );
+  }
+  const line =
+    u.status === 'checking'
+      ? 'Checking GitHub…'
+      : u.status === 'available' && u.info
+        ? `Version ${u.info.version} is available.`
+        : u.status === 'installing'
+          ? 'Installing the update…'
+          : u.status === 'error'
+            ? (u.error ?? 'The update did not finish.')
+            : u.status === 'current'
+              ? `The newest version (checked ${formatRelative(u.lastChecked)}).`
+              : u.lastChecked
+                ? `Checked ${formatRelative(u.lastChecked)}.`
+                : 'Not checked yet.';
+  return (
+    <>
+      <Row label={`Version ${version}`} description={<span className={u.status === 'available' ? 't-lime' : u.status === 'error' ? 't-amber' : undefined}>{line}</span>}>
+        {u.status === 'available' || u.status === 'error' || u.status === 'installing' ? (
+          <Button size="sm" variant={u.status === 'available' ? 'primary' : 'secondary'} icon={LuCircleArrowUp} onClick={u.openDialog}>
+            {u.status === 'available' ? 'See what’s new' : 'Show'}
+          </Button>
+        ) : (
+          <Button size="sm" icon={LuRefreshCw} busy={u.status === 'checking'} onClick={() => void u.check(true)}>
+            Check now
+          </Button>
+        )}
+      </Row>
+      <Switch
+        label="Check for updates automatically"
+        description="When SONORA starts and every six hours, it asks GitHub whether a newer release exists. The request carries nothing about you or your music; GitHub sees it like any web request, with this computer's IP address. Nothing is installed until you choose to."
+        checked={checkUpdates}
+        onChange={onAutoChange}
+      />
+    </>
   );
 }
 
@@ -342,13 +390,17 @@ export function SettingsView() {
           </Row>
         </Group>
 
+        <Group title="Updates" description="New versions come from SONORA's releases on GitHub, signed so that only genuine ones install.">
+          <UpdateSettings version={info.version} checkUpdates={settings.checkUpdates} onAutoChange={(v) => void save({ checkUpdates: v })} />
+        </Group>
+
         <Group title="Privacy">
           <div className="privacy">
             <LuShieldCheck className="privacy-icon" aria-hidden />
             <div>
               <p>
-                SONORA works entirely on this computer: no uploads, no analytics, no telemetry, no update checks. The only network requests are Discogs genre lookups you start
-                yourself, which send the artist and title of the tracks you chose.
+                SONORA works entirely on this computer: no uploads, no analytics, no telemetry. It goes online for two things only: asking GitHub whether a newer version exists
+                (unless you turn that off above), and Discogs genre lookups you start yourself, which send the artist and title of the tracks you chose.
               </p>
               <p className="faint">
                 The library database stores file paths, tags, measurements, scores, visualizations and your tempo, key and genre edits for the{' '}
