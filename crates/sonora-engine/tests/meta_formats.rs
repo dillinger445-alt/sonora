@@ -26,6 +26,28 @@ fn tools_available() -> bool {
     })
 }
 
+/// Whether this FFmpeg can encode with `name` (Homebrew's FFmpeg, for one,
+/// is built without libvorbis).
+fn has_encoder(name: &str) -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.split_whitespace().nth(1) == Some(name)))
+        .unwrap_or(false)
+}
+
+/// Whether the Ogg Vorbis cases can run.
+fn vorbis_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let ok = tools_available() && has_encoder("libvorbis");
+        if tools_available() && !ok {
+            eprintln!("note: this FFmpeg has no libvorbis encoder; skipping the Ogg Vorbis cases");
+        }
+        ok
+    })
+}
+
 fn workdir() -> PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -257,7 +279,7 @@ fn faststart_and_default_layouts_agree() {
 
 #[test]
 fn ogg_vorbis() {
-    if !tools_available() {
+    if !vorbis_available() {
         return;
     }
     let mut args = vec!["-c:a", "libvorbis", "-q:a", "5", "-metadata", "BPM=128"];
@@ -351,7 +373,7 @@ fn ogg_flac() {
 
 #[test]
 fn ogg_multiplexed_streams_are_flagged() {
-    if !tools_available() {
+    if !vorbis_available() {
         return;
     }
     // Two audio streams in one Ogg file: the first is selected, and the file is flagged.
@@ -513,12 +535,14 @@ fn truncated_files_never_panic() {
         return;
     }
     let dir = workdir();
-    let files = [
+    let mut files = vec![
         encode("trunc-default.m4a", &["-c:a", "aac", "-b:a", "128k"]),
         encode("trunc-fast.m4a", &["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]),
-        encode("trunc.ogg", &["-c:a", "libvorbis", "-q:a", "3"]),
         encode("trunc.opus", &["-c:a", "libopus", "-b:a", "96k"]),
     ];
+    if vorbis_available() {
+        files.push(encode("trunc.ogg", &["-c:a", "libvorbis", "-q:a", "3"]));
+    }
     for f in &files {
         let bytes = std::fs::read(f).unwrap();
         let n = bytes.len();
