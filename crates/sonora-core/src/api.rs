@@ -12,6 +12,8 @@ use crate::jobs::IndexJob;
 use crate::library::{self, Filter};
 use crate::model::TrackRow;
 use crate::params;
+use crate::playlists::{self, Kind, OrganizeBy};
+use sonora_engine::analysis::key::Notation;
 use sonora_json::{obj, ToJson, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -44,6 +46,17 @@ impl std::fmt::Display for ApiError {
 impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
         ApiError::new("storage_error", e.to_string())
+    }
+}
+
+impl From<crate::playlists::PlaylistError> for ApiError {
+    fn from(e: crate::playlists::PlaylistError) -> Self {
+        use crate::playlists::PlaylistError as E;
+        match e {
+            E::NotFound(m) => ApiError::not_found(m),
+            E::Invalid(m) => ApiError::invalid(m),
+            E::Store(s) => s.into(),
+        }
     }
 }
 
@@ -307,6 +320,145 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             Ok(v)
         }
         "duplicates.scan" => Ok(obj! { "accepted" => app.start_duplicate_scan() }),
+
+        // ----------------------------------------------------- playlists
+        "playlists.list" => Ok(obj! { "nodes" => playlists::list(&app.db.read())? }),
+        "playlists.create" => {
+            let kind = Kind::from_id(p.req_str("kind").map_err(|e| ApiError::invalid(e.to_string()))?).ok_or_else(|| ApiError::invalid("kind must be folder, playlist or smart"))?;
+            let name = p.req_str("name").map_err(|e| ApiError::invalid(e.to_string()))?;
+            let parent = p.get("parentId").and_then(Value::as_i64);
+            let index = p.get("index").and_then(Value::as_i64).map(|i| i.max(0) as usize);
+            let rules = p.get("rules").filter(|v| !v.is_null());
+            let tracks = opt_ids(p, "trackIds")?;
+            let c = app.db.write();
+            let id = playlists::create(&c, kind, name, parent, index, rules)?;
+            if let Some(ids) = tracks {
+                if kind == Kind::Playlist && !ids.is_empty() {
+                    playlists::add_tracks(&c, id, &ids, None)?;
+                }
+            }
+            let node = playlists::node_json(&c, id)?;
+            drop(c);
+            app.events.emit("playlists.changed", &obj! { "reason" => "created", "id" => id });
+            Ok(node)
+        }
+        "playlists.update" => {
+            let id = id_param(p, "id")?;
+            let c = app.db.write();
+            if let Some(name) = p.get("name").and_then(Value::as_str) {
+                playlists::rename(&c, id, name)?;
+            }
+            if let Some(rules) = p.get("rules").filter(|v| !v.is_null()) {
+                playlists::set_rules(&c, id, rules)?;
+            }
+            let node = playlists::node_json(&c, id)?;
+            drop(c);
+            app.events.emit("playlists.changed", &obj! { "reason" => "updated", "id" => id });
+            Ok(node)
+        }
+        "playlists.move" => {
+            let id = id_param(p, "id")?;
+            let parent = p.get("parentId").and_then(Value::as_i64);
+            let index = p.get("index").and_then(Value::as_i64).unwrap_or(i64::MAX).max(0) as usize;
+            playlists::move_node(&app.db.write(), id, parent, index)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "moved", "id" => id });
+            Ok(obj! { "ok" => true })
+        }
+        "playlists.delete" => {
+            let id = id_param(p, "id")?;
+            let n = playlists::delete(&app.db.write(), id)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "deleted", "id" => id });
+            Ok(obj! { "deleted" => n })
+        }
+        "playlists.duplicate" => {
+            let id = id_param(p, "id")?;
+            let c = app.db.write();
+            let copy = playlists::duplicate(&c, id)?;
+            let node = playlists::node_json(&c, copy)?;
+            drop(c);
+            app.events.emit("playlists.changed", &obj! { "reason" => "created", "id" => copy });
+            Ok(node)
+        }
+        "playlists.tracks" => {
+            let id = id_param(p, "id")?;
+            let c = app.db.read();
+            let rows = playlists::tracks(&c, id)?;
+            Ok(obj! { "id" => id, "rows" => Value::Array(rows.iter().map(ToJson::to_json).collect()), "total" => rows.len() })
+        }
+        "playlists.addTracks" => {
+            let id = id_param(p, "id")?;
+            let ids = ids_param(p, "trackIds")?;
+            let index = p.get("index").and_then(Value::as_i64).map(|i| i.max(0) as usize);
+            let r = playlists::add_tracks(&app.db.write(), id, &ids, index)?;
+            if r.added > 0 {
+                app.events.emit("playlists.changed", &obj! { "reason" => "tracks", "id" => id });
+            }
+            Ok(obj! { "added" => r.added, "already" => r.already })
+        }
+        "playlists.removeTracks" => {
+            let id = id_param(p, "id")?;
+            let ids = ids_param(p, "trackIds")?;
+            let n = playlists::remove_tracks(&app.db.write(), id, &ids)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "tracks", "id" => id });
+            Ok(obj! { "removed" => n })
+        }
+        "playlists.reorder" => {
+            let id = id_param(p, "id")?;
+            let ids = ids_param(p, "trackIds")?;
+            playlists::reorder(&app.db.write(), id, &ids)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "order", "id" => id });
+            Ok(obj! { "ok" => true })
+        }
+        "playlists.moveTracks" => {
+            let id = id_param(p, "id")?;
+            let ids = ids_param(p, "trackIds")?;
+            let index = p.get("index").and_then(Value::as_i64).unwrap_or(0).max(0) as usize;
+            playlists::move_tracks(&app.db.write(), id, &ids, index)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "order", "id" => id });
+            Ok(obj! { "ok" => true })
+        }
+        "playlists.arrange" => {
+            let id = id_param(p, "id")?;
+            let rising = match p.get("tempo").and_then(Value::as_str).unwrap_or("any") {
+                "any" => false,
+                "rising" => true,
+                _ => return Err(ApiError::invalid("tempo must be any or rising")),
+            };
+            let start = p.get("start").and_then(Value::as_i64);
+            let c = app.db.read();
+            if playlists::get(&c, id)?.kind != Kind::Playlist {
+                return Err(ApiError::invalid("only a playlist can be arranged: a smart playlist keeps the order of its rules"));
+            }
+            let rows = playlists::tracks(&c, id)?;
+            drop(c);
+            let order = playlists::arrange(&rows, start, rising);
+            let by_id: std::collections::HashMap<i64, &TrackRow> = rows.iter().map(|r| (r.id, r)).collect();
+            let before: Vec<&TrackRow> = rows.iter().collect();
+            let after: Vec<&TrackRow> = order.iter().filter_map(|t| by_id.get(t).copied()).collect();
+            Ok(obj! { "order" => order, "before" => playlists::summarize(&before), "after" => playlists::summarize(&after) })
+        }
+        "playlists.freeze" => {
+            let id = id_param(p, "id")?;
+            let n = playlists::freeze(&app.db.write(), id)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "updated", "id" => id });
+            Ok(obj! { "tracks" => n })
+        }
+        "playlists.organize" => {
+            let by = OrganizeBy::from_id(p.req_str("by").map_err(|e| ApiError::invalid(e.to_string()))?).ok_or_else(|| ApiError::invalid("by must be genre, key or tempo"))?;
+            let ids = opt_ids(p, "trackIds")?;
+            let smart = p.get("smart").and_then(Value::as_bool).unwrap_or(true);
+            let notation = match p.get("keyNotation").and_then(Value::as_str) {
+                Some(n) => Notation::from_id(n).ok_or_else(|| ApiError::invalid("unknown keyNotation"))?,
+                None => Notation::from_id(&app.settings().key_notation).unwrap_or(Notation::Camelot),
+            };
+            let r = playlists::organize(&app.db.write(), by, ids.as_deref(), smart, notation)?;
+            app.events.emit("playlists.changed", &obj! { "reason" => "created", "id" => r.folder_id });
+            Ok(r.to_json())
+        }
+        "playlists.containing" => {
+            let id = id_param(p, "trackId")?;
+            Ok(obj! { "ids" => playlists::containing(&app.db.read(), id)? })
+        }
 
         // ---------------------------------------------------- DJ export
         "djexport.plan" => {

@@ -13,7 +13,7 @@ use sqlite::{Connection, DbError};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -161,6 +161,32 @@ CREATE INDEX idx_tracks_dj_genre ON tracks(dj_genre COLLATE NOCASE);
 INSERT OR REPLACE INTO meta (key, value) VALUES ('dj_refresh', '1');
 "#;
 
+/// Playlists: a tree of folders, playlists (tracks in the order the user
+/// chose) and smart playlists (a saved filter), see `playlists.rs`.
+const MIGRATION_3: &str = r#"
+CREATE TABLE playlists (
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('folder', 'playlist', 'smart')),
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    rules TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_playlists_parent ON playlists(parent_id, position);
+
+CREATE TABLE playlist_tracks (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (playlist_id, track_id)
+);
+CREATE INDEX idx_playlist_tracks_order ON playlist_tracks(playlist_id, position);
+CREATE INDEX idx_playlist_tracks_track ON playlist_tracks(track_id);
+"#;
+
 #[derive(Debug)]
 pub enum StoreError {
     Db(DbError),
@@ -272,6 +298,13 @@ fn migrate(c: &Connection) -> Result<(), DbError> {
         c.transaction(|tx| {
             tx.execute_batch(MIGRATION_2)?;
             tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["2"])?;
+            Ok::<(), DbError>(())
+        })?;
+    }
+    if version < 3 {
+        c.transaction(|tx| {
+            tx.execute_batch(MIGRATION_3)?;
+            tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["3"])?;
             Ok::<(), DbError>(())
         })?;
     }

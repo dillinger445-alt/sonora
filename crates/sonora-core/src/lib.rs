@@ -20,6 +20,7 @@ pub mod library;
 pub mod logging;
 pub mod model;
 pub mod playback;
+pub mod playlists;
 pub mod settings;
 
 pub use api::ApiError;
