@@ -57,13 +57,24 @@ jobs:
       # must work on its own, and tests that need FFmpeg skip themselves.
       # The core links the SQLite that ships with Windows (winsqlite3).
       - name: Test
-        run: cargo test --workspace --locked
+        run: |
+          # On failure, failing tests and compiler errors are also posted as
+          # annotations, so they can be read without the raw log.
+          set +e
+          cargo test --workspace --locked 2>&1 | tee test-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk test-output.txt; fi
+          exit "$status"
 
       - name: Lint
         if: runner.os == 'Linux'
         run: |
           rustup component add clippy
-          cargo clippy --workspace --all-targets --locked -- -D warnings
+          set +e
+          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | tee clippy-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk clippy-output.txt; fi
+          exit "$status"
 
   frontend:
     name: Frontend (types, unit tests, build)
