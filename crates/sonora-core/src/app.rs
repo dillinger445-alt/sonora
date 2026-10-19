@@ -43,6 +43,7 @@ pub struct App {
     pub dup_running: Arc<AtomicBool>,
     dup_cancel: Arc<AtomicBool>,
     pub exporter: Arc<crate::djexport::Exporter>,
+    pub discogs: Arc<crate::discogs::Discogs>,
 }
 
 impl App {
@@ -80,6 +81,7 @@ impl App {
             }
         }
         let events = Arc::new(EventBus::default());
+        let version = config.app_version.clone();
         let rescan = settings.rescan_on_launch == "changed";
         let scans = ScanManager::new(Arc::clone(&db), Arc::clone(&events), tools, settings);
         let app = Arc::new(App {
@@ -90,6 +92,7 @@ impl App {
             dup_running: Arc::new(AtomicBool::new(false)),
             dup_cancel: Arc::new(AtomicBool::new(false)),
             exporter: Arc::new(crate::djexport::Exporter::default()),
+            discogs: Arc::new(crate::discogs::Discogs::new(&version)),
         });
         // Work interrupted by a crash or by quitting mid-scan continues where
         // it stopped. Cancelled work is not resumed.
@@ -180,6 +183,7 @@ impl App {
     pub fn shutdown(&self) {
         self.dup_cancel.store(true, Ordering::Relaxed);
         self.exporter.cancel();
+        self.discogs.cancel();
         self.scans.shutdown(Duration::from_secs(5));
         logging::log("info", "app", "core stopped");
     }

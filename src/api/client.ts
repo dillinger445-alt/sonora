@@ -9,11 +9,16 @@ import type {
   CacheStats,
   CoreEventName,
   CoreEvents,
+  DiscogsStatus,
   DuplicateList,
+  ExportOptions,
+  ExportPlan,
+  ExportReport,
   Facets,
   Folder,
   LibraryFilter,
   Overview,
+  PreparedPlayback,
   QueryResult,
   ScanItemFilter,
   ScanItemRow,
@@ -34,6 +39,15 @@ export interface QueueResult {
   alreadyQueued: number;
   /** Requested tracks whose files are missing (`tracks.rescan` only). */
   missing?: number;
+}
+
+/** A change to tracks' tempo, key or genre (`null` removes an edit). */
+export interface DjEdit {
+  bpm?: number | null;
+  bpmFactor?: 0.5 | 2;
+  key?: number | null;
+  genre?: string | null;
+  reset?: boolean;
 }
 
 export class Client {
@@ -70,6 +84,23 @@ export class Client {
   analyzePending = () => this.call<QueueResult>('tracks.analyzePending');
   remove = (ids: number[]) => this.call<{ removed: number }>('tracks.remove', { ids });
   revealTrack = (id: number) => this.call<{ ok: boolean }>('tracks.reveal', { id });
+  editDj = (ids: number[], edit: DjEdit) => this.call<{ updated: number }>('tracks.editDj', { ids, ...edit });
+  analyzeDj = () => this.call<QueueResult>('tracks.analyzeDj');
+  preparePlayback = (id: number, playable: string[], decode = false) => this.call<PreparedPlayback>('playback.prepare', { id, playable, decode });
+
+  // DJ export
+  exportPlan = (ids: number[], options: ExportOptions) => this.call<ExportPlan>('djexport.plan', { ids, ...options });
+  exportStart = (ids: number[], options: ExportOptions, folder: string, playlistName: string) =>
+    this.call<{ accepted: boolean; total: number }>('djexport.start', { ids, ...options, folder, playlistName });
+  exportCancel = () => this.call<{ ok: boolean }>('djexport.cancel');
+  exportStatus = () => this.call<{ running: boolean; last: ExportReport | null }>('djexport.status');
+
+  // Discogs
+  discogsStatus = () => this.call<DiscogsStatus>('discogs.status');
+  discogsSetToken = (token: string | null) => this.call<{ configured: boolean }>('discogs.setToken', { token });
+  discogsTest = () => this.call<{ username: string }>('discogs.test');
+  discogsLookup = (ids: number[], overwrite: boolean) => this.call<{ accepted: boolean; total: number }>('discogs.lookup', { ids, overwrite });
+  discogsCancel = () => this.call<{ ok: boolean }>('discogs.cancel');
 
   // Folders
   folders = () => this.call<Folder[]>('folders.list');

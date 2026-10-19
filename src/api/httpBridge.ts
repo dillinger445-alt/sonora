@@ -19,6 +19,10 @@ const EVENT_NAMES = [
   'library.changed',
   'duplicates.progress',
   'duplicates.updated',
+  'djexport.progress',
+  'djexport.finished',
+  'discogs.progress',
+  'discogs.finished',
 ] as const;
 
 interface CallResponse {
@@ -115,6 +119,12 @@ export function createHttpBridge(base = ''): Bridge {
     pickFiles: () => Promise.resolve(null),
     pickFolders: () => Promise.resolve(null),
     pickSavePath: () => Promise.resolve(null),
+    pickFolder: () => Promise.resolve(null),
+    openExternal: (url: string) => {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return Promise.resolve();
+    },
+    mediaUrl: (path: string) => `${base}/api/audio?path=${encodeURIComponent(path)}`,
     reveal: async (path: string) => {
       await call('system.reveal', { path });
     },

@@ -211,6 +211,23 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             )?;
             queued_json(app.scans.enqueue_tracks("dj", &ids))
         }
+        "playback.prepare" => {
+            let id = id_param(p, "id")?;
+            let t = library::get_track(&app.db.read(), id)?.ok_or_else(|| ApiError::not_found(format!("track {id} not found")))?;
+            let playable: Vec<String> = p
+                .get("playable")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let decode = p.get("decode").and_then(Value::as_bool).unwrap_or(false);
+            let tools = app.scans.shared.tools.read().unwrap_or_else(|e| e.into_inner()).clone();
+            let cache = app.config.data_dir.join("cache").join("playback");
+            let prepared = crate::playback::prepare(&cache, &t, &playable, decode, &tools).map_err(|m| ApiError::new("playback_failed", m))?;
+            let mut v = prepared.to_json();
+            v.set("trackId", id);
+            v.set("duration", t.duration.map(|d| sonora_json::num(d, 3)).unwrap_or(Value::Null));
+            Ok(v)
+        }
         "tracks.reveal" => {
             let id = id_param(p, "id")?;
             let t = library::get_track(&app.db.read(), id)?.ok_or_else(|| ApiError::not_found(format!("track {id} not found")))?;
@@ -335,6 +352,42 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         }
         "djexport.cancel" => Ok(obj! { "ok" => app.exporter.cancel() }),
         "djexport.status" => Ok(obj! { "running" => app.exporter.is_running(), "last" => app.exporter.last() }),
+
+        // ------------------------------------------------------ Discogs
+        "discogs.status" => Ok(obj! {
+            "configured" => crate::discogs::Discogs::token(&app.db).is_some(),
+            "running" => app.discogs.is_running(),
+            "last" => app.discogs.last(),
+        }),
+        "discogs.setToken" => {
+            let token = match p.get("token") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_str().ok_or_else(|| ApiError::invalid("token must be text or null"))?),
+            };
+            crate::discogs::Discogs::set_token(&app.db, token).map_err(ApiError::invalid)?;
+            Ok(obj! { "configured" => crate::discogs::Discogs::token(&app.db).is_some() })
+        }
+        "discogs.test" => {
+            let token = crate::discogs::Discogs::token(&app.db).ok_or_else(|| ApiError::invalid("no Discogs token is set"))?;
+            let name = app.discogs.identity(&token).map_err(|e| ApiError::new("discogs_failed", e.to_string()))?;
+            Ok(obj! { "username" => name })
+        }
+        "discogs.lookup" => {
+            let ids = ids_param(p, "ids")?;
+            if ids.is_empty() {
+                return Err(ApiError::invalid("choose at least one track"));
+            }
+            if crate::discogs::Discogs::token(&app.db).is_none() {
+                return Err(ApiError::new("not_configured", "Add your Discogs token in Settings → Genres first."));
+            }
+            let overwrite = p.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+            let dj = app.settings().dj_config();
+            if !app.discogs.start(Arc::clone(&app.db), Arc::clone(&app.events), ids.clone(), overwrite, dj) {
+                return Err(ApiError::new("busy", "A Discogs lookup is already running."));
+            }
+            Ok(obj! { "accepted" => true, "total" => ids.len() })
+        }
+        "discogs.cancel" => Ok(obj! { "ok" => app.discogs.cancel() }),
 
         // ------------------------------------------------------ settings
         "settings.get" => Ok(app.settings().to_json()),

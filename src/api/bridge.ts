@@ -44,6 +44,12 @@ export interface Bridge {
   pickFolders(): Promise<string[] | null>;
   /** Native save dialog for a CSV file; `null` if cancelled or unavailable. */
   pickSavePath(defaultName: string): Promise<string | null>;
+  /** Native picker for one folder (export destination); `null` if cancelled or unavailable. */
+  pickFolder(title: string): Promise<string | null>;
+  /** Opens a web page in the default browser (Discogs pages only). */
+  openExternal(url: string): Promise<void>;
+  /** URL the audio element can play for a file the core prepared for playback. */
+  mediaUrl(path: string): string;
   /** Reveals a file in Finder / File Explorer. */
   reveal(path: string): Promise<void>;
   /** Registers file drag-and-drop handlers; resolves to an unregister function. */

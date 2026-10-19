@@ -8,11 +8,11 @@
  * channel as `{ name, payload }`.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
+import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { CoreError } from './bridge.ts';
 import type { Bridge, DropHandlers, Platform } from './bridge.ts';
 
@@ -113,8 +113,21 @@ export function createTauriBridge(): Bridge {
       );
     },
 
+    pickFolder(title: string): Promise<string | null> {
+      return native('dialog_failed', () => open({ title, multiple: false, directory: true }));
+    },
+
     reveal(path: string): Promise<void> {
       return native('reveal_failed', () => revealItemInDir(path));
+    },
+
+    openExternal(url: string): Promise<void> {
+      return native('open_failed', () => openUrl(url));
+    },
+
+    mediaUrl(path: string): string {
+      // The asset protocol, scoped by the shell to files prepared for playback.
+      return convertFileSrc(path);
     },
 
     async onFileDrop(handlers: DropHandlers): Promise<() => void> {

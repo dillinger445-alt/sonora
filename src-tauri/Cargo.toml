@@ -27,7 +27,9 @@ tauri-build = { version = "~2.7", features = [] }
 # Pinned to the same minor versions as @tauri-apps/api and the
 # @tauri-apps/plugin-* packages in package.json (`~`): `tauri build` refuses
 # a major/minor mismatch between them. Upgrade both sides together.
-tauri = { version = "~2.12", features = [] }
+# `protocol-asset`: the web view plays library files through the asset
+# protocol, limited at run time to the files prepared for playback.
+tauri = { version = "~2.12", features = ["protocol-asset"] }
 tauri-plugin-dialog = "~2.8"
 tauri-plugin-opener = "~2.7"
 tauri-plugin-single-instance = "~2.5"

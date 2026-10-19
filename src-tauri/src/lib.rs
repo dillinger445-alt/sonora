@@ -69,6 +69,7 @@ fn log(level: &str, message: &str, fields: serde_json::Value) {
 /// development bridge delivers it.
 #[tauri::command]
 async fn sonora_call(
+    app: AppHandle,
     state: tauri::State<'_, Shell>,
     method: String,
     params: serde_json::Value,
@@ -84,8 +85,25 @@ async fn sonora_call(
         ApiErrorDto::internal()
     })?;
     match outcome {
-        Ok(text) => Ok(tauri::ipc::Response::new(text)),
+        Ok(text) => {
+            if name == "playback.prepare" {
+                allow_playback(&app, &text);
+            }
+            Ok(tauri::ipc::Response::new(text))
+        }
         Err(e) => Err(ApiErrorDto { code: e.code, message: e.message }),
+    }
+}
+
+/// Lets the web view read the one file the core prepared for playback
+/// through the asset protocol, whose scope is otherwise empty: the
+/// interface can never read arbitrary files from disk.
+fn allow_playback(app: &AppHandle, core_result: &str) {
+    let path = serde_json::from_str::<serde_json::Value>(core_result).ok().and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string));
+    if let Some(path) = path {
+        if let Err(e) = app.asset_protocol_scope().allow_file(&path) {
+            log("warn", "could not allow playback of a file", json!({ "error": e.to_string() }));
+        }
     }
 }
 

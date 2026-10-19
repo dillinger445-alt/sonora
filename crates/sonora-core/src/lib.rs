@@ -8,6 +8,7 @@
 pub mod api;
 pub mod app;
 pub mod db;
+pub mod discogs;
 pub mod dj;
 pub mod djexport;
 pub mod duplicates;
@@ -18,6 +19,7 @@ pub mod jobs;
 pub mod library;
 pub mod logging;
 pub mod model;
+pub mod playback;
 pub mod settings;
 
 pub use api::ApiError;

@@ -70,7 +70,29 @@ export interface TrackRow {
   verdict: string | null;
   flags: string[];
   modelVersion: string | null;
+  /** Tempo, key (0–11 major, 12–23 minor; tonic 0 = C) and genre in use. */
+  djBpm: number | null;
+  djBpmSource: DjSource | null;
+  djKey: number | null;
+  djKeySource: DjSource | null;
+  djGenre: string | null;
+  djGenreSource: DjSource | null;
+  bpmDetected: number | null;
+  bpmConfidence: number | null;
+  tempoVariable: boolean | null;
+  keyDetected: number | null;
+  keyConfidence: number | null;
+  keySecond: number | null;
+  /** Release page of a genre found on Discogs. */
+  discogsUrl: string | null;
+  /** The stored analysis includes tempo and key detection. */
+  djAnalyzed: boolean;
 }
+
+/** Where a tempo, key or genre comes from. */
+export type DjSource = 'edit' | 'detected' | 'tag' | 'folder' | 'discogs';
+
+export type KeyNotation = 'camelot' | 'openkey' | 'musical' | 'sharps' | 'flats';
 
 export interface AppInfo {
   version: string;
@@ -201,6 +223,10 @@ export interface Facets {
   flags: { id: string; count: number }[];
   lossless: number;
   lossy: number;
+  genres: { id: string; count: number }[];
+  keys: { key: number; count: number }[];
+  /** Analyzed tracks whose analysis predates tempo and key detection. */
+  djPending: number;
 }
 
 export interface LibraryFilter {
@@ -216,6 +242,13 @@ export interface LibraryFilter {
   statuses?: string[];
   folderId?: number;
   attention?: boolean;
+  bpmMin?: number;
+  bpmMax?: number;
+  /** Also match half and double the BPM range. */
+  bpmHalfDouble?: boolean;
+  /** Keys 0–23. */
+  keys?: number[];
+  genres?: string[];
 }
 
 export type SortKey =
@@ -238,7 +271,10 @@ export type SortKey =
   | 'added'
   | 'analyzed'
   | 'path'
-  | 'status';
+  | 'status'
+  | 'bpm'
+  | 'key'
+  | 'genre';
 
 export interface Sort {
   key: SortKey;
@@ -276,6 +312,10 @@ export interface Settings {
   maxDurationMin: number;
   keepVisuals: boolean;
   theme: 'dark';
+  keyNotation: KeyNotation;
+  /** Tempos are shown within this range, e.g. [70, 180]. */
+  bpmRange: [number, number];
+  genreFromFolders: 'off' | 'top' | 'parent';
 }
 
 export interface CacheStats {
@@ -418,6 +458,19 @@ export interface Measurements {
   bandwidthChanges: { time: number; fromHz: number; toHz: number }[];
   noise: { quietSeconds: number; quietRmsDb: number | null; quietHfFlatness: number | null };
   bands: { id: string; label: string; loHz: number; hiHz: number; share: number; relDb: number }[];
+  /** Missing in analyses made before tempo detection, and when there is no pulse. */
+  tempo?: { bpm: number; confidence: number; variable: boolean; candidates: [number, number][] } | null;
+  /** Missing in analyses made before key detection, and without tonal material. */
+  key?: {
+    key: number;
+    name: string;
+    camelot: string;
+    confidence: number;
+    second: number;
+    tuningCents: number;
+    chroma: number[];
+    changes: boolean;
+  } | null;
   analysisMs: number;
 }
 
@@ -543,6 +596,95 @@ export interface ScanItemRow extends TrackRow {
 
 export type ScanItemFilter = 'all' | 'problems' | 'failed' | 'clipping' | 'source';
 
+// ------------------------------------------------------------ DJ export
+
+export type ExportFormat = 'aiff' | 'wav' | 'mp3';
+export type ExportQuality = 'universal' | 'high';
+
+export interface ExportOptions {
+  format: ExportFormat;
+  quality: ExportQuality;
+  keyNotation: KeyNotation;
+  bestCopy: boolean;
+  rekordboxXml: boolean;
+}
+
+export interface ExportWarning {
+  code: string;
+  message: string;
+}
+
+export interface ExportPlanItem {
+  trackId: number;
+  title: string;
+  artist: string | null;
+  sourceId: number;
+  sourcePath: string;
+  sourceFormat: string | null;
+  betterCopy: boolean;
+  fileName: string;
+  warnings: ExportWarning[];
+  skip: 'missing' | 'duplicate' | null;
+}
+
+export interface ExportPlan {
+  items: ExportPlanItem[];
+  exported: number;
+  skipped: number;
+  betterCopies: number;
+  withWarnings: number;
+  /** Set when the export cannot run as asked (e.g. no MP3 encoder). */
+  problem: string | null;
+  running: boolean;
+}
+
+export interface ExportReport {
+  folder: string;
+  written: { trackId: number; path: string; title: string; method: 'native' | 'converted' | 'encoded' | 'copied'; bytes: number; warnings: ExportWarning[] }[];
+  failed: { trackId: number; title: string; error: string }[];
+  skipped: { trackId: number; title: string; reason: string }[];
+  cancelled: boolean;
+  rekordboxXml: string | null;
+  xmlError: string | null;
+  elapsedMs: number;
+  error?: string;
+}
+
+export interface ExportProgress {
+  done: number;
+  total: number;
+  fraction: number;
+  current: string;
+}
+
+// -------------------------------------------------------------- Discogs
+
+export interface DiscogsReport {
+  total: number;
+  found: number;
+  notFound: number;
+  skipped: number;
+  failed: number;
+  cancelled: boolean;
+  error: string | null;
+}
+
+export interface DiscogsStatus {
+  configured: boolean;
+  running: boolean;
+  last: DiscogsReport | null;
+}
+
+// ------------------------------------------------------------- playback
+
+export interface PreparedPlayback {
+  trackId: number;
+  path: string;
+  mime: string;
+  transcoded: boolean;
+  duration: number | null;
+}
+
 // ---------------------------------------------------------------- events
 
 export interface CoreEvents {
@@ -554,6 +696,10 @@ export interface CoreEvents {
   'library.changed': { reason: string; count?: number };
   'duplicates.progress': { progress: number };
   'duplicates.updated': Record<string, never>;
+  'djexport.progress': ExportProgress;
+  'djexport.finished': ExportReport;
+  'discogs.progress': { done: number; total: number; found: number; current: string };
+  'discogs.finished': DiscogsReport & { error?: string | null };
 }
 
 export type CoreEventName = keyof CoreEvents;

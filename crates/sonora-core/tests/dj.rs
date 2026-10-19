@@ -346,3 +346,114 @@ fn dj_export_prefers_the_best_copy_and_encodes_mp3() {
     let methods: Vec<&str> = written.iter().map(|w| s(w, "method").unwrap()).collect();
     assert!(methods.contains(&"copied") && methods.contains(&"encoded"), "{methods:?}");
 }
+
+/// Answers Discogs requests from canned data and records what was asked.
+struct FakeDiscogs {
+    asked: std::sync::Mutex<Vec<String>>,
+    status: u16,
+}
+
+impl sonora_core::discogs::Transport for FakeDiscogs {
+    fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<sonora_core::discogs::Response, String> {
+        self.asked.lock().unwrap().push(url.to_string());
+        assert!(headers.iter().any(|(k, v)| *k == "Authorization" && v == "Discogs token=abc123"));
+        assert!(headers.iter().any(|(k, v)| *k == "User-Agent" && v.starts_with("SONORA/")));
+        let body = if url.contains("track=Night%20Drive") || url.contains("q=Ana%20Ruiz%20Night%20Drive") {
+            r#"{"results": [{"title": "Ana Ruiz - Night Drive EP", "style": ["Tech House"], "genre": ["Electronic"], "uri": "/release/42-Night-Drive"}]}"#
+        } else {
+            r#"{"results": []}"#
+        };
+        Ok(sonora_core::discogs::Response { status: self.status, body: body.into() })
+    }
+}
+
+#[test]
+fn discogs_lookup_sends_only_artist_and_title() {
+    let e = env("discogs");
+    write(&e.music.join("01 Ana Ruiz - Night Drive (Original Mix).wav"), synth(124.0, 0.0, false), None);
+    write(&e.music.join("Tagged.wav"), synth(126.0, 0.0, false), Some(TagSet { title: Some("Unknown Thing".into()), artist: Some("Nobody".into()), ..Default::default() }));
+    write(&e.music.join("Has Genre.wav"), synth(128.0, 0.0, false), Some(TagSet { title: Some("Has Genre".into()), artist: Some("Ana Ruiz".into()), genre: Some("Disco".into()), ..Default::default() }));
+    let app = open(&e);
+    import(&app, &e.music);
+    let ids: Vec<i64> = rows(&app, "null", "title").iter().map(id).collect();
+    assert_eq!(call_err(&app, "discogs.lookup", &format!(r#"{{"ids": {ids:?}}}"#)), "not_configured");
+    assert_eq!(call_err(&app, "discogs.setToken", r#"{"token": "not a token!"}"#), "invalid_params");
+    call(&app, "discogs.setToken", r#"{"token": "abc123"}"#);
+    assert_eq!(call(&app, "discogs.status", "").get("configured").and_then(Value::as_bool), Some(true));
+    assert!(call(&app, "settings.get", "").to_string_compact().find("abc123").is_none(), "the token is not sent back to the interface");
+    let fake = Arc::new(FakeDiscogs { asked: std::sync::Mutex::new(Vec::new()), status: 200 });
+    app.discogs.set_transport(fake.clone());
+    call(&app, "discogs.lookup", &format!(r#"{{"ids": {ids:?}}}"#));
+    wait("the lookup", || call(&app, "discogs.status", "").get("running").and_then(Value::as_bool) == Some(false));
+    let report = call(&app, "discogs.status", "").get("last").cloned().unwrap();
+    assert_eq!(report.get("found").and_then(Value::as_i64), Some(1), "{}", report.to_string_compact());
+    assert_eq!(report.get("skipped").and_then(Value::as_i64), Some(1), "the track with a genre is left alone");
+    assert_eq!(report.get("notFound").and_then(Value::as_i64), Some(1));
+    let all = rows(&app, "null", "title");
+    let nd = all.iter().find(|r| s(r, "fileName").is_some_and(|n| n.contains("Night Drive"))).unwrap();
+    assert_eq!((s(nd, "djGenre"), s(nd, "djGenreSource")), (Some("Tech House"), Some("discogs")));
+    assert_eq!(s(nd, "discogsUrl"), Some("https://www.discogs.com/release/42-Night-Drive"));
+    for url in fake.asked.lock().unwrap().iter() {
+        assert!(url.starts_with("https://api.discogs.com/database/search?"), "{url}");
+        assert!(!url.contains("wav") && !url.contains("Music") && !url.contains("sonora-core"), "no file names or paths: {url}");
+    }
+    // An edit replaces a Discogs genre; reset clears it.
+    let nid = id(nd);
+    call(&app, "tracks.editDj", &format!(r#"{{"ids": [{nid}], "reset": true}}"#));
+    assert!(rows(&app, "null", "title").iter().find(|r| id(r) == nid).unwrap().get("djGenre").is_none_or(Value::is_null));
+    // A refused token stops the lookup with a clear message.
+    app.discogs.set_transport(Arc::new(FakeDiscogs { asked: std::sync::Mutex::new(Vec::new()), status: 401 }));
+    call(&app, "discogs.lookup", &format!(r#"{{"ids": [{nid}]}}"#));
+    wait("the lookup", || call(&app, "discogs.status", "").get("running").and_then(Value::as_bool) == Some(false));
+    let report = call(&app, "discogs.status", "").get("last").cloned().unwrap();
+    assert!(s(&report, "error").is_some_and(|m| m.contains("token")), "{}", report.to_string_compact());
+    call(&app, "discogs.setToken", r#"{"token": null}"#);
+    assert_eq!(call(&app, "discogs.status", "").get("configured").and_then(Value::as_bool), Some(false));
+}
+
+#[test]
+fn curl_reports_network_failures_cleanly() {
+    use sonora_core::discogs::{Curl, Transport};
+    // Nothing listens on port 9 of this machine: the request fails fast and
+    // the failure comes back as a message, not a panic or a hang.
+    let r = Curl::default().get("https://127.0.0.1:9/", &[("User-Agent", "SONORA-test".into())]);
+    match r {
+        Err(m) => assert!(!m.is_empty()),
+        Ok(resp) => panic!("unexpected answer {resp:?}"),
+    }
+}
+
+#[test]
+fn playback_uses_the_original_or_one_decoded_copy() {
+    let e = env("playback");
+    let src = e.music.join("Loop.wav");
+    write(&src, SynthOptions { seconds: 6.0, ..synth(124.0, 0.0, false) }, None);
+    let app = open(&e);
+    import(&app, &e.music);
+    let rows = rows(&app, "{}", "title");
+    let tid = id(&rows[0]);
+
+    // The web view says it plays WAV: the original file is used as it is.
+    let direct = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["wav", "mp3"]}}"#));
+    assert_eq!(s(&direct, "path").map(PathBuf::from), Some(src.clone()));
+    assert_eq!(direct.get("transcoded").and_then(Value::as_bool), Some(false));
+    assert_eq!(s(&direct, "mime"), Some("audio/wav"));
+    assert!(f(&direct, "duration").is_some_and(|d| (d - 6.0).abs() < 0.05));
+
+    // It does not: the file is decoded once into SONORA's cache and reused.
+    let before = hash(&src);
+    let decoded = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["mp3"]}}"#));
+    let path = PathBuf::from(s(&decoded, "path").unwrap());
+    assert_eq!(decoded.get("transcoded").and_then(Value::as_bool), Some(true));
+    assert!(path.starts_with(e.data.join("cache").join("playback")), "{}", path.display());
+    let facts = sonora_engine::meta::probe_file(&path, &Default::default()).unwrap();
+    assert_eq!(facts.container_name, "WAV");
+    assert!(facts.header_duration_secs.is_some_and(|d| (d - 6.0).abs() < 0.05), "{:?}", facts.header_duration_secs);
+    let again = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": [], "decode": true}}"#));
+    assert_eq!(s(&again, "path"), s(&decoded, "path"));
+    assert_eq!(hash(&src), before, "the original is only read");
+
+    // A file that is gone cannot be played.
+    std::fs::remove_file(&src).unwrap();
+    assert_eq!(call_err(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["wav"]}}"#)), "playback_failed");
+}
