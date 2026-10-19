@@ -9,13 +9,18 @@ LEDs: as a signal, not as decoration.
 1. **Colour is a status.** Lime means signal, pass, a primary action or
    keyboard focus. Amber means caution. Red means a fault such as clipping
    or an error. Charts use a separate set of steel-blue data colours that
-   never carry status.
+   never carry status. Musical keys carry a muted hue from their place on
+   the Camelot wheel, so neighbouring keys (which mix) look alike; it is
+   only ever a small dot or a rim on the wheel, at low saturation, so it
+   never reads as a status.
 2. **Numbers are the content.** Values are set in a condensed monospace
    with tabular figures and right-aligned in columns. Units go in column
    headers where possible.
 3. **One time axis.** On the track view, the waveform, spectrogram and
-   loudness curve share a time axis and a cursor. This is where the
-   interface spends its visual boldness; everything around it stays quiet.
+   loudness curve share a time axis and a cursor, and the playhead while
+   the track plays. This, and the Camelot wheel of the key filter, are
+   where the interface spends its visual boldness; everything around them
+   stays quiet.
 4. **Evidence is visible.** Each finding shows its evidence level as four
    pips (confirmed, strong, weak, inconclusive). Inconclusive results are
    shown, not hidden.
@@ -24,8 +29,11 @@ LEDs: as a signal, not as decoration.
    the content beneath. Corner radii are small (3 px on controls, 6 px on
    dialogs). There are no gradients except in the loudness area fill, which
    follows the data.
-6. **Stable layouts.** Selecting rows, opening the details panel or
-   receiving live updates never moves content under the pointer.
+6. **Stable layouts.** Selecting rows, opening the details panel, setting
+   filters or receiving live updates never moves content under the pointer.
+   The library toolbar has two fixed rows (search, score and actions; then
+   the filters) for that reason. The player takes its own row above the
+   status bar only while a track is loaded.
 
 ## Tokens
 
@@ -58,9 +66,14 @@ The building blocks are in `src/components/`:
   group), `TabList` (tabs that switch a panel, with arrow keys), `Checkbox`,
   `SearchField`, `Switch`, `ProgressBar` (determinate only).
 - **Overlays**: `Menu` (action and checkbox menus with full keyboard
-  support), `Dialog` and `useConfirm` (native `<dialog>`; destructive
-  confirmations focus Cancel first), `TooltipLayer` (one delegated tooltip
-  for every `data-tip` attribute).
+  support), `Popover` (a panel of controls under a button; Escape, a click
+  outside or tabbing past its ends closes it), `Dialog` and `useConfirm`
+  (native `<dialog>`; destructive confirmations focus Cancel first),
+  `TooltipLayer` (one delegated tooltip for every `data-tip` attribute).
+- **DJ**: `KeyWheel` (the Camelot wheel as a picker: one Tab stop, arrows
+  go round it and between the major and minor rings), `BpmFilter` and
+  `KeyFilter`, `KeyBadge`, `BpmText` and `SourceNote` (where a value came
+  from), and `PlayerBar` (transport, waveform seek bar as a slider, volume).
 - **Marks**: `ScoreMeter` (20-segment ladder), `ScoreCell` (number plus a
   10-segment mini ladder), `EvidenceMark`, `SeverityIcon`, `FlagList`,
   `StatusMark`.

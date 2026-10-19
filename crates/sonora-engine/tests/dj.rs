@@ -197,3 +197,18 @@ fn a_tempo_change_is_flagged() {
     assert!(t.variable, "{t:?}");
     assert!(t.bpm > 120.0 && t.bpm < 134.0, "{t:?}");
 }
+
+#[test]
+fn inverted_polarity_does_not_hide_the_key() {
+    // One channel inverted (a wiring mistake): a mono sum would be silent.
+    let mut s = synth(30.0, 124.0, 0.0, false, 0);
+    for r in s.iter_mut().skip(1).step_by(2) {
+        *r = -*r;
+    }
+    assert_eq!(key_of(&s).map(|k| format_key(k, Notation::Musical, true)).as_deref(), Some("Am"));
+    // A mono file gives the same answer as its two identical channels.
+    let mono: Vec<f32> = synth(30.0, 124.0, 0.0, false, 0).chunks(2).map(|f| f[0]).collect();
+    let mut m = KeyMeter::new(44_100, 1);
+    m.process(&mono);
+    assert_eq!(m.finish().map(|k| format_key(k.key, Notation::Musical, true)).as_deref(), Some("Am"));
+}

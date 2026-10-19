@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import type { Visuals } from '../api/types.ts';
+import { usePlaybackTime } from '../state/player.tsx';
 import { formatDb, formatHz, formatTimecode } from '../lib/format.ts';
 import {
   colormap,
@@ -40,6 +41,17 @@ export interface LanesProps {
   dropouts: { start: number; duration: number }[];
   /** Move the cursor here (e.g. from a finding's timestamp). */
   focus: { time: number; nonce: number } | null;
+  /** This track is loaded in the player: show where playback is. */
+  playhead?: boolean;
+  /** Plays from a moment (a click on the lanes, or Enter at the cursor). */
+  onPlayAt?: (seconds: number) => void;
+}
+
+/** The playback position over the lanes; re-renders every frame, so it stays tiny. */
+function Playhead({ duration, plotW, height }: { duration: number; plotW: number; height: number }) {
+  const t = usePlaybackTime();
+  const x = GUTTER + (Math.max(0, Math.min(duration, t)) / duration) * plotW;
+  return <div className="lanes-playhead" style={{ transform: `translateX(${x}px)`, height }} aria-hidden />;
 }
 
 function bucketRange(px: number, plotW: number, n: number): [number, number] {
@@ -414,7 +426,11 @@ export function Lanes(props: LanesProps) {
     else if (e.key === 'ArrowLeft') t = Math.max(0, t - step);
     else if (e.key === 'Home') t = 0;
     else if (e.key === 'End') t = duration;
-    else if (e.key === 'Escape') {
+    else if (e.key === 'Enter' && props.onPlayAt) {
+      e.preventDefault();
+      props.onPlayAt(cursor?.t ?? 0);
+      return;
+    } else if (e.key === 'Escape') {
       setCursor(null);
       return;
     } else return;
@@ -432,13 +448,20 @@ export function Lanes(props: LanesProps) {
   return (
     <div
       ref={wrapRef}
-      className="lanes"
       tabIndex={0}
       role="group"
-      aria-label="Waveform, spectrogram and loudness over time. Use the left and right arrow keys to move the cursor and hear the values at that point."
+      aria-label={`Waveform, spectrogram and loudness over time. Use the left and right arrow keys to move the cursor and hear the values at that point.${props.onPlayAt ? ' Press Enter, or click, to play from there.' : ''}`}
       onPointerMove={onMove}
       onPointerLeave={() => setCursor(null)}
       onKeyDown={onKey}
+      onClick={(e) => {
+        if (!props.onPlayAt) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        const x = e.clientX - r.left - GUTTER;
+        if (x < 0 || x > plotW) return;
+        props.onPlayAt((x / plotW) * duration);
+      }}
+      className={`lanes ${props.onPlayAt ? 'is-playable' : ''}`}
       style={{ height: totalH }}
     >
       <div className="lane" style={{ height: H_WAVE }}>
@@ -469,6 +492,7 @@ export function Lanes(props: LanesProps) {
       <div className="lane" style={{ height: H_AXIS }}>
         <canvas ref={axisRef} aria-hidden />
       </div>
+      {props.playhead && duration > 0 ? <Playhead duration={duration} plotW={plotW} height={totalH - H_AXIS} /> : null}
       {cursor && ro ? (
         <>
           <div className="lanes-cursor" style={{ left: cx, height: totalH - H_AXIS }} aria-hidden />

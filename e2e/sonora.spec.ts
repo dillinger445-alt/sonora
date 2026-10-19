@@ -6,9 +6,9 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
-import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { MUSIC } from './paths.ts';
+import { DATA, MUSIC } from './paths.ts';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -33,6 +33,12 @@ async function waitIdle(page: Page, timeoutMs = 120_000): Promise<void> {
 
 function rows(page: Page) {
   return page.locator('.tbody .trow:not(.is-placeholder)');
+}
+
+/** The distinct texts of one column over the rows shown (once they settle). */
+async function columnValues(page: Page, column: string): Promise<string[]> {
+  const texts = await page.locator(`.tbody .trow:not(.is-placeholder) .tcell-${column}`).allInnerTexts();
+  return [...new Set(texts.map((t) => t.trim()))].sort();
 }
 
 function row(page: Page, title: string) {
@@ -340,4 +346,192 @@ test('category tabs follow the tabs pattern', async ({ page }) => {
   await expect(page).toHaveURL(/#\/attention\/clipping|#\/attention\?flag=clipping/);
   await page.keyboard.press('Home');
   await expect(all).toBeFocused();
+});
+
+// ------------------------------------------------------------------- DJ
+
+test('tempo and key: detected, filtered by range and on the Camelot wheel, shown in any notation', async ({ page }) => {
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first().locator('.tcell-bpm')).toHaveText('128');
+  await expect(rows(page).first().locator('.tcell-key')).toHaveText('8A');
+  await page.getByRole('button', { name: 'Clear search' }).click();
+  await expect.poll(() => rows(page).count()).toBeGreaterThan(20);
+  const total = await rows(page).count();
+  const toolbar = page.getByRole('toolbar', { name: 'Filters' });
+
+  // A tempo range, then the same range at half and double time.
+  const bpmButton = toolbar.getByRole('button', { name: /^BPM/ });
+  await bpmButton.click();
+  const tempo = page.getByRole('dialog', { name: 'Tempo filter' });
+  await tempo.getByRole('textbox', { name: 'Lowest BPM' }).fill('126');
+  await tempo.getByRole('textbox', { name: 'Highest BPM' }).fill('130');
+  // other_track, and its copy from the rescan test.
+  await expect.poll(() => columnValues(page, 'bpm')).toEqual(['128']);
+  await expect(row(page, 'other_track')).toBeVisible();
+  await tempo.getByRole('textbox', { name: 'Lowest BPM' }).fill('60');
+  await tempo.getByRole('textbox', { name: 'Highest BPM' }).fill('64');
+  await expect(page.getByText('No tracks match these filters.')).toBeVisible();
+  await tempo.getByRole('checkbox', { name: /half and double/ }).check();
+  // 120–128 BPM: the 124 BPM master and its copies, and the 128 BPM track.
+  await expect.poll(async () => (await columnValues(page, 'bpm')).every((v) => /^12[48]/.test(v)) && (await rows(page).count()) > 2).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(tempo).toBeHidden();
+  await expect(bpmButton).toBeFocused();
+  await expect(bpmButton).toContainText('60–64');
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(rows(page)).toHaveCount(total);
+
+  // Keys on the wheel: 9A alone matches nothing; with its neighbours, 8A does.
+  await toolbar.getByRole('button', { name: /^Key/ }).click();
+  const keys = page.getByRole('dialog', { name: 'Key filter' });
+  await keys.getByRole('checkbox', { name: /^9A, E minor/ }).click();
+  await expect(page.getByText('No tracks match these filters.')).toBeVisible();
+  await keys.getByRole('checkbox', { name: /^Include keys that mix/ }).check();
+  await expect.poll(() => columnValues(page, 'key')).toEqual(['8A']);
+  // The wheel works from the keyboard: arrows move round it, Space toggles.
+  const nineA = keys.getByRole('checkbox', { name: /^9A,/ });
+  await nineA.focus();
+  await page.keyboard.press(' ');
+  await expect(nineA).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('ArrowLeft');
+  await expect(keys.getByRole('checkbox', { name: /^8A,/ })).toBeFocused();
+  // Keys can be typed in any notation.
+  await keys.getByRole('textbox', { name: 'Type a key' }).fill('A minor');
+  await expect(keys).toContainText('A minor, 8A · 1m');
+  await keys.getByRole('button', { name: 'Add' }).click();
+  await expect(keys.getByRole('checkbox', { name: /^8A,/ })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(rows(page)).toHaveCount(total);
+
+  // Another notation everywhere.
+  await page.goto('/#/settings');
+  await page.getByRole('radiogroup', { name: 'Key notation' }).getByRole('radio', { name: 'Open Key' }).click();
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
+  await expect(rows(page).first().locator('.tcell-key')).toHaveText('1m');
+  await page.goto('/#/settings');
+  await page.getByRole('radiogroup', { name: 'Key notation' }).getByRole('radio', { name: 'Camelot' }).click();
+  await expect(page.getByRole('radiogroup', { name: 'Key notation' }).getByRole('radio', { name: 'Camelot' })).toHaveAttribute('aria-checked', 'true');
+});
+
+test('editing tempo, key and genre changes the library, never the file', async ({ page }) => {
+  const file = join(MUSIC, 'other_track.flac');
+  const before = readFileSync(file);
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
+  await expect(rows(page)).toHaveCount(1);
+  await row(page, 'other_track').click();
+  const panel = page.getByRole('complementary', { name: 'Track details' });
+  await panel.getByRole('button', { name: 'Edit…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit BPM, key and genre' });
+  await dialog.getByRole('button', { name: '×2' }).click();
+  await expect(dialog.getByRole('textbox', { name: /^Tempo/ })).toHaveValue('256');
+  await dialog.getByRole('textbox', { name: /^Key/ }).fill('Em');
+  await expect(dialog).toContainText('E minor: 9A, 2m');
+  // A text field with suggestions (a combobox).
+  await dialog.getByRole('combobox', { name: /^Genre/ }).fill('Techno');
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText('Updated 1 track')).toBeVisible();
+  const r = row(page, 'other_track');
+  await expect(r.locator('.tcell-bpm')).toHaveText('256');
+  await expect(r.locator('.tcell-key')).toHaveText('9A');
+  await expect(panel).toContainText('Techno');
+  await expect(panel).toContainText('Edited');
+
+  // The genre is now a filter.
+  await page.getByRole('button', { name: 'Clear search' }).click();
+  await page.getByRole('toolbar', { name: 'Filters' }).getByRole('button', { name: /^Genre/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: /Techno/ }).click();
+  await page.keyboard.press('Escape');
+  await expect(rows(page)).toHaveCount(1);
+
+  // Back to what was detected.
+  await row(page, 'other_track').click();
+  await panel.getByRole('button', { name: 'Edit…' }).click();
+  await dialog.getByRole('button', { name: 'Reset to detected' }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
+  await expect(row(page, 'other_track').locator('.tcell-bpm')).toHaveText('128');
+  await expect(row(page, 'other_track').locator('.tcell-key')).toHaveText('8A');
+  expect(readFileSync(file).equals(before)).toBe(true);
+});
+
+test('DJ export writes tagged files and a rekordbox playlist, and never overwrites', async ({ page }) => {
+  const out = join(DATA, 'export');
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
+  await expect(rows(page)).toHaveCount(1);
+  await row(page, 'other_track').click();
+  await page.getByRole('complementary', { name: 'Track details' }).getByRole('button', { name: 'Export…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Export for DJ software' });
+  await expect(dialog).toContainText('1 file will be written');
+  await expect(dialog.getByRole('radio', { name: 'AIFF' })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('textbox', { name: 'Export folder (full path)' }).fill(out);
+  await dialog.getByRole('button', { name: 'Export 1 file' }).click();
+  const done = page.getByRole('dialog', { name: 'Export finished' });
+  await expect(done).toContainText('Exported 1 file');
+  await expect(done).toContainText('rekordbox');
+  await done.getByRole('button', { name: 'Done' }).click();
+  expect(existsSync(join(out, 'other_track.aiff'))).toBe(true);
+  const xml = readFileSync(join(out, 'rekordbox.xml'), 'utf8');
+  expect(xml).toContain('Tonality="8A"');
+  expect(xml).toContain('AverageBpm="128');
+
+  // A second export never replaces the first.
+  await page.getByRole('complementary', { name: 'Track details' }).getByRole('button', { name: 'Export…' }).click();
+  await dialog.getByRole('textbox', { name: 'Export folder (full path)' }).fill(out);
+  await dialog.getByRole('button', { name: 'Export 1 file' }).click();
+  await expect(done).toContainText('Exported 1 file');
+  await done.getByRole('button', { name: 'Done' }).click();
+  expect(existsSync(join(out, 'other_track (2).aiff'))).toBe(true);
+  rmSync(out, { recursive: true, force: true });
+});
+
+test('tracks play inside the app; formats the window cannot read play from a decoded copy', async ({ page }) => {
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('mp3_320');
+  // mp3_320 and transcode_mp3_320.
+  await expect(rows(page)).toHaveCount(2);
+  await row(page, 'mp3_320').click();
+  await page.keyboard.press('p');
+  const player = page.getByRole('region', { name: 'Player' });
+  await expect(player).toContainText('mp3_320');
+  await expect(player.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+  await expect(player.getByRole('slider', { name: 'Position' })).not.toHaveAttribute('aria-valuenow', '0', { timeout: 10_000 });
+  await expect(player).not.toContainText('decoded copy');
+  await page.keyboard.press('p');
+  await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+
+  // Chromium cannot play AIFF: SONORA decodes it once and plays that.
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('clean_master');
+  const aiff = rows(page).filter({ has: page.locator('.fmt-name', { hasText: 'AIFF' }) });
+  await aiff.getByRole('button', { name: /^Play clean_master/ }).click();
+  await expect(player.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+  await expect(player).toContainText('decoded copy');
+  // Seeking with the keyboard.
+  await player.getByRole('slider', { name: 'Position' }).focus();
+  await page.keyboard.press('End');
+  await expect(player.getByRole('slider', { name: 'Position' })).toHaveAttribute('aria-valuenow', /^(19|20)$/);
+  await player.getByRole('button', { name: 'Close the player' }).click();
+  await expect(player).toBeHidden();
+});
+
+test('genre lookups ask for a Discogs token first and send nothing without one', async ({ page }) => {
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
+  await expect(rows(page)).toHaveCount(1);
+  await row(page, 'other_track').click();
+  await page.getByRole('complementary', { name: 'Track details' }).getByRole('button', { name: 'Discogs' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Discogs first' });
+  await expect(dialog).toContainText('stays on this computer');
+  await dialog.getByRole('button', { name: 'Open Settings' }).click();
+  await expect(page.getByRole('textbox', { name: 'Discogs personal access token' })).toBeVisible();
+  await expect(page.getByText('not affiliated with, sponsored or endorsed by Discogs')).toBeVisible();
 });

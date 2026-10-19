@@ -1,9 +1,23 @@
 /** Full analysis of one track. */
 
-import { useMemo, useState, type ReactNode } from 'react';
-import { LuArrowLeft, LuChevronDown, LuChevronRight, LuDownload, LuFolderSearch, LuRefreshCw, LuTrash2, LuTriangleAlert } from 'react-icons/lu';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  LuArrowLeft,
+  LuChevronDown,
+  LuChevronRight,
+  LuDownload,
+  LuFolderSearch,
+  LuLoaderCircle,
+  LuPause,
+  LuPlay,
+  LuRefreshCw,
+  LuTrash2,
+  LuTriangleAlert,
+  LuUsb,
+} from 'react-icons/lu';
 import type { Evidence, Finding, Measurements, ScanItemEvent, StoredAnalysis, TrackDetail } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
+import { BpmText, KeyBadge } from '../components/DjMarks.tsx';
 import { ErrorState, ViewHeader } from '../components/Layout.tsx';
 import { EvidenceMark, ScoreCell, ScoreMeter, SeverityIcon, StatusMark } from '../components/Marks.tsx';
 import { Lanes } from '../charts/Lanes.tsx';
@@ -28,9 +42,11 @@ import { navigate } from '../lib/router.ts';
 import { EVIDENCE, EVIDENCE_ORDER, SCORE_HINT, SCORE_KINDS, SCORE_LABEL, SEVERITY } from '../lib/scores.ts';
 import { focusMain } from '../lib/focus.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
+import { usePlayer } from '../state/player.tsx';
 import { useTrackActions } from '../state/trackActions.tsx';
 import { useResource } from '../state/useResource.ts';
 import { kindLabel } from './History.tsx';
+import { TrackDj } from './TrackDj.tsx';
 
 type Focus = { time: number; nonce: number } | null;
 
@@ -395,8 +411,9 @@ function NotAnalyzed({ d, onRetry }: { d: TrackDetail; onRetry: () => void }) {
 }
 
 export function TrackView({ id }: { id: number }) {
-  const { client } = useCore();
+  const { client, settings } = useCore();
   const actions = useTrackActions();
+  const player = usePlayer();
   const [focus, setFocus] = useState<Focus>(null);
   const detail = useResource(() => client.track(id), [id], { events: ['library.changed', 'scan.finished'], throttleMs: 1500 });
   // This track finished (re-)analysis, or started it: show the new state now.
@@ -405,6 +422,25 @@ export function TrackView({ id }: { id: number }) {
   });
   const d = detail.data;
   const a = d?.analysis ?? null;
+  const row = d?.track ?? null;
+  const canPlay = !!d?.fileExists;
+
+  // P plays or pauses this track (before the window-wide shortcut, which
+  // would otherwise toggle whatever track is loaded).
+  const toggle = player.toggle;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== 'p' && e.key !== 'P') || !row || !canPlay) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      // Not while a dialog is open.
+      if (document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      toggle(row);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [row, canPlay, toggle]);
 
   // The core's cutoff (set only for a steep edge), shared with the library's Cutoff column.
   const cutoffHz = d?.track.cutoffHz ?? null;
@@ -444,7 +480,21 @@ export function TrackView({ id }: { id: number }) {
   const t = d.track;
   const m = a?.measurements;
   const s = a?.assessment;
-  const onTime = (time: number) => setFocus({ time, nonce: Date.now() });
+  const current = player.track?.id === t.id;
+  const playing = current && (player.status === 'playing' || player.status === 'loading');
+  const playAt = (time: number) => {
+    if (!d.fileExists) return;
+    if (current) {
+      player.seek(time);
+      if (!playing) player.resume();
+    } else player.play(t, time);
+  };
+  const onTime = (time: number) => {
+    setFocus({ time, nonce: Date.now() });
+    // Following a finding while listening: jump there too.
+    if (current) player.seek(time);
+  };
+  const notation = settings?.keyNotation ?? 'camelot';
 
   return (
     <div className="view view-scroll track-view">
@@ -454,6 +504,19 @@ export function TrackView({ id }: { id: number }) {
         subtitle={<span className="selectable">{[t.artist, t.album].filter(Boolean).join(' – ') || t.fileName}</span>}
         actions={
           <>
+            <Button
+              variant="primary"
+              icon={current && player.status === 'loading' ? LuLoaderCircle : playing ? LuPause : LuPlay}
+              className={current && player.status === 'loading' ? 'is-loading' : ''}
+              onClick={() => player.toggle(t)}
+              disabled={!d.fileExists}
+              data-tip="Play or pause (P)"
+            >
+              {playing ? 'Pause' : 'Play'}
+            </Button>
+            <Button icon={LuUsb} onClick={() => actions.exportDj([t.id])} disabled={!d.fileExists}>
+              Export for DJs…
+            </Button>
             <Button icon={LuFolderSearch} onClick={() => void actions.reveal(t.path)} disabled={!d.fileExists}>
               {actions.revealText}
             </Button>
@@ -505,16 +568,8 @@ export function TrackView({ id }: { id: number }) {
         <Spec label="Size">
           <span className="num">{formatBytes(t.size)}</span>
         </Spec>
-        {t.bpm ? (
-          <Spec label="BPM" tip="From the file's tags">
-            <span className="num">{t.bpm}</span>
-          </Spec>
-        ) : null}
-        {t.key ? (
-          <Spec label="Key" tip="From the file's tags">
-            {t.key}
-          </Spec>
-        ) : null}
+        <Spec label="BPM">{t.djBpm != null ? <BpmText bpm={t.djBpm} variable={t.tempoVariable} /> : DASH}</Spec>
+        <Spec label="Key">{t.djKey != null ? <KeyBadge keyId={t.djKey} notation={notation} /> : DASH}</Spec>
         <Spec label="Analyzed" tip={a ? `Scoring model ${s?.modelVersion ?? ''}, engine ${m?.engineVersion ?? ''}` : undefined}>
           {t.analyzedAt ? formatRelative(t.analyzedAt) : DASH}
         </Spec>
@@ -549,6 +604,13 @@ export function TrackView({ id }: { id: number }) {
             </div>
           </section>
 
+          <section className="section">
+            <div className="section-head">
+              <h2 className="section-title">Tempo, key and genre</h2>
+            </div>
+            <TrackDj t={t} m={m} onEdit={() => actions.editDj({ ids: [t.id], row: t })} />
+          </section>
+
           <section className="section" aria-label="Signal over time">
             {a.visuals ? (
               <Lanes
@@ -559,6 +621,8 @@ export function TrackView({ id }: { id: number }) {
                 bandwidthChanges={m.bandwidthChanges}
                 dropouts={m.silence.dropouts}
                 focus={focus}
+                playhead={current}
+                onPlayAt={d.fileExists ? playAt : undefined}
               />
             ) : (
               <p className="faint lanes-missing">

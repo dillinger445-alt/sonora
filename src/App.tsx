@@ -2,12 +2,15 @@ import { useEffect } from 'react';
 import { LuServerOff } from 'react-icons/lu';
 import type { Bridge } from './api/bridge.ts';
 import { Button } from './components/Button.tsx';
+import { PlayerBar } from './components/PlayerBar.tsx';
 import { NAV_ORDER, Sidebar } from './components/Sidebar.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { TooltipLayer } from './components/TooltipLayer.tsx';
 import { navigate, useRoute, type Route } from './lib/router.ts';
 import { CoreProvider, useCore } from './state/core.tsx';
 import { ImportProvider, useImports } from './state/imports.tsx';
+import { JobsProvider } from './state/jobs.tsx';
+import { PlayerProvider, usePlayer } from './state/player.tsx';
 import { ToastProvider } from './state/toasts.tsx';
 import { AttentionView } from './views/Attention.tsx';
 import { DuplicatesView } from './views/Duplicates.tsx';
@@ -24,7 +27,11 @@ export function App({ bridge }: { bridge: Bridge }) {
     <ToastProvider>
       <CoreProvider bridge={bridge}>
         <ImportProvider>
-          <Shell />
+          <JobsProvider>
+            <PlayerProvider>
+              <Shell />
+            </PlayerProvider>
+          </JobsProvider>
         </ImportProvider>
       </CoreProvider>
     </ToastProvider>
@@ -58,6 +65,7 @@ function Shell() {
   const route = useRoute();
   const { fatal, retry, bridge } = useCore();
   const imports = useImports();
+  const player = usePlayer();
 
   // Global shortcuts: ⌘/Ctrl+1…7 views, ⌘/Ctrl+, settings, ⌘/Ctrl+O import.
   useEffect(() => {
@@ -83,6 +91,25 @@ function Shell() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [imports]);
+
+  // P plays or pauses the loaded track, unless the focused element uses the
+  // key itself (typing, or the track table playing its active row).
+  const { track, status, pause, resume } = player;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || (e.key !== 'p' && e.key !== 'P')) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      // Not while a dialog is open.
+      if (document.querySelector('dialog[open]')) return;
+      if (!track) return;
+      e.preventDefault();
+      if (status === 'playing' || status === 'loading') pause();
+      else resume();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [track, status, pause, resume]);
 
   // Keep the document title informative (window title on Windows/Linux).
   useEffect(() => {
@@ -129,6 +156,7 @@ function Shell() {
       <main className="workspace" id="main" tabIndex={-1}>
         {renderView(route)}
       </main>
+      <PlayerBar />
       <StatusBar />
       <TooltipLayer />
     </div>

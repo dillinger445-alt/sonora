@@ -1,18 +1,38 @@
 import { useState, type ReactNode } from 'react';
 import { LuDatabaseBackup, LuFolderSearch, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
-import type { Settings } from '../api/types.ts';
+import type { KeyNotation, Settings } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { Segmented, Switch } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
 import { ViewHeader } from '../components/Layout.tsx';
 import { formatBytes, formatCount, plural } from '../lib/format.ts';
+import { formatKey, KEY_NOTATIONS } from '../lib/keys.ts';
 import { formatRoute } from '../lib/router.ts';
 import { SCORE_HINT, SCORE_KINDS, SCORE_LABEL } from '../lib/scores.ts';
 import { useCore, useScanBusy } from '../state/core.tsx';
 import { isAbsolutePath } from '../lib/paths.ts';
 import { useToast } from '../state/toasts.tsx';
-import { revealLabel } from '../state/trackActions.tsx';
+import { revealLabel } from '../lib/platform.ts';
 import { useResource } from '../state/useResource.ts';
+import { DiscogsSettings } from './DiscogsSettings.tsx';
+
+/** Tempo ranges DJs commonly use (each spans an octave, so every tempo has one reading in it). */
+const BPM_RANGES: [number, number][] = [
+  [60, 120],
+  [70, 140],
+  [70, 180],
+  [80, 160],
+  [88, 175],
+  [98, 195],
+];
+
+const FOLDER_GENRES: { value: Settings['genreFromFolders']; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'top', label: 'Top folder' },
+  { value: 'parent', label: 'Containing folder' },
+];
+
+const A_MINOR = 21;
 
 function Group({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
@@ -210,6 +230,51 @@ export function SettingsView() {
           </Row>
         </Group>
 
+        <Group title="Tempo and key" description="How tempo and key are shown in lists and filters, and written into DJ exports.">
+          <Row
+            label="Key notation"
+            description={`${KEY_NOTATIONS.find((n) => n.id === settings.keyNotation)?.description ?? ''}. A minor is shown as ${formatKey(A_MINOR, settings.keyNotation)}.`}
+          >
+            <Segmented<KeyNotation>
+              label="Key notation"
+              size="sm"
+              value={settings.keyNotation}
+              onChange={(v) => void save({ keyNotation: v })}
+              options={KEY_NOTATIONS.map((n) => ({ value: n.id, label: n.label, hint: `${n.description} (A minor: ${formatKey(A_MINOR, n.id)})` }))}
+            />
+          </Row>
+          <Row
+            label="BPM range"
+            description="Detected tempos are shown within this range, so half-time and double-time readings land where you expect: a drum & bass track reads 174 in 88–175, but 87 in 70–140. Your own edits are kept as typed."
+          >
+            <Segmented
+              label="BPM range"
+              size="sm"
+              value={`${settings.bpmRange[0]}-${settings.bpmRange[1]}`}
+              onChange={(v) => {
+                const [lo, hi] = v.split('-').map(Number);
+                if (lo != null && hi != null) void save({ bpmRange: [lo, hi] });
+              }}
+              options={[
+                ...BPM_RANGES.map(([lo, hi]) => ({ value: `${lo}-${hi}`, label: `${lo}–${hi}` })),
+                ...(BPM_RANGES.some(([lo, hi]) => lo === settings.bpmRange[0] && hi === settings.bpmRange[1])
+                  ? []
+                  : [{ value: `${settings.bpmRange[0]}-${settings.bpmRange[1]}`, label: `${settings.bpmRange[0]}–${settings.bpmRange[1]}` }]),
+              ]}
+            />
+          </Row>
+        </Group>
+
+        <Group title="Genres" description="Genres come from the files' tags first. Tracks without one can take it from their folder, from Discogs, or from what you type.">
+          <Row
+            label="Folder names as genres"
+            description="For tracks without a genre tag. Top folder: in Music/House/Artist/track.mp3 the genre is House. Containing folder: the folder the file is in."
+          >
+            <Segmented label="Folder names as genres" size="sm" value={settings.genreFromFolders} onChange={(v) => void save({ genreFromFolders: v })} options={FOLDER_GENRES} />
+          </Row>
+          <DiscogsSettings />
+        </Group>
+
         <Group title="Library" description={<>Folders are managed on the <a className="link" href={formatRoute({ view: 'folders' })}>Folders</a> page.</>}>
           <Row label="Library database" description={<span className="selectable mono-path">{info.dbPath}</span>}>
             <Button size="sm" icon={LuFolderSearch} onClick={() => void bridge.reveal(info.dbPath).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: String(e) }))}>
@@ -281,10 +346,18 @@ export function SettingsView() {
           <div className="privacy">
             <LuShieldCheck className="privacy-icon" aria-hidden />
             <div>
-              <p>SONORA works entirely on this computer. It makes no network requests: no uploads, no analytics, no telemetry, no update checks.</p>
+              <p>
+                SONORA works entirely on this computer: no uploads, no analytics, no telemetry, no update checks. The only network requests are Discogs genre lookups you start
+                yourself, which send the artist and title of the tracks you chose.
+              </p>
               <p className="faint">
-                The library database stores file paths, tags, measurements, scores and visualizations for the {overview ? formatCount(overview.tracks.total) : ''} tracks you
-                added. Removing a track removes its data; your audio files are never modified, moved or deleted.
+                The library database stores file paths, tags, measurements, scores, visualizations and your tempo, key and genre edits for the{' '}
+                {overview ? formatCount(overview.tracks.total) : ''} tracks you added. Removing a track removes its data; your audio files are never modified, moved or
+                deleted. Exports write new files and never replace existing ones.
+              </p>
+              <p className="faint">
+                Playback reads your files where they are. Formats this window cannot play directly are decoded once into SONORA's cache folder, which keeps the six most
+                recent.
               </p>
             </div>
           </div>

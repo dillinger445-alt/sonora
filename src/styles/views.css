@@ -1091,7 +1091,11 @@
 }
 
 .dup-table .c-actions {
-  width: 92px;
+  width: 120px;
+}
+
+.cell-actions .icon-btn.is-current {
+  color: var(--c-lime);
 }
 
 .dup-table td {

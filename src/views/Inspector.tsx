@@ -1,16 +1,60 @@
 /** Right-hand panel with a quick read of the focused track. */
 
-import { LuExternalLink, LuFolderSearch, LuRefreshCw, LuTrash2 } from 'react-icons/lu';
-import type { TrackDetail, TrackRow } from '../api/types.ts';
+import { LuDisc3, LuExternalLink, LuFolderSearch, LuLoaderCircle, LuPause, LuPencil, LuPlay, LuRefreshCw, LuTrash2, LuUsb } from 'react-icons/lu';
+import type { KeyNotation, TrackDetail, TrackRow } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
+import { BpmText, KeyBadge, SourceNote } from '../components/DjMarks.tsx';
 import { EvidenceMark, ScoreMeter, SeverityIcon, StatusMark } from '../components/Marks.tsx';
 import { DASH, encodingShort, formatBytes, formatDb, formatDuration, formatHz, formatKbps, middleEllipsis, plural } from '../lib/format.ts';
 import { useDebouncedValue } from '../lib/persist.ts';
 import { navigate } from '../lib/router.ts';
 import { SCORE_HINT, SCORE_KINDS, SCORE_LABEL, SEVERITY } from '../lib/scores.ts';
 import { useCore } from '../state/core.tsx';
+import { usePlayer } from '../state/player.tsx';
 import type { TrackActions } from '../state/trackActions.tsx';
 import { useResource } from '../state/useResource.ts';
+
+/** Tempo, key and genre with where each came from. */
+export function DjStrip({ row, notation }: { row: TrackRow; notation: KeyNotation }) {
+  return (
+    <dl className="dj-strip">
+      <div>
+        <dt>BPM</dt>
+        <dd className="dj-strip-value">{row.djBpm != null ? <BpmText bpm={row.djBpm} variable={row.tempoVariable} /> : <span className="faint">{DASH}</span>}</dd>
+        <dd>
+          <SourceNote source={row.djBpmSource} />
+        </dd>
+      </div>
+      <div>
+        <dt>Key</dt>
+        <dd className="dj-strip-value">{row.djKey != null ? <KeyBadge keyId={row.djKey} notation={notation} size="lg" /> : <span className="faint">{DASH}</span>}</dd>
+        <dd>
+          <SourceNote source={row.djKeySource} />
+        </dd>
+      </div>
+      <div className="is-wide">
+        <dt>Genre</dt>
+        <dd className="dj-strip-value dj-strip-genre selectable" title={row.djGenre ?? undefined}>
+          {row.djGenre ?? <span className="faint">{DASH}</span>}
+        </dd>
+        <dd>
+          <SourceNote source={row.djGenreSource} />
+          {row.discogsUrl && row.djGenreSource === 'discogs' ? <DiscogsLink url={row.discogsUrl} /> : null}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+/** The Discogs release a genre came from (Discogs asks for this attribution). */
+export function DiscogsLink({ url }: { url: string }) {
+  const { bridge } = useCore();
+  return (
+    <button type="button" className="link dj-discogs-link" onClick={() => void bridge.openExternal(url).catch(() => undefined)} data-tip="Data provided by Discogs: open the release page">
+      release
+    </button>
+  );
+}
 
 export function Inspector({
   row,
@@ -27,7 +71,9 @@ export function Inspector({
   onRemove: (ids: number[], what?: string) => Promise<void>;
   onClearSelection: () => void;
 }) {
-  const { client } = useCore();
+  const { client, settings } = useCore();
+  const player = usePlayer();
+  const notation = settings?.keyNotation ?? 'camelot';
   // Findings load once the cursor rests on a row, without the (large) visualization data.
   const settled = useDebouncedValue(row, 120);
   const id = settled?.id ?? null;
@@ -44,6 +90,15 @@ export function Inspector({
           <p className="insp-sub">Actions apply to every selected track. Files on disk are never changed.</p>
         </div>
         <div className="insp-actions is-stacked">
+          <Button icon={LuPencil} onClick={() => actions.editDj({ ids: selectedIds })}>
+            Edit BPM, key and genre…
+          </Button>
+          <Button icon={LuUsb} onClick={() => actions.exportDj(selectedIds)}>
+            Export for DJ software…
+          </Button>
+          <Button icon={LuDisc3} onClick={() => void actions.lookupGenres(selectedIds)}>
+            Look up genres on Discogs…
+          </Button>
           <Button icon={LuRefreshCw} onClick={() => void actions.reanalyze(selectedIds)}>
             Re-analyze {plural(selectionCount, 'track')}
           </Button>
@@ -75,11 +130,26 @@ export function Inspector({
         .slice(0, 4)
     : [];
 
+  const current = player.track?.id === row.id;
+  const playing = current && (player.status === 'playing' || player.status === 'loading');
   return (
     <aside className="inspector" aria-label="Track details">
-      <div className="insp-head">
-        <h2 className="insp-title selectable">{row.displayTitle}</h2>
-        <p className="insp-sub selectable">{[row.artist, row.album].filter(Boolean).join(' – ') || row.fileName}</p>
+      <div className="insp-head insp-head-play">
+        {!row.missing ? (
+          <button
+            type="button"
+            className={`insp-play ${current ? 'is-current' : ''}`}
+            aria-label={playing ? 'Pause' : `Play ${row.displayTitle}`}
+            data-tip={playing ? 'Pause (P)' : 'Play (P)'}
+            onClick={() => player.toggle(row)}
+          >
+            {current && player.status === 'loading' ? <LuLoaderCircle className="spin" aria-hidden /> : playing ? <LuPause aria-hidden /> : <LuPlay aria-hidden />}
+          </button>
+        ) : null}
+        <div className="insp-head-text">
+          <h2 className="insp-title selectable">{row.displayTitle}</h2>
+          <p className="insp-sub selectable">{[row.artist, row.album].filter(Boolean).join(' – ') || row.fileName}</p>
+        </div>
       </div>
 
       {row.missing || row.status !== 'done' ? (
@@ -98,6 +168,21 @@ export function Inspector({
           ))}
         </div>
       ) : null}
+
+      <section className="insp-dj" aria-label="Tempo, key and genre">
+        <DjStrip row={row} notation={notation} />
+        <div className="insp-dj-actions">
+          <Button size="sm" icon={LuPencil} onClick={() => actions.editDj({ ids: [row.id], row })}>
+            Edit…
+          </Button>
+          <Button size="sm" icon={LuUsb} onClick={() => actions.exportDj([row.id])} disabled={row.missing}>
+            Export…
+          </Button>
+          <Button size="sm" icon={LuDisc3} variant="ghost" onClick={() => void actions.lookupGenres([row.id])} data-tip="Look up the genre on Discogs (sends artist and title)">
+            Discogs
+          </Button>
+        </div>
+      </section>
 
       {row.verdict ? (
         <div className="insp-verdict">

@@ -41,6 +41,7 @@ export function LibraryView({ folderId }: { folderId?: number }) {
         label={folder ? `Tracks in ${folder.name}` : 'Music library'}
         baseFilter={baseFilter}
         defaultSort={{ key: 'title', desc: false }}
+        offerDjDetection
         emptyBase={
           folderId != null ? (
             <EmptyState icon={LuLibrary} title="No tracks in this folder">

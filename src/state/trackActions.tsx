@@ -1,20 +1,19 @@
 /** Actions on tracks shared by the library, inspector, analysis and duplicates views. */
 
-import { useCallback, type ReactNode } from 'react';
-import type { Platform } from '../api/bridge.ts';
+import { useCallback, useState, type ReactNode } from 'react';
 import type { QueueResult } from '../api/client.ts';
 import type { LibraryFilter } from '../api/types.ts';
 import { useConfirm } from '../components/Dialog.tsx';
-import { formatCount, plural } from '../lib/format.ts';
+import { formatCount, formatSpan, plural } from '../lib/format.ts';
+import { revealLabel } from '../lib/platform.ts';
 import { navigate } from '../lib/router.ts';
+import { DjEditDialog, type DjEditTarget } from '../views/DjEditDialog.tsx';
+import { DjExportDialog, type ExportTarget } from '../views/DjExportDialog.tsx';
 import { useCore } from './core.tsx';
+import { useJobs } from './jobs.tsx';
 import { useToast, type ToastInput } from './toasts.tsx';
 
-export function revealLabel(platform: Platform): string {
-  if (platform === 'macos') return 'Reveal in Finder';
-  if (platform === 'windows') return 'Show in File Explorer';
-  return 'Show in folder';
-}
+export { revealLabel };
 
 /** Toast describing what a request to analyze tracks did. */
 export function describeQueued(r: QueueResult): ToastInput {
@@ -43,7 +42,13 @@ export interface TrackActions {
   exportCsv: (target: { ids: number[] } | { filter: LibraryFilter }, count: number) => Promise<void>;
   reveal: (path: string) => Promise<void>;
   revealText: string;
-  /** Render this once in the view (confirmation dialog). */
+  /** Opens the dialog that corrects tempo, key and genre. */
+  editDj: (target: DjEditTarget) => void;
+  /** Opens the DJ export dialog for these tracks. */
+  exportDj: (ids: number[]) => void;
+  /** Asks, then looks up genres on Discogs (artist and title only). */
+  lookupGenres: (ids: number[]) => Promise<void>;
+  /** Render this once in the view (confirmation and DJ dialogs). */
   dialogs: ReactNode;
 }
 
@@ -68,7 +73,10 @@ function exportName(): string {
 export function useTrackActions(): TrackActions {
   const { client, bridge } = useCore();
   const toast = useToast();
-  const [confirm, dialogs] = useConfirm();
+  const jobs = useJobs();
+  const [confirm, confirmDialog] = useConfirm();
+  const [editTarget, setEditTarget] = useState<DjEditTarget | null>(null);
+  const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
 
   const reanalyze = useCallback(
     async (ids: number[]) => {
@@ -147,5 +155,69 @@ export function useTrackActions(): TrackActions {
     [bridge, toast],
   );
 
-  return { reanalyze, remove, exportCsv, reveal, revealText: revealLabel(bridge.platform), dialogs };
+  const editDj = useCallback((target: DjEditTarget) => {
+    if (target.ids.length) setEditTarget(target);
+  }, []);
+  const exportDj = useCallback((ids: number[]) => {
+    if (ids.length) setExportTarget({ ids });
+  }, []);
+
+  const lookupGenres = useCallback(
+    async (ids: number[]) => {
+      if (ids.length === 0) return;
+      try {
+        const st = await client.discogsStatus();
+        if (!st.configured) {
+          const { confirmed } = await confirm({
+            title: 'Connect Discogs first',
+            body: (
+              <>
+                <p>Genre lookups use your free Discogs account. Add a personal access token in Settings → Genres; it stays on this computer.</p>
+                <p className="faint">Without Discogs, genres come from the files' tags, from folder names, or from what you type.</p>
+              </>
+            ),
+            confirmLabel: 'Open Settings',
+            tone: 'primary',
+          });
+          if (confirmed) navigate({ view: 'settings' });
+          return;
+        }
+        if (st.running) {
+          toast({ tone: 'warning', title: 'A Discogs lookup is already running' });
+          return;
+        }
+        const { confirmed, option } = await confirm({
+          title: ids.length === 1 ? 'Look up the genre on Discogs?' : `Look up genres for ${plural(ids.length, 'track')} on Discogs?`,
+          body: (
+            <>
+              <p>
+                SONORA sends the artist and title of {ids.length === 1 ? 'this track' : 'each track'} to Discogs, one request a second
+                {ids.length > 5 ? ` (about ${formatSpan(ids.length * 1.1)})` : ''}. Nothing else leaves this computer.
+              </p>
+              <p className="faint">Tracks that already have a genre keep it unless you choose to replace it.</p>
+            </>
+          ),
+          confirmLabel: 'Look up genres',
+          tone: 'primary',
+          option: { label: 'Replace genres the tracks already have' },
+        });
+        if (!confirmed) return;
+        await client.discogsLookup(ids, option);
+        jobs.started('discogs');
+      } catch (e) {
+        toast({ tone: 'error', title: 'Could not start the Discogs lookup', body: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [client, confirm, toast, jobs],
+  );
+
+  const dialogs = (
+    <>
+      {confirmDialog}
+      <DjEditDialog target={editTarget} onClose={() => setEditTarget(null)} />
+      <DjExportDialog target={exportTarget} onClose={() => setExportTarget(null)} />
+    </>
+  );
+
+  return { reanalyze, remove, exportCsv, reveal, revealText: revealLabel(bridge.platform), editDj, exportDj, lookupGenres, dialogs };
 }

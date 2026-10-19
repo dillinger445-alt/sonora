@@ -460,3 +460,29 @@ fn playback_uses_the_original_or_one_decoded_copy() {
     std::fs::remove_file(&src).unwrap();
     assert_eq!(call_err(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["wav"]}}"#)), "playback_failed");
 }
+
+#[test]
+fn equally_good_copies_keep_the_chosen_track() {
+    // The same audio as WAV and AIFF: neither is better, so each exports itself.
+    let e = env("samecopies");
+    let opts = SynthOptions { seconds: 12.0, ..Default::default() };
+    write(&e.music.join("Loop.wav"), opts.clone(), None);
+    let audio = quantize16(&render(&opts));
+    let mut w = PcmWriter::create(&e.music.join("Loop.aiff"), PcmContainer::Aiff, opts.sample_rate, 2, 16, None, None).unwrap();
+    w.write(&audio).unwrap();
+    w.finish().unwrap();
+    let app = open(&e);
+    import(&app, &e.music);
+    let all = rows(&app, "null", "title");
+    let wav = id(all.iter().find(|r| s(r, "format") == Some("WAV")).unwrap());
+    let aiff = id(all.iter().find(|r| s(r, "format") == Some("AIFF")).unwrap());
+    for chosen in [wav, aiff] {
+        let plan = call(&app, "djexport.plan", &format!(r#"{{"ids": [{chosen}], "format": "aiff"}}"#));
+        let item = &plan.get("items").and_then(Value::as_array).unwrap()[0];
+        assert_eq!(item.get("sourceId").and_then(Value::as_i64), Some(chosen), "{}", plan.to_string_compact());
+        assert_eq!(item.get("betterCopy").and_then(Value::as_bool), Some(false));
+    }
+    // Both chosen: one recording, exported once.
+    let plan = call(&app, "djexport.plan", &format!(r#"{{"ids": [{wav}, {aiff}], "format": "aiff"}}"#));
+    assert_eq!(plan.get("exported").and_then(Value::as_i64), Some(1), "{}", plan.to_string_compact());
+}

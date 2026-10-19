@@ -72,12 +72,17 @@ pub struct KeyResult {
 /// Streaming pitch-class collector; [`KeyMeter::finish`] estimates the key.
 pub struct KeyMeter {
     ch: usize,
+    /// Signals analysed separately (the channels, folded onto two), whose
+    /// power spectra are added: a channel with inverted polarity would cancel
+    /// the other in a mono sum.
+    lanes: usize,
     n: usize,
     hop: usize,
     fs: f64,
     fft: RealFft,
     window: Vec<f32>,
-    mono: Vec<f32>,
+    pending: Vec<Vec<f32>>,
+    power: Vec<f32>,
     lo_bin: usize,
     hi_bin: usize,
     buf: Vec<f32>,
@@ -112,14 +117,17 @@ impl KeyMeter {
         let df = fs_f / n as f64;
         let lo_bin = ((LO_HZ / df).floor() as usize).max(NEIGHBOURHOOD + 1);
         let hi_bin = ((HI_HZ.min(fs_f * 0.45) / df).ceil() as usize).min(n / 2 - NEIGHBOURHOOD - 2);
+        let lanes = ch.clamp(1, 2);
         KeyMeter {
             ch: ch.max(1),
+            lanes,
             n,
             hop,
             fs: fs_f,
             fft: RealFft::new(n),
             window: hann(n),
-            mono: Vec::with_capacity(n + 32_768),
+            pending: (0..lanes).map(|_| Vec::with_capacity(n + 32_768)).collect(),
+            power: vec![0.0; n / 2 + 1],
             lo_bin,
             hi_bin: hi_bin.max(lo_bin + 1),
             buf: vec![0.0; n],
@@ -145,31 +153,46 @@ impl KeyMeter {
         if self.frames >= self.max_frames {
             return;
         }
-        let inv = 1.0 / self.ch as f32;
-        for fr in data.chunks_exact(self.ch) {
-            self.mono.push(fr.iter().sum::<f32>() * inv);
+        // Channel c goes to lane c % lanes (more than two channels are averaged onto two).
+        let (ch, lanes) = (self.ch, self.lanes);
+        for (l, lane) in self.pending.iter_mut().enumerate() {
+            let count = (l..ch).step_by(lanes).count().max(1);
+            let inv = 1.0 / count as f32;
+            for fr in data.chunks_exact(ch) {
+                lane.push((l..ch).step_by(lanes).map(|c| fr[c]).sum::<f32>() * inv);
+            }
         }
         let mut pos = 0;
-        while pos + self.n <= self.mono.len() {
+        while pos + self.n <= self.pending[0].len() {
             self.frame(pos);
             pos += self.hop;
             if self.frames >= self.max_frames {
-                self.mono.clear();
+                self.pending.iter_mut().for_each(Vec::clear);
                 return;
             }
         }
-        self.mono.drain(..pos);
+        for lane in &mut self.pending {
+            lane.drain(..pos);
+        }
     }
 
     fn frame(&mut self, pos: usize) {
-        let x = &self.mono[pos..pos + self.n];
-        for ((b, &v), &w) in self.buf.iter_mut().zip(x).zip(&self.window) {
-            *b = v * w;
-        }
-        self.fft.forward(&self.buf, &mut self.re, &mut self.im);
         let (lo, hi) = (self.lo_bin - NEIGHBOURHOOD, self.hi_bin + NEIGHBOURHOOD + 1);
+        self.power[lo..=hi].fill(0.0);
+        for l in 0..self.lanes {
+            let x = &self.pending[l][pos..pos + self.n];
+            for ((b, &v), &w) in self.buf.iter_mut().zip(x).zip(&self.window) {
+                *b = v * w;
+            }
+            self.fft.forward(&self.buf, &mut self.re, &mut self.im);
+            for k in lo..=hi {
+                self.power[k] += self.re[k] * self.re[k] + self.im[k] * self.im[k];
+            }
+        }
+        // RMS over the lanes: identical channels read as one would.
+        let inv_lanes = 1.0 / self.lanes as f32;
         for k in lo..=hi {
-            self.mag[k] = (self.re[k] * self.re[k] + self.im[k] * self.im[k]).sqrt() * self.scale;
+            self.mag[k] = (self.power[k] * inv_lanes).sqrt() * self.scale;
         }
         self.prefix[lo] = 0.0;
         for k in lo..=hi {

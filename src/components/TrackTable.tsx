@@ -3,8 +3,8 @@
  * in pages as they scroll into view, so libraries of any size stay fast.
  *
  * Keyboard (the grid itself takes focus): ↑/↓ move, Shift extends, Space
- * toggles, Enter opens, ⌘/Ctrl+A selects all, Esc clears, Delete asks to
- * remove.
+ * toggles, Enter opens, P plays or pauses, ⌘/Ctrl+A selects all, Esc
+ * clears, Delete asks to remove.
  *
  * The active row, the selection and the Shift anchor are tracked by track id,
  * not by position: rows re-sort while a scan updates them, and the active
@@ -30,9 +30,10 @@ import { LuArrowDown, LuArrowUp } from 'react-icons/lu';
 import type { LibraryFilter, ScoreKind, Sort, TrackRow } from '../api/types.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
 import { throttle } from '../state/emitter.ts';
+import { usePlayer } from '../state/player.tsx';
 import { Checkbox } from './Controls.tsx';
 import { ErrorState } from './Layout.tsx';
-import { fitColumns, trackColumns, type Column } from './trackColumns.tsx';
+import { ASCENDING_FIRST, fitColumns, trackColumns, type Column, type ColumnContext } from './trackColumns.tsx';
 
 const ROW = 32;
 const PAGE = 200;
@@ -66,8 +67,6 @@ export interface TrackTableProps {
   handle?: Ref<TrackTableHandle>;
 }
 
-const TEXT_SORTS = new Set(['title', 'artist', 'album', 'format', 'path', 'status']);
-
 type PendingMove =
   /** A keyboard move to a row that has not loaded yet. */
   | { kind: 'index'; index: number; extend: boolean }
@@ -94,7 +93,8 @@ export function TrackTable({
   refreshOn = ['library.changed', 'scan.finished', 'library.indexed'],
   handle,
 }: TrackTableProps) {
-  const { client } = useCore();
+  const { client, settings } = useCore();
+  const player = usePlayer();
   const gridId = useId();
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -281,6 +281,14 @@ export function TrackTable({
 
   const columns = useMemo(() => fitColumns(trackColumns(scoreKind), width), [scoreKind, width]);
   const template = `36px ${columns.map((c) => c.width).join(' ')}`;
+  const notation = settings?.keyNotation ?? 'camelot';
+  const playingId = player.track?.id ?? null;
+  const playingActive = player.status === 'playing' || player.status === 'loading';
+  const toggle = player.toggle;
+  const cellCtx = useMemo<ColumnContext>(
+    () => ({ scoreKind, notation, playing: playingId != null ? { id: playingId, active: playingActive } : null, onPlay: toggle }),
+    [scoreKind, notation, playingId, playingActive, toggle],
+  );
 
   // Report the active track.
   useEffect(() => {
@@ -527,6 +535,13 @@ export function TrackTable({
           selectAll();
         }
         break;
+      case 'p':
+      case 'P':
+        if (!mod && !e.altKey && settled && activeRow && !activeRow.missing) {
+          e.preventDefault();
+          player.toggle(activeRow);
+        }
+        break;
       default:
         break;
     }
@@ -585,7 +600,7 @@ export function TrackTable({
   const headerClick = (c: Column) => {
     if (!c.sortKey) return;
     if (sort.key === c.sortKey) onSort({ key: c.sortKey, desc: !sort.desc });
-    else onSort({ key: c.sortKey, desc: !TEXT_SORTS.has(c.sortKey) });
+    else onSort({ key: c.sortKey, desc: !ASCENDING_FIRST.has(c.sortKey) });
   };
 
   const activeId = activeRow?.id ?? null;
@@ -611,7 +626,7 @@ export function TrackTable({
           role="row"
           aria-rowindex={i + 2}
           aria-selected={selected}
-          className={`trow ${selected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''} ${r.missing ? 'is-missing' : ''}`}
+          className={`trow ${selected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''} ${r.missing ? 'is-missing' : ''} ${r.id === playingId ? 'is-playing' : ''}`}
           style={{ top, gridTemplateColumns: template }}
           onClick={(e) => onRowClick(e, i, r)}
           onDoubleClick={() => onOpen(r)}
@@ -621,7 +636,7 @@ export function TrackTable({
           </div>
           {columns.map((c) => (
             <div key={c.id} role="gridcell" className={`tcell tcell-${c.id} ${c.align === 'end' ? 'is-end' : ''}`}>
-              {c.render(r, scoreKind)}
+              {c.render(r, cellCtx)}
             </div>
           ))}
         </div>,

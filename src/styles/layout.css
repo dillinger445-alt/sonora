@@ -3,7 +3,8 @@
 .app {
   display: grid;
   grid-template-columns: var(--w-rail) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) var(--h-status);
+  /* Views, the player (only while a track is loaded), the status bar. */
+  grid-template-rows: minmax(0, 1fr) auto var(--h-status);
   height: 100vh;
   width: 100vw;
 }
@@ -274,7 +275,7 @@
 /* ------------------------------------------------------------- status bar */
 
 .statusbar {
-  grid-row: 2;
+  grid-row: 3;
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
@@ -395,18 +396,28 @@
   margin-right: 0;
 }
 
+/* Two rows: search, score shown and actions; then the filters. */
 .toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.toolbar-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 10px;
-  padding-bottom: 10px;
 }
 
 .toolbar-filters {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 2px;
+  /* Ghost buttons: line their labels up with the search field. */
+  margin-left: -8px;
 }
 
 .toolbar-end {

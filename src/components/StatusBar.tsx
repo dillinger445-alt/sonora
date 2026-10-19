@@ -1,8 +1,51 @@
-import { LuShieldCheck, LuTriangleAlert } from 'react-icons/lu';
+import { LuDisc3, LuShieldCheck, LuTriangleAlert, LuUsb, LuX } from 'react-icons/lu';
 import { formatCount, formatEta } from '../lib/format.ts';
 import { formatRoute } from '../lib/router.ts';
 import { useCore, useScan } from '../state/core.tsx';
+import { useJobs } from '../state/jobs.tsx';
 import { ProgressBar } from './Controls.tsx';
+
+/** Exports and Discogs lookups running in the background. */
+function JobItems() {
+  const jobs = useJobs();
+  const ex = jobs.exportProgress;
+  const dg = jobs.discogsProgress;
+  return (
+    <>
+      {jobs.exportRunning ? (
+        <span className="sb-item sb-job" role="status">
+          <LuUsb aria-hidden />
+          <span>Exporting</span>
+          {ex ? (
+            <span className="num">
+              {formatCount(Math.min(ex.done + 1, ex.total))}/{formatCount(ex.total)}
+            </span>
+          ) : null}
+          <span className="sb-job-bar">
+            <ProgressBar value={ex?.fraction ?? 0} label="Export progress" size="sm" />
+          </span>
+          <button type="button" className="sb-job-stop" aria-label="Stop the export" data-tip="Stop the export" onClick={jobs.cancelExport}>
+            <LuX aria-hidden />
+          </button>
+        </span>
+      ) : null}
+      {jobs.discogsRunning ? (
+        <span className="sb-item sb-job" role="status">
+          <LuDisc3 aria-hidden />
+          <span>Discogs genres</span>
+          {dg ? (
+            <span className="num">
+              {formatCount(Math.min(dg.done + 1, dg.total))}/{formatCount(dg.total)}
+            </span>
+          ) : null}
+          <button type="button" className="sb-job-stop" aria-label="Stop the Discogs lookup" data-tip="Stop the lookup" onClick={jobs.cancelDiscogs}>
+            <LuX aria-hidden />
+          </button>
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 export function StatusBar() {
   const { overview, info } = useCore();
@@ -58,6 +101,7 @@ export function StatusBar() {
         {left}
       </a>
       <div className="sb-right">
+        <JobItems />
         {ffmpeg && !ffmpeg.available ? (
           <a className="sb-item t-amber" href={formatRoute({ view: 'settings' })} data-tip="Without FFmpeg, only WAV, AIFF and FLAC can be analyzed. See Settings.">
             <LuTriangleAlert aria-hidden />
@@ -66,7 +110,7 @@ export function StatusBar() {
         ) : null}
         <span
           className="sb-item"
-          data-tip="Analysis runs on this computer. Audio, results and file paths are never uploaded, and SONORA makes no network requests."
+          data-tip="Analysis and playback run on this computer. Audio, results and file paths are never uploaded. SONORA goes online only for Discogs genre lookups you start, which send artist and title."
         >
           <LuShieldCheck aria-hidden />
           Local only

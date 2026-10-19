@@ -130,14 +130,16 @@ pub fn base_name(t: &TrackRow) -> String {
     }
 }
 
-/// Ranks copies of one recording (best first): score, lossless, resolution, bitrate, size.
-fn rank(t: &TrackRow) -> (i64, i64, i64, i64, i64) {
+/// Ranks copies of one recording (best first): score, lossless, resolution,
+/// bitrate. Copies that rank the same (identical audio in WAV and AIFF, say)
+/// are equally good, and the track the user chose is kept.
+fn rank(t: &TrackRow) -> (i64, i64, i64, i64) {
     (
         t.overall.map(|v| (v * 10.0) as i64).unwrap_or(-1),
         t.lossless.map(|l| l as i64).unwrap_or(0),
         t.bit_depth.unwrap_or(0) * 1_000_000 + t.sample_rate.unwrap_or(0),
-        t.bitrate_kbps.map(|v| v as i64).unwrap_or(0),
-        t.size,
+        // Lossless bitrates only measure compression (FLAC against WAV).
+        if t.lossless == Some(true) { 0 } else { t.bitrate_kbps.map(|v| v.round() as i64).unwrap_or(0) },
     )
 }
 

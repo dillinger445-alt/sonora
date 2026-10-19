@@ -1,14 +1,19 @@
 /** Column definitions shared by the track tables. */
 
 import type { ReactNode } from 'react';
-import type { ScoreKind, SortKey, TrackRow } from '../api/types.ts';
+import { LuPause, LuPlay } from 'react-icons/lu';
+import type { KeyNotation, ScoreKind, SortKey, TrackRow } from '../api/types.ts';
 import { DASH, encodingShort, formatDb, formatDuration, formatRateKhz } from '../lib/format.ts';
 import { confidenceTone } from '../lib/scores.ts';
+import { BpmText, KeyBadge } from './DjMarks.tsx';
 import { FlagList, ScoreCell, StatusMark } from './Marks.tsx';
 
 export type ColumnId =
   | 'title'
   | 'artist'
+  | 'bpm'
+  | 'key'
+  | 'genre'
   | 'format'
   | 'duration'
   | 'lufs'
@@ -33,7 +38,39 @@ export interface Column {
   sortKey?: SortKey;
   /** Lower survives longer when space runs out; 0 = always shown. */
   priority: number;
-  render: (t: TrackRow, scoreKind: ScoreKind) => ReactNode;
+  render: (t: TrackRow, ctx: ColumnContext) => ReactNode;
+}
+
+/** What cells need besides the row. */
+export interface ColumnContext {
+  scoreKind: ScoreKind;
+  notation: KeyNotation;
+  /** The track loaded in the player, and whether it is playing (or about to). */
+  playing: { id: number; active: boolean } | null;
+  onPlay?: (t: TrackRow) => void;
+}
+
+function PlayButton({ t, ctx }: { t: TrackRow; ctx: ColumnContext }) {
+  const onPlay = ctx.onPlay;
+  if (!onPlay || t.missing) return <span className="row-play-slot" aria-hidden />;
+  const current = ctx.playing?.id === t.id;
+  const active = current && !!ctx.playing?.active;
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      className={`row-play ${current ? 'is-current' : ''}`}
+      aria-label={active ? `Pause ${t.displayTitle}` : `Play ${t.displayTitle}`}
+      data-tip={active ? 'Pause (P)' : 'Play (P)'}
+      onClick={(e) => {
+        e.stopPropagation();
+        onPlay(t);
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      {active ? <LuPause aria-hidden /> : <LuPlay aria-hidden />}
+    </button>
+  );
 }
 
 const kHz = (hz: number | null) => (hz == null ? DASH : formatRateKhz(hz));
@@ -53,6 +90,9 @@ export function scoreColumn(kind: ScoreKind, emphasis: boolean): Column {
   };
 }
 
+/** Sort keys whose first click sorts ascending (words, keys, tempo). */
+export const ASCENDING_FIRST = new Set<SortKey>(['title', 'artist', 'album', 'format', 'path', 'status', 'genre', 'key', 'bpm']);
+
 export function trackColumns(scoreKind: ScoreKind): Column[] {
   return [
     {
@@ -62,8 +102,9 @@ export function trackColumns(scoreKind: ScoreKind): Column[] {
       min: 200,
       sortKey: 'title',
       priority: 0,
-      render: (t) => (
+      render: (t, ctx) => (
         <span className="cell-title">
+          <PlayButton t={t} ctx={ctx} />
           <StatusMark track={t} compact />
           <span className="ellipsis" title={t.displayTitle}>
             {t.displayTitle}
@@ -79,6 +120,40 @@ export function trackColumns(scoreKind: ScoreKind): Column[] {
       sortKey: 'artist',
       priority: 4,
       render: (t) => <span className="ellipsis muted">{t.artist ?? ''}</span>,
+    },
+    {
+      id: 'bpm',
+      label: 'BPM',
+      description: 'Tempo in beats per minute, within the BPM range set in Settings',
+      width: '54px',
+      min: 54,
+      align: 'end',
+      sortKey: 'bpm',
+      priority: 2,
+      render: (t) => <BpmText bpm={t.djBpm} variable={t.tempoVariable} />,
+    },
+    {
+      id: 'key',
+      label: 'Key',
+      description: 'Musical key, in the notation chosen in Settings',
+      width: '60px',
+      min: 60,
+      sortKey: 'key',
+      priority: 2,
+      render: (t, ctx) => <KeyBadge keyId={t.djKey} notation={ctx.notation} />,
+    },
+    {
+      id: 'genre',
+      label: 'Genre',
+      width: 'minmax(84px, 0.9fr)',
+      min: 96,
+      sortKey: 'genre',
+      priority: 5,
+      render: (t) => (
+        <span className="ellipsis muted" title={t.djGenre ?? undefined}>
+          {t.djGenre ?? ''}
+        </span>
+      ),
     },
     {
       id: 'format',

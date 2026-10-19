@@ -5,7 +5,7 @@
  */
 
 import { Fragment, useId, useMemo, useState } from 'react';
-import { LuCopy, LuExternalLink, LuFingerprint, LuFolderSearch, LuTrash2 } from 'react-icons/lu';
+import { LuCopy, LuExternalLink, LuFingerprint, LuFolderSearch, LuPause, LuPlay, LuTrash2 } from 'react-icons/lu';
 import type { DuplicateGroup, DuplicateKind, DuplicateMember } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
 import { ProgressBar, TabList, tabId } from '../components/Controls.tsx';
@@ -29,6 +29,7 @@ import {
 import { focusMain } from '../lib/focus.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
+import { usePlayer } from '../state/player.tsx';
 import { useToast } from '../state/toasts.tsx';
 import { useTrackActions } from '../state/trackActions.tsx';
 import { useResource } from '../state/useResource.ts';
@@ -56,6 +57,7 @@ const COMPARE_ROWS: { label: string; value: (t: DuplicateMember) => string; num?
 
 function GroupBlock({ g, actions }: { g: DuplicateGroup; actions: ReturnType<typeof useTrackActions> }) {
   const [compare, setCompare] = useState(false);
+  const player = usePlayer();
   const fingerprint = g.kind === 'same_recording' || g.kind === 'alternate';
   // Identical files or identical audio have no better copy; suggest one only between encodings.
   const keep = fingerprint ? g.suggestedKeep : null;
@@ -190,6 +192,15 @@ function GroupBlock({ g, actions }: { g: DuplicateGroup; actions: ReturnType<typ
                 {middleEllipsis(m.path, 70)}
               </td>
               <td className="cell-actions">
+                {/* Listening to copies one after another is the surest comparison. */}
+                <IconButton
+                  size="sm"
+                  label={player.isPlaying(m.id) ? 'Pause' : `Play ${m.displayTitle}`}
+                  icon={player.isPlaying(m.id) ? LuPause : LuPlay}
+                  className={player.track?.id === m.id ? 'is-current' : ''}
+                  onClick={() => player.toggle(m)}
+                  disabled={m.missing}
+                />
                 <IconButton size="sm" label="Open analysis" icon={LuExternalLink} onClick={() => navigate({ view: 'track', id: m.id })} disabled={m.status !== 'done'} />
                 <IconButton size="sm" label={actions.revealText} icon={LuFolderSearch} onClick={() => void actions.reveal(m.path)} disabled={m.missing} />
                 <IconButton size="sm" label="Remove from library (the file stays on disk)" icon={LuTrash2} tone="danger" onClick={() => void actions.remove([m.id], `“${m.displayTitle}”`).then((ok) => ok && focusMain())} />

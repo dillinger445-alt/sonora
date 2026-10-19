@@ -15,16 +15,29 @@ phase problems, DC offset, padded bit depth, upsampling, and duplicates
 across formats. When the evidence is inconclusive it says so instead of
 guessing.
 
+For DJs, it detects every track's tempo and key (shown in Camelot, Open Key
+or musical notation), finds genres, filters by BPM range and by keys that mix
+on the Camelot wheel, plays tracks, and exports them as AIFF, WAV or MP3
+files with tempo, key, genre and artwork in the tags, plus a rekordbox
+playlist. [docs/DJ.md](docs/DJ.md) describes how.
+
 ![Track analysis](docs/screenshots/track.png)
+
+![The key filter on the Camelot wheel, with a track playing](docs/screenshots/dj.png)
 
 ## Privacy
 
-SONORA is local-first. Analysis runs on your computer, and audio, results
-and file paths never leave it. The app makes no network requests: no
-uploads, analytics, telemetry or update checks. The desktop build's
-content-security policy blocks remote content. Your audio files are only
-ever read, never modified, moved or deleted. "Remove from library" removes
-SONORA's index entry only.
+SONORA is local-first. Analysis and playback run on your computer, and
+audio, results and file paths never leave it. There are no uploads,
+analytics, telemetry or update checks. The one network feature is optional
+and runs only when you start it: looking up genres on Discogs sends the
+artist and title of the tracks you chose (and your Discogs token) to
+Discogs, nothing else. Without a token, SONORA makes no network requests.
+The desktop build's content-security policy blocks remote content. Your
+audio files are only ever read, never modified, moved or deleted: tempo,
+key and genre corrections stay in SONORA's library, and exports write new
+files without replacing any. "Remove from library" removes SONORA's index
+entry only.
 
 ## Features
 
@@ -52,9 +65,31 @@ SONORA's index entry only.
   energy by band, and full technical measurements (EBU R128 loudness, true
   peak, crest factor, PLR, stereo, silence and integrity).
 - **Library**: a virtualized table for large libraries, with search, sort,
-  filters (score range, format, issue, status), multi-select, keyboard
-  navigation, a details panel, CSV export, re-analysis, Reveal in Finder or
-  File Explorer, and removal from the library.
+  filters (score range, format, issue, status, BPM, key, genre),
+  multi-select, keyboard navigation, a details panel, CSV export,
+  re-analysis, Reveal in Finder or File Explorer, and removal from the
+  library.
+- **Tempo and key**: detected during analysis, with a confidence, the
+  runner-up key, the tuning (A = 432 Hz and off-speed rips are read
+  correctly) and flags for drifting tempos and key changes. Keys are shown
+  in Camelot, Open Key or musical notation, and can be typed in any of
+  them. A BPM range setting decides half- and double-time readings.
+- **Genres**: from the tags, from folder names if you want, from your own
+  corrections, or looked up on Discogs for tracks you choose (optional,
+  with your free Discogs token).
+- **DJ filters**: a BPM range (optionally matching half and double time),
+  keys picked on a Camelot wheel with their harmonic neighbours, and
+  genres. While a track plays, one click finds tracks near its tempo or in
+  keys that mix with it.
+- **Corrections**: fix tempo (×2, ÷2), key and genre for one track or many;
+  the files are not touched.
+- **Export for DJ software**: AIFF (recommended), WAV or MP3 320; CD
+  quality for every player, or up to 24-bit/48 kHz. Tempo, key, genre and
+  artwork in ID3 tags, the best copy of each recording, files checked after
+  writing, never overwriting, and a rekordbox.xml playlist.
+- **Listening**: play any track inside the app, with a waveform seek bar,
+  P to play and pause, media keys, click-to-play on the analysis charts,
+  and play buttons in Duplicates to compare copies by ear.
 - **Needs attention**: problem tracks grouped by clipping, lossy source, low
   bitrate, integrity, weak-evidence issues, failures and missing files.
 - **Duplicates**: identical files (same file hash), identical audio in
@@ -64,9 +99,9 @@ SONORA's index entry only.
   ever deleted automatically.
 - **History**: every scan with its summary and results.
 - **Settings**: parallel workers, longest file analyzed, rescan behaviour,
-  hidden files and symlinks, default score view, database location and
-  backup, cache management, FFmpeg status, version and privacy
-  information.
+  hidden files and symlinks, default score view, key notation, BPM range,
+  folder genres, the Discogs token, database location and backup, cache
+  management, FFmpeg status, version and privacy information.
 - **Accessibility**: full keyboard use (table, menus, dialogs, tabs, chart
   cursor), visible focus, labels and tooltips, confirmation before
   destructive actions, and reduced-motion support.
@@ -153,12 +188,12 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 
 | Part | Responsibility |
 | --- | --- |
-| `crates/sonora-engine` | Decoding, metadata, DSP (K-weighting, true-peak interpolation, FFT), measurements, findings and scores. Std-only Rust. |
-| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, CSV export, settings, the JSON API used by both shells, structured logs. |
+| `crates/sonora-engine` | Decoding, metadata, DSP (K-weighting, true-peak interpolation, FFT), measurements including tempo and key, findings and scores, and the export writers (AIFF, WAV, ID3 tags, MP3 re-tagging, conversion). Std-only Rust. |
+| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, the Discogs lookup, playback preparation, settings, the JSON API used by both shells, structured logs. |
 | `crates/sonora-json` | A small JSON value type, parser and serializer. |
 | `crates/sonora-cli` | `sonora analyze / measure / compare / fixtures`, for development and calibration. |
-| `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests. Rejects other hosts and origins. |
-| `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog and opener plugins and bundles FFmpeg. |
+| `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests, plus the files prepared for playback (with range requests). Rejects other hosts and origins. |
+| `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog and opener plugins and bundles FFmpeg. The asset protocol serves audio for playback, limited at run time to the files the core prepared. |
 | `src/` | The interface: `api/` (bridges, typed client), `state/` (core context, imports, toasts, track actions), `views/`, `components/`, `charts/`, `lib/` (formatting, scores, routing, visual decoding), `styles/` (design tokens). |
 
 **Design decisions and trade-offs:**
@@ -187,22 +222,29 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 158 Rust tests: DSP, decoders, scoring, indexing, scan queue, database, API
-npm run test:unit          # 20 interface unit tests (formatting, scores, routing, paths, visual decoding)
+npm run test:rust          # 207 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, API
+npm run test:unit          # 26 interface unit tests (formatting, key notations, scores, routing, paths, visual decoding)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 13 Playwright tests: real interface + real core on a generated corpus
+npm run build && npm run test:e2e   # 18 Playwright tests: real interface + real core on a generated corpus
 ```
 
-One Rust test is Unix-only (symlink loops), so Windows runs 157. The
+One Rust test is Unix-only (symlink loops), so Windows runs 206. The
 FFmpeg-based checks are skipped with a note when FFmpeg is not installed.
+Tempo and key detection are tested on synthetic tracks: tempos from 90 to
+174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
+A = 440 Hz, a channel with inverted polarity, tempo changes, and noise and
+sustained chords that must get no tempo.
 
 The end-to-end suite imports the corpus through the interface and
 exercises background analysis, search, sort, filter, keyboard navigation
 (including Delete acting on the track the details panel shows), the track
 analysis view and its charts, Needs attention and its tabs, duplicates and
 fingerprint comparison, CSV export, removal with confirmation (and checks
-the file is untouched), folder rescans, settings persistence, history and
-keyboard use of menus.
+the file is untouched), folder rescans, settings persistence, history,
+keyboard use of menus, the BPM and Camelot-wheel filters (by mouse and
+keyboard), key notations, corrections (checking the file is untouched), the
+DJ export with its rekordbox.xml, playback (including a format the browser
+cannot play) and the Discogs token prompt.
 
 ## Troubleshooting
 
@@ -237,6 +279,13 @@ There are more answers in [docs/BUILDING.md](docs/BUILDING.md#troubleshooting).
 - Pause takes effect between files: files already being analyzed finish
   first.
 - Only the dark theme exists.
+- Key detection confuses relative keys (A minor and C major, which share a
+  Camelot number and still mix) more than anything else, and tempo
+  detection can read swung or sparse rhythms at half or double time. Both
+  can be corrected in a click. [docs/DJ.md](docs/DJ.md#limits) lists the
+  limits.
+- DJ exports carry no beat grids, cue points or loops; DJ software computes
+  its own.
 - Dependencies are pinned to minor versions, but no lockfiles are committed
   yet. Commit the `package-lock.json` and `src-tauri/Cargo.lock` that the
   first install and build create.

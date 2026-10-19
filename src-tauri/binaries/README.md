@@ -74,7 +74,8 @@ distributing FFmpeg and must meet its licence terms:
   <https://ffmpeg.org/download.html>. Keeping a copy of those sources alongside
   each release is the simplest way to honour this.
 
-SONORA only needs FFmpeg's decoders, which are all LGPL. To avoid the GPL
+SONORA only needs FFmpeg's decoders and resampler, and for MP3 exports the
+LAME encoder (libmp3lame); all of these are LGPL. To avoid the GPL
 entirely, place an LGPL-only build here instead, using the naming scheme
 above: for example the `lgpl` variants of
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (Windows, Linux),
