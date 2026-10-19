@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+dist/
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Downloaded FFmpeg sidecars (fetched per platform by scripts/fetch-ffmpeg.mjs)
+src-tauri/binaries/ffmpeg-*
+src-tauri/binaries/ffprobe-*
+
+# Generated fixtures and test output
+fixtures/library/
+test-results/
+playwright-report/
+e2e/.data/
+.sonora-dev-data/
+
+*.log
+.DS_Store
+Thumbs.db

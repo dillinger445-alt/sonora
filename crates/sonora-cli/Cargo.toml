@@ -1,0 +1,14 @@
+[package]
+name = "sonora-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line front end for the SONORA analysis engine (analysis, measurement tables, fixture generation)."
+publish = false
+
+[[bin]]
+name = "sonora"
+path = "src/main.rs"
+
+[dependencies]
+sonora-engine = { path = "../sonora-engine" }
+sonora-json = { path = "../sonora-json" }

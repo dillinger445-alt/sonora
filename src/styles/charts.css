@@ -1,0 +1,185 @@
+/* ---------------------------------------------------------- analysis lanes */
+
+.lanes {
+  position: relative;
+  margin-top: 6px;
+  outline: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.lanes:focus-visible {
+  box-shadow: 0 0 0 1px var(--c-lime-line);
+  border-radius: 2px;
+}
+
+.lane {
+  position: relative;
+}
+
+.lane canvas {
+  display: block;
+}
+
+.lane-label {
+  position: absolute;
+  top: 4px;
+  left: 64px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 7px;
+  border-radius: 2px;
+  background: rgb(20 22 25 / 0.78);
+  font-size: 11.5px;
+  color: var(--c-text-2);
+  pointer-events: none;
+}
+
+.lane-legend,
+.lane-unit {
+  display: inline-flex;
+  align-items: center;
+  color: var(--c-text-3);
+  font-size: 11px;
+}
+
+.lg {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 4px 0 8px;
+  border-radius: 1px;
+}
+
+.lg-low {
+  background: var(--c-band-low);
+}
+
+.lg-mid {
+  background: var(--c-band-mid);
+}
+
+.lg-high {
+  background: var(--c-band-high);
+}
+
+.lanes-cursor {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  background: rgb(227 230 233 / 0.55);
+  pointer-events: none;
+}
+
+.lanes-readout {
+  position: absolute;
+  top: 8px;
+  min-width: 158px;
+  padding: 7px 9px;
+  border: 1px solid var(--c-line-strong);
+  border-radius: 3px;
+  background: rgb(20 22 25 / 0.94);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+
+.lanes-readout.is-flipped {
+  transform: translateX(-100%);
+}
+
+.ro-time {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--c-text);
+}
+
+.ro-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--c-text-3);
+  line-height: 1.6;
+}
+
+.ro-row .num {
+  color: var(--c-text);
+}
+
+/* ------------------------------------------------------------------ uPlot */
+
+.uplot-host {
+  width: 100%;
+}
+
+.uplot-host .uplot {
+  font-family: var(--font-sans);
+}
+
+.uplot-host .u-legend {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--c-text-2);
+  text-align: left;
+}
+
+.uplot-host .u-legend th {
+  font-weight: var(--w-regular);
+}
+
+.uplot-host .u-legend .u-value {
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-num);
+  color: var(--c-text);
+}
+
+.uplot-host .u-legend .u-series > * {
+  padding: 2px 4px;
+}
+
+.uplot-host .u-cursor-x,
+.uplot-host .u-cursor-y {
+  border-color: rgb(227 230 233 / 0.4) !important;
+}
+
+.uplot-host .u-select {
+  background: rgb(192 232 78 / 0.08);
+}
+
+/* ---------------------------------------------------------------- bands */
+
+.bands {
+  border-top: 1px solid var(--c-line-faint);
+  padding-top: 6px;
+}
+
+.band-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 10px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.band-label {
+  color: var(--c-text-2);
+}
+
+.band-track {
+  height: 6px;
+  border-radius: 1px;
+  background: var(--c-unlit);
+  overflow: hidden;
+}
+
+.band-fill {
+  display: block;
+  height: 100%;
+  background: var(--c-data-2);
+}
+
+.band-share {
+  text-align: right;
+  font-size: 11.5px;
+}

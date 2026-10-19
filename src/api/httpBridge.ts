@@ -1,0 +1,123 @@
+/**
+ * Browser bridge: talks to `sonora-devserver` (the same Rust core) over
+ * HTTP + Server-Sent Events. Used for browser development and end-to-end
+ * tests; the desktop app uses `tauriBridge.ts`.
+ *
+ * Browsers cannot hand out absolute file paths, so native pickers and
+ * drag-and-drop with paths are unavailable here (`native: false`); the
+ * interface asks for paths instead.
+ */
+
+import { CoreError, type Bridge, type DropHandlers } from './bridge.ts';
+
+const EVENT_NAMES = [
+  'scan.started',
+  'scan.progress',
+  'scan.item',
+  'scan.finished',
+  'library.indexed',
+  'library.changed',
+  'duplicates.progress',
+  'duplicates.updated',
+] as const;
+
+interface CallResponse {
+  ok: boolean;
+  result?: unknown;
+  error?: { code: string; message: string };
+}
+
+export function createHttpBridge(base = ''): Bridge {
+  const call = async (method: string, params?: unknown): Promise<unknown> => {
+    let res: Response;
+    try {
+      res = await fetch(`${base}/api/call`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sonora-Client': 'web' },
+        body: JSON.stringify({ method, params: params ?? {} }),
+      });
+    } catch {
+      throw new CoreError('bridge_unavailable', 'The SONORA dev bridge is not running. Start it with `npm run dev:web`.');
+    }
+    if (!res.ok) {
+      throw new CoreError('bridge_error', `The dev bridge answered ${res.status} ${res.statusText}.`);
+    }
+    const body = (await res.json()) as CallResponse;
+    if (!body.ok) {
+      throw new CoreError(body.error?.code ?? 'unknown_error', body.error?.message ?? 'Unknown error');
+    }
+    return body.result;
+  };
+
+  const subscribe = (handler: (name: string, payload: unknown) => void): Promise<() => void> => {
+    const source = new EventSource(`${base}/api/events`);
+    const listeners = EVENT_NAMES.map((name) => {
+      const listener = (e: MessageEvent<string>) => {
+        try {
+          handler(name, JSON.parse(e.data) as unknown);
+        } catch (err) {
+          console.error('bad event payload', name, err);
+        }
+      };
+      source.addEventListener(name, listener);
+      return [name, listener] as const;
+    });
+    return Promise.resolve(() => {
+      for (const [name, listener] of listeners) source.removeEventListener(name, listener);
+      source.close();
+    });
+  };
+
+  const onFileDrop = (handlers: DropHandlers): Promise<() => void> => {
+    // Stop the browser from navigating to dropped files, and tell the
+    // interface a drop happened (without paths, which browsers do not expose).
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const enter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth += 1;
+      handlers.onHover(true);
+    };
+    const over = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const leave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) handlers.onHover(false);
+    };
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      handlers.onHover(false);
+      handlers.onDrop([]);
+    };
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragover', over);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
+    return Promise.resolve(() => {
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('drop', drop);
+    });
+  };
+
+  return {
+    kind: 'http',
+    platform: 'web',
+    native: false,
+    call,
+    subscribe,
+    pickFiles: () => Promise.resolve(null),
+    pickFolders: () => Promise.resolve(null),
+    pickSavePath: () => Promise.resolve(null),
+    reveal: async (path: string) => {
+      await call('system.reveal', { path });
+    },
+    onFileDrop,
+  };
+}

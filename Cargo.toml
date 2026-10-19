@@ -1,0 +1,38 @@
+# SONORA Rust workspace.
+#
+# The analysis engine, library core, CLI and browser bridge are deliberately
+# written against the Rust standard library only (plus the operating system's
+# SQLite). They build fully offline and are exercised by `cargo test` on every
+# platform.
+#
+# The Tauri desktop shell lives in `src-tauri/` as its own workspace because it
+# pulls its dependencies from crates.io. It depends on `crates/sonora-core` by
+# path. See README.md -> "Architecture".
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/sonora-json",
+    "crates/sonora-engine",
+    "crates/sonora-core",
+    "crates/sonora-cli",
+    "crates/sonora-devserver",
+]
+exclude = ["src-tauri"]
+
+[profile.dev]
+# DSP code is unbearably slow without optimisation; keep debug info but
+# optimise our own crates moderately so tests and dev runs stay fast.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.test]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+debug = false

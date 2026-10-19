@@ -1,0 +1,8 @@
+[package]
+name = "sonora-json"
+version = "0.1.0"
+edition = "2021"
+description = "Small, dependency-free JSON value model, parser and serializer used across SONORA."
+publish = false
+
+[dependencies]

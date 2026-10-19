@@ -1,0 +1,257 @@
+//! `sonora-devserver` — the browser bridge.
+//!
+//! Serves the built interface (`--static dist`) and exposes the same core
+//! API the desktop app uses over Tauri IPC:
+//!
+//! - `POST /api/call` with `{"method": "...", "params": {...}}` →
+//!   `{"ok": true, "result": ...}` or `{"ok": false, "error": {code, message}}`
+//! - `GET /api/events` → Server-Sent Events (`event: <name>`, `data: <json>`)
+//!
+//! Development only: it listens on 127.0.0.1, rejects cross-origin and
+//! foreign-Host requests, and is never part of the desktop build.
+//!
+//! ```text
+//! sonora-devserver [--port 4317] [--static DIR] [--data DIR]
+//! ```
+
+use sonora_core::{App, AppConfig};
+use sonora_json::{obj, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
+
+const MAX_BODY: usize = 16 * 1024 * 1024;
+
+struct Request {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl Request {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+}
+
+fn read_request(stream: &TcpStream) -> std::io::Result<Option<Request>> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Ok(None);
+    }
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+    let mut headers = Vec::new();
+    loop {
+        let mut h = String::new();
+        if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
+            break;
+        }
+        if let Some((k, v)) = h.split_once(':') {
+            headers.push((k.trim().to_string(), v.trim().to_string()));
+        }
+        if headers.len() > 100 {
+            break;
+        }
+    }
+    let len: usize = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
+    if len > MAX_BODY {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "body too large"));
+    }
+    let mut body = vec![0u8; len];
+    reader.read_exact(&mut body)?;
+    Ok(Some(Request { method, path, headers, body }))
+}
+
+fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8], extra: &str) {
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{extra}\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+}
+
+fn content_type(p: &Path) -> &'static str {
+    match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "map" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Accept only requests addressed to this machine and, when an Origin is
+/// sent, only same-origin ones (blocks cross-site requests and DNS rebinding).
+fn trusted(req: &Request, port: u16) -> bool {
+    let host_ok = req.header("host").is_some_and(|h| {
+        let h = h.to_ascii_lowercase();
+        let name = h.rsplit_once(':').map(|(n, _)| n.to_string()).unwrap_or(h.clone());
+        name == "localhost" || name == "127.0.0.1" || name == "[::1]"
+    });
+    let origin_ok = match req.header("origin") {
+        None => true,
+        Some(o) => {
+            let o = o.to_ascii_lowercase();
+            // Same origin as us, or the Vite dev server proxying to us.
+            o == format!("http://localhost:{port}") || o == format!("http://127.0.0.1:{port}") || o == "http://localhost:1420" || o == "http://127.0.0.1:1420"
+        }
+    };
+    host_ok && origin_ok
+}
+
+fn serve_static(stream: &mut TcpStream, root: &Path, url_path: &str) {
+    let clean = url_path.split(['?', '#']).next().unwrap_or("/");
+    let rel = clean.trim_start_matches('/');
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+    if rel.split('/').any(|seg| seg == ".." || seg.contains('\\')) {
+        respond(stream, "400 Bad Request", "text/plain", b"bad path", "");
+        return;
+    }
+    let mut file = root.join(rel);
+    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !file.is_file() {
+        // Single-page app fallback.
+        file = root.join("index.html");
+    }
+    match file.canonicalize() {
+        Ok(f) if f.starts_with(&canon_root) => match std::fs::read(&f) {
+            Ok(bytes) => respond(stream, "200 OK", content_type(&f), &bytes, ""),
+            Err(_) => respond(stream, "404 Not Found", "text/plain", b"not found", ""),
+        },
+        _ => respond(stream, "404 Not Found", "text/plain", b"not found", ""),
+    }
+}
+
+fn handle_call(stream: &mut TcpStream, app: &Arc<App>, req: &Request) {
+    if req.header("x-sonora-client").is_none() {
+        respond(stream, "403 Forbidden", "text/plain", b"missing X-Sonora-Client header", "");
+        return;
+    }
+    let body = String::from_utf8_lossy(&req.body);
+    let parsed = match sonora_json::parse(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            let out = obj! { "ok" => false, "error" => obj! { "code" => "invalid_params", "message" => format!("request is not valid JSON: {e}") } };
+            respond(stream, "200 OK", "application/json", out.to_string_compact().as_bytes(), "");
+            return;
+        }
+    };
+    let method = parsed.get("method").and_then(Value::as_str).unwrap_or("").to_string();
+    let params = parsed.get("params").cloned().unwrap_or(Value::object());
+    let out = match app.call(&method, &params.to_string_compact()) {
+        Ok(json) => format!("{{\"ok\":true,\"result\":{json}}}"),
+        Err(e) => obj! { "ok" => false, "error" => obj! { "code" => e.code, "message" => e.message } }.to_string_compact(),
+    };
+    respond(stream, "200 OK", "application/json", out.as_bytes(), "");
+}
+
+fn handle_events(mut stream: TcpStream, app: &Arc<App>) {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n";
+    if stream.write_all(head.as_bytes()).is_err() {
+        return;
+    }
+    let (tx, rx) = mpsc::sync_channel::<String>(512);
+    let id = app.subscribe(Box::new(move |name, payload| {
+        // Never block the core: drop events for a slow or dead client.
+        let _ = tx.try_send(format!("event: {name}\ndata: {payload}\n\n"));
+    }));
+    let _ = stream.write_all(b": connected\n\n");
+    loop {
+        match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(msg) => {
+                if stream.write_all(msg.as_bytes()).is_err() {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if stream.write_all(b": ping\n\n").is_err() {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        let _ = stream.flush();
+    }
+    app.unsubscribe(id);
+}
+
+fn arg(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("sonora-devserver [--port 4317] [--static DIR] [--data DIR]");
+        return;
+    }
+    let port: u16 = arg(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(4317);
+    let static_dir = arg(&args, "--static").map(PathBuf::from);
+    let data_dir = arg(&args, "--data")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("SONORA_DATA_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(".sonora-dev-data"));
+    let app = match App::open(AppConfig { data_dir: data_dir.clone(), tool_dirs: vec![], app_version: format!("{}-dev", env!("CARGO_PKG_VERSION")) }) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("could not start the core: {e}");
+            std::process::exit(1);
+        }
+    };
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("could not listen on 127.0.0.1:{port}: {e}");
+            std::process::exit(1);
+        }
+    };
+    eprintln!("SONORA dev bridge on http://127.0.0.1:{port}  (data: {})", data_dir.display());
+    if let Some(s) = &static_dir {
+        eprintln!("serving interface from {}", s.display());
+    }
+    for conn in listener.incoming() {
+        let Ok(mut stream) = conn else { continue };
+        let app = Arc::clone(&app);
+        let static_dir = static_dir.clone();
+        std::thread::spawn(move || {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+            let req = match read_request(&stream) {
+                Ok(Some(r)) => r,
+                _ => return,
+            };
+            if !trusted(&req, port) {
+                respond(&mut stream, "403 Forbidden", "text/plain", b"forbidden", "");
+                return;
+            }
+            let route = req.path.split('?').next().unwrap_or("").to_string();
+            match (req.method.as_str(), route.as_str()) {
+                ("POST", "/api/call") => handle_call(&mut stream, &app, &req),
+                ("GET", "/api/events") => {
+                    let _ = stream.set_read_timeout(None);
+                    handle_events(stream, &app)
+                }
+                ("GET", "/api/health") => respond(&mut stream, "200 OK", "application/json", b"{\"ok\":true}", ""),
+                ("GET", _) => match &static_dir {
+                    Some(root) => serve_static(&mut stream, root, &req.path),
+                    None => respond(&mut stream, "404 Not Found", "text/plain", b"no --static directory configured", ""),
+                },
+                _ => respond(&mut stream, "405 Method Not Allowed", "text/plain", b"method not allowed", ""),
+            }
+        });
+    }
+}

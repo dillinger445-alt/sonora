@@ -1,0 +1,11 @@
+[package]
+name = "sonora-engine"
+version = "0.1.0"
+edition = "2021"
+description = "SONORA audio analysis engine: decoding, DSP feature extraction, source-quality inference and scoring."
+publish = false
+
+[dependencies]
+sonora-json = { path = "../sonora-json" }
+
+[dev-dependencies]

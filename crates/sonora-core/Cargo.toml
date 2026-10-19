@@ -1,0 +1,15 @@
+[package]
+name = "sonora-core"
+version = "0.1.0"
+edition = "2021"
+description = "SONORA core: SQLite library, indexing, background analysis jobs, duplicates, export and the JSON API."
+publish = false
+
+[features]
+# Do not link the system SQLite; the final binary provides SQLite symbols
+# (the desktop app links libsqlite3-sys with the `bundled` feature).
+external-sqlite = []
+
+[dependencies]
+sonora-engine = { path = "../sonora-engine" }
+sonora-json = { path = "../sonora-json" }

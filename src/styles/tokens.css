@@ -1,0 +1,125 @@
+/*
+ * SONORA design tokens.
+ *
+ * Colour is a signal, as on metering hardware: lime means signal / pass /
+ * the primary action, amber means caution, red means fault (clipping,
+ * errors). Everything else is graphite and cool grey.
+ */
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('../assets/fonts/Archivo-Variable.woff') format('woff');
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Martian Mono';
+  src: url('../assets/fonts/MartianMono-Variable.woff') format('woff');
+  font-weight: 100 800;
+  font-stretch: 75% 112.5%;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* Graphite surfaces, darkest to lightest. */
+  --c-rail: #16181b;
+  --c-canvas: #1b1e21;
+  --c-panel: #202327;
+  --c-raised: #262a2f;
+  --c-hover: #2b3035;
+  --c-active: #31373d;
+  --c-well: #141619;
+
+  /* Cool-grey lines. */
+  --c-line: #31363c;
+  --c-line-strong: #434a52;
+  --c-line-faint: #272b30;
+
+  /* Text. */
+  --c-text: #e3e6e9;
+  --c-text-2: #a3abb3;
+  --c-text-3: #8c949d;
+  --c-text-off: #5f666e;
+
+  /* Signal colours. */
+  --c-lime: #c0e84e;
+  --c-lime-strong: #d2f566;
+  --c-lime-ink: #14170f;
+  --c-lime-dim: rgb(192 232 78 / 0.13);
+  --c-lime-line: rgb(192 232 78 / 0.42);
+  --c-amber: #e9ae40;
+  --c-amber-dim: rgb(233 174 64 / 0.14);
+  --c-amber-line: rgb(233 174 64 / 0.45);
+  --c-red: #f06a5e;
+  --c-red-dim: rgb(240 106 94 / 0.14);
+  --c-red-line: rgb(240 106 94 / 0.5);
+
+  /* Data colours (never used for status). */
+  --c-band-low: #4e6d8c;
+  --c-band-mid: #8ea4b9;
+  --c-band-high: #dce4ea;
+  --c-data-1: #9fb7cc;
+  --c-data-2: #6f8aa3;
+  --c-grid: #2a2f35;
+  --c-unlit: #2c3137;
+
+  /* Type. */
+  --font-sans: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Martian Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  --stretch-ui: 94%;
+  --stretch-dense: 88%;
+  --stretch-wide: 118%;
+  --stretch-num: 78%;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-num-lg: 30px;
+
+  --lh-tight: 1.2;
+  --lh-ui: 1.4;
+  --lh-prose: 1.55;
+
+  --w-regular: 420;
+  --w-medium: 520;
+  --w-strong: 620;
+
+  /* Space (4px grid). */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  /* Shape. */
+  --r-ctl: 3px;
+  --r-dlg: 6px;
+  --h-ctl: 28px;
+  --h-row: 32px;
+  --h-status: 28px;
+  --w-rail: 216px;
+  --w-rail-compact: 56px;
+  --w-inspector: 348px;
+
+  --focus: 0 0 0 2px var(--c-canvas), 0 0 0 4px var(--c-lime);
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / 0.45), 0 0 0 1px var(--c-line-strong);
+
+  --t-fast: 90ms ease-out;
+  --t-med: 160ms ease-out;
+
+  --z-sticky: 10;
+  --z-overlay: 40;
+  --z-dialog: 50;
+  --z-toast: 60;
+  --z-tooltip: 70;
+}
