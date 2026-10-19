@@ -21,9 +21,17 @@ on the Camelot wheel, plays tracks, and exports them as AIFF, WAV or MP3
 files with tempo, key, genre and artwork in the tags, plus a rekordbox
 playlist. [docs/DJ.md](docs/DJ.md) describes how.
 
+It also sorts tracks into playlists, folders and smart playlists, shows each
+playlist as a set with its keys and tempo, suggests a running order for
+mixing, and sends playlists to a USB drive as numbered folders of DJ-ready
+files with rekordbox, Serato and M3U playlists.
+[docs/PLAYLISTS.md](docs/PLAYLISTS.md) describes how.
+
 ![Track analysis](docs/screenshots/track.png)
 
 ![The key filter on the Camelot wheel, with a track playing](docs/screenshots/dj.png)
+
+![A playlist as a set: keys, tempo and how each change mixes](docs/screenshots/playlist.png)
 
 ## Privacy
 
@@ -38,8 +46,10 @@ Discogs token) to Discogs, nothing else. The desktop build's
 content-security policy blocks remote content. Your
 audio files are only ever read, never modified, moved or deleted: tempo,
 key and genre corrections stay in SONORA's library, and exports write new
-files without replacing any. "Remove from library" removes SONORA's index
-entry only.
+files without replacing any. Sending playlists to a USB drive writes copies
+into a `SONORA` folder on the drive and only ever changes files SONORA wrote
+there. Playlists refer to library tracks, so deleting one deletes no track
+or file. "Remove from library" removes SONORA's index entry only.
 
 ## Features
 
@@ -89,6 +99,18 @@ entry only.
   quality for every player, or up to 24-bit/48 kHz. Tempo, key, genre and
   artwork in ID3 tags, the best copy of each recording, files checked after
   writing, never overwriting, and a rekordbox.xml playlist.
+- **Playlists**: playlists, folders and smart playlists (tempo, keys,
+  genres, DJ score, words) in the sidebar, filled by dragging tracks or from
+  the selection, ordered by dragging or Alt+↑/↓. Each playlist shows as a
+  set: key-tinted blocks, the tempo line and how every change mixes.
+  **Arrange for mixing** suggests a running order in keys that mix and close
+  tempos; the library can be sorted into playlists by genre, key or tempo.
+  See [docs/PLAYLISTS.md](docs/PLAYLISTS.md).
+- **Send to USB**: playlists as numbered folders of AIFF, WAV or MP3 files
+  in set order, with an M3U playlist per folder, a rekordbox.xml and Serato
+  crates. A plan shows what will be written, moved or kept and whether it
+  fits; sending again updates the drive. Only files SONORA wrote (and that
+  are unchanged since) are ever renamed, replaced or removed.
 - **Listening**: play any track inside the app, with a waveform seek bar,
   P to play and pause, media keys, click-to-play on the analysis charts,
   and play buttons in Duplicates to compare copies by ear.
@@ -187,7 +209,8 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
                    crates/sonora-core: library core
                    SQLite (WAL), indexer, scan manager (bounded
                    worker pool, DB-backed queue), duplicates,
-                   export, settings, JSON API, events, logs
+                   export, playlists, USB sync, settings,
+                   JSON API, events, logs
                               │
                    crates/sonora-engine: analysis engine
                    decoders (native WAV/AIFF/FLAC, FFmpeg pipe),
@@ -198,12 +221,12 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 | Part | Responsibility |
 | --- | --- |
 | `crates/sonora-engine` | Decoding, metadata, DSP (K-weighting, true-peak interpolation, FFT), measurements including tempo and key, findings and scores, and the export writers (AIFF, WAV, ID3 tags, MP3 re-tagging, conversion). Std-only Rust. |
-| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, the Discogs lookup, playback preparation, settings, the JSON API used by both shells, structured logs. |
+| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, playlists and smart playlists, arranging for mixing, sending playlists to USB drives, the Discogs lookup, playback preparation, settings, the JSON API used by both shells, structured logs. |
 | `crates/sonora-json` | A small JSON value type, parser and serializer. |
 | `crates/sonora-cli` | `sonora analyze / measure / compare / fixtures`, for development and calibration. |
 | `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests, plus the files prepared for playback (with range requests). Rejects other hosts and origins. |
 | `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog, opener, updater and process plugins and bundles FFmpeg. A private `sonora:` URL scheme serves audio for playback: only the files the core prepared, each under an id handed out with it, so the interface cannot read anything else on disk. |
-| `src/` | The interface: `api/` (bridges, typed client), `state/` (core context, imports, toasts, track actions), `views/`, `components/`, `charts/`, `lib/` (formatting, scores, routing, visual decoding), `styles/` (design tokens). |
+| `src/` | The interface: `api/` (bridges, typed client), `state/` (core context, imports, toasts, track actions, playlists, dragging, updates), `views/`, `components/`, `charts/`, `lib/` (formatting, scores, routing, key notations, mixing, visual decoding), `styles/` (design tokens). |
 
 **Design decisions and trade-offs:**
 
@@ -231,13 +254,13 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 207 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, API
-npm run test:unit          # 26 interface unit tests (formatting, key notations, scores, routing, paths, visual decoding)
+npm run test:rust          # 218 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, API
+npm run test:unit          # 36 unit tests (formatting, key notations, mixing, scores, routing, paths, visual decoding, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 18 Playwright tests: real interface + real core on a generated corpus
+npm run build && npm run test:e2e   # 22 Playwright tests: real interface + real core on a generated corpus
 ```
 
-One Rust test is Unix-only (symlink loops), so Windows runs 206. The
+One Rust test is Unix-only (symlink loops), so Windows runs 217. The
 FFmpeg-based checks are skipped with a note when FFmpeg is not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
@@ -253,7 +276,12 @@ the file is untouched), folder rescans, settings persistence, history,
 keyboard use of menus, the BPM and Camelot-wheel filters (by mouse and
 keyboard), key notations, corrections (checking the file is untouched), the
 DJ export with its rekordbox.xml, playback (including a format the browser
-cannot play) and the Discogs token prompt.
+cannot play), the Discogs token prompt, updates (with a simulated release),
+playlists (made and renamed in the sidebar, filled by dragging and from the
+details panel, reordered by keyboard and by dragging, Undo after taking a
+track out), smart playlists and folders, and Send to USB (the files,
+playlists and rekordbox.xml on the drive, a second send that renames and
+removes only SONORA's own files, and files of the owner's left alone).
 
 ## Troubleshooting
 

@@ -15,6 +15,9 @@ start it (see [Genres](#genres)).
 - [Listening](#listening)
 - [Limits](#limits)
 
+Playlists, smart playlists, arranging a set and sending playlists to a USB
+drive are in [PLAYLISTS.md](PLAYLISTS.md).
+
 ![The key filter on the Camelot wheel, with a track playing](screenshots/dj.png)
 
 ## Tempo
@@ -234,7 +237,8 @@ rekordbox then analyses the files for its own beat grids and waveforms.
 Serato DJ reads tempo, key and genre from the tags: open **Files**, find the
 export folder and drag it onto the crate list. Traktor, Engine DJ and
 VirtualDJ read the same tags when you add the folder to their collection.
-For CDJs, copy the folder to a USB stick, or export the stick from rekordbox
+For CDJs, put the tracks in a playlist and use
+[Send to USB](PLAYLISTS.md#send-to-usb), or export the stick from rekordbox
 to get its waveforms and cue points.
 
 ## Listening

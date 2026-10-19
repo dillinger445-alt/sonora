@@ -23,6 +23,18 @@ written for the people using SONORA.
   rekordbox.xml playlist.
 - **Listen inside the app**, with a waveform you can seek in, media keys
   and the tempo and key of the track playing.
+- **Playlists and folders** in the sidebar. Drag tracks onto them, drag to
+  put them in order, and see each one as a set: its keys, its tempo and how
+  every change mixes.
+- **Smart playlists** that keep up with the library by themselves: a tempo
+  range, keys on the Camelot wheel, genres, DJ score or words.
+- **Arrange for mixing** suggests a running order with neighbours in keys
+  that mix and close in tempo, and changes nothing until you use it.
+- **Sort the library into playlists** by genre, key or tempo in one go.
+- **Send to USB**: playlists become numbered folders of DJ-ready files on a
+  USB drive, with rekordbox.xml, Serato crates and M3U playlists. Sending
+  again brings the drive up to date, and only files SONORA wrote there are
+  ever changed.
 - **Updates inside the app**: SONORA tells you when a new version is out
   and installs it when you choose, then restarts. Your library, settings and
   edits are kept. Checking can be turned off in Settings.
