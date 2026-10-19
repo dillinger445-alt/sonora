@@ -250,7 +250,9 @@ fn dj_export_writes_tagged_copies_and_a_rekordbox_playlist() {
     let names: Vec<&str> = plan.get("items").and_then(Value::as_array).unwrap().iter().map(|i| s(i, "fileName").unwrap()).collect();
     assert!(names.contains(&"Ana Ruiz - Groove.aiff"), "{names:?}");
     assert_eq!(call_err(&app, "djexport.start", &format!(r#"{{"ids": {ids:?}, "folder": "relative/dir"}}"#)), "invalid_params");
-    assert_eq!(call_err(&app, "djexport.start", &format!(r#"{{"ids": {ids:?}, "folder": "{}"}}"#, e.out.join("nope").display())), "not_found");
+    // Built with obj! so Windows paths are escaped.
+    let gone = sonora_json::obj! { "ids" => ids.clone(), "folder" => e.out.join("nope").to_string_lossy().to_string() };
+    assert_eq!(call_err(&app, "djexport.start", &gone.to_string_compact()), "not_found");
 
     let start = |format: &str, notation: &str| {
         let p = sonora_json::obj! {
@@ -435,7 +437,8 @@ fn playback_uses_the_original_or_one_decoded_copy() {
 
     // The web view says it plays WAV: the original file is used as it is.
     let direct = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["wav", "mp3"]}}"#));
-    assert_eq!(s(&direct, "path").map(PathBuf::from), Some(src.clone()));
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+    assert_eq!(canon(Path::new(s(&direct, "path").unwrap())), canon(&src));
     assert_eq!(direct.get("transcoded").and_then(Value::as_bool), Some(false));
     assert_eq!(s(&direct, "mime"), Some("audio/wav"));
     assert!(f(&direct, "duration").is_some_and(|d| (d - 6.0).abs() < 0.05));
@@ -445,7 +448,7 @@ fn playback_uses_the_original_or_one_decoded_copy() {
     let decoded = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["mp3"]}}"#));
     let path = PathBuf::from(s(&decoded, "path").unwrap());
     assert_eq!(decoded.get("transcoded").and_then(Value::as_bool), Some(true));
-    assert!(path.starts_with(e.data.join("cache").join("playback")), "{}", path.display());
+    assert!(canon(&path).starts_with(canon(&e.data.join("cache").join("playback"))), "{}", path.display());
     let facts = sonora_engine::meta::probe_file(&path, &Default::default()).unwrap();
     assert_eq!(facts.container_name, "WAV");
     assert!(facts.header_duration_secs.is_some_and(|d| (d - 6.0).abs() < 0.05), "{:?}", facts.header_duration_secs);
