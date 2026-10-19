@@ -1,8 +1,9 @@
-# Turns a saved `cargo test` or `cargo clippy` log into GitHub annotations
-# (`::error` lines), so failures show in the run summary (and through the
-# API) without opening the raw log: failing tests with their panic message,
-# and compiler, lint and linker errors with their locations.
-# GitHub keeps at most 10 error annotations per step.
+# Turns a saved `cargo test`, `cargo clippy` or `tauri build` log into GitHub
+# annotations (`::error` lines), so failures show in the run summary (and
+# through the API) without opening the raw log: failing tests with their
+# panic message, compiler, lint and linker errors with their locations, and
+# Tauri's own errors. When nothing matches, the last lines of the log are
+# posted instead. GitHub keeps at most 10 error annotations per step.
 
 # Message text: escape %, drop colour codes and carriage returns.
 function msg(s) {
@@ -36,7 +37,7 @@ function flush(   i, start, text, n) {
   emit("Failing test " name, text)
 }
 
-{ line = msg($0) }
+{ line = msg($0); tail[++lines % 40] = line }
 
 # A compiler or lint error: report it with its location (the next line).
 pending != "" {
@@ -51,5 +52,14 @@ inblock { block[++nb] = line; next }
 
 line ~ /^error(\[E[0-9]+\])?: / && line !~ /^error: (test failed|could not compile|[0-9]+ target)/ { pending = line; next }
 line ~ /LNK[0-9]+|undefined reference|ld: library not found|cannot find -l/ { emit("Linker error", line) }
+line ~ /^ *(Error|error) +(failed|[A-Z])/ || line ~ /failed to (bundle|build|run|sign|notarize)/ { emit("Build error", line) }
 
-END { flush(); if (pending != "") emit("Error", pending) }
+END {
+  flush()
+  if (pending != "") emit("Error", pending)
+  if (count == 0) {
+    text = ""
+    for (i = (lines > 40 ? lines - 39 : 1); i <= lines; i++) text = (text == "" ? tail[i % 40] : text "%0A" tail[i % 40])
+    emit("Last lines of the log", text)
+  }
+}

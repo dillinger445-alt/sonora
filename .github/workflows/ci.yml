@@ -251,7 +251,12 @@ jobs:
           if [ -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]; then
             args+=(--config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"$WINDOWS_CERTIFICATE_THUMBPRINT\",\"digestAlgorithm\":\"sha256\",\"timestampUrl\":\"http://timestamp.digicert.com\"}}}")
           fi
-          npx tauri build "${args[@]}"
+          # On failure, the errors are also posted as annotations (see the Test step).
+          set +e
+          npx tauri build "${args[@]}" 2>&1 | tee build-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk build-output.txt; fi
+          exit "$status"
 
       - name: Collect the bundles
         env:
