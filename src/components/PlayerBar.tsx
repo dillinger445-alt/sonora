@@ -199,11 +199,13 @@ export function PlayerBar() {
           label={muted != null || player.volume === 0 ? 'Unmute' : 'Mute'}
           icon={muted != null || player.volume === 0 ? LuVolumeX : LuVolume2}
           onClick={() => {
-            if (muted != null) {
-              player.setVolume(muted);
+            if (muted != null || player.volume === 0) {
+              // Back to the level before muting (or a usable one when the
+              // slider was pulled down to silence).
+              player.setVolume(muted != null && muted > 0 ? muted : 0.9);
               setMuted(null);
             } else {
-              setMuted(player.volume || 0.9);
+              setMuted(player.volume);
               player.setVolume(0);
             }
           }}

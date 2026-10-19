@@ -191,8 +191,8 @@ export function useTrackActions(): TrackActions {
           body: (
             <>
               <p>
-                SONORA sends the artist and title of {ids.length === 1 ? 'this track' : 'each track'} to Discogs, one request a second
-                {ids.length > 5 ? ` (about ${formatSpan(ids.length * 1.1)})` : ''}. Nothing else leaves this computer.
+                SONORA sends the artist and title of {ids.length === 1 ? 'this track' : 'each track'} to Discogs with your token: up to three searches a track, one a second
+                {ids.length > 5 ? ` (at most about ${formatSpan(ids.length * 3.3)})` : ''}. Nothing else leaves this computer.
               </p>
               <p className="faint">Tracks that already have a genre keep it unless you choose to replace it.</p>
             </>
@@ -202,8 +202,14 @@ export function useTrackActions(): TrackActions {
           option: { label: 'Replace genres the tracks already have' },
         });
         if (!confirmed) return;
-        await client.discogsLookup(ids, option);
+        // Running before the call returns: its finish event may come first.
         jobs.started('discogs');
+        try {
+          await client.discogsLookup(ids, option);
+        } catch (e) {
+          jobs.resync();
+          throw e;
+        }
       } catch (e) {
         toast({ tone: 'error', title: 'Could not start the Discogs lookup', body: e instanceof Error ? e.message : String(e) });
       }

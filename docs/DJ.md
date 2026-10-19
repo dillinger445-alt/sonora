@@ -123,9 +123,12 @@ released dance music. To use it:
 What is sent: for each chosen track, its artist and title (from the tags, or
 from an `Artist - Title` file name), your token, and SONORA's name and
 version, over HTTPS to `api.discogs.com`. Nothing else: no audio, file names
-or paths. Requests are spaced 1.1 seconds apart, below Discogs' limit of 60
-a minute, and go through the system's `curl` (built into macOS and Windows 10
-and 11), so SONORA itself contains no network code.
+or paths. A track takes up to three searches (artist and title, then the
+title without its mix name, then both as free text), stopping at the first
+that finds a release. Saving or testing the token sends it once to check it.
+Requests are spaced 1.1 seconds apart, below Discogs' limit of 60 a minute,
+and go through the system's `curl` (built into macOS and Windows 10 and 11),
+so SONORA itself contains no network code.
 
 The genre chosen is the style most of the artist's matching releases agree
 on (for example *Tech House*), or the broad genre when a release lists no

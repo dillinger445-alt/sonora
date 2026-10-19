@@ -79,8 +79,8 @@ export function DiscogsSettings() {
         <div className="switch-text">
           <span className="switch-label">Discogs genre lookup</span>
           <span className="switch-desc">
-            Optional. For tracks you choose, SONORA asks Discogs for the genre by artist and title, one track a second. Nothing is sent until you choose “Look up genres”, and nothing else
-            leaves this computer. It needs a free Discogs account and a personal access token.
+            Optional. For tracks you choose, SONORA searches Discogs by artist and title (up to three searches a track, one a second), each search signed with your token.
+            Saving or testing the token sends it to Discogs once to check it. Nothing else leaves this computer. It needs a free Discogs account and a personal access token.
           </span>
         </div>
         <div className="setting-control discogs-control">

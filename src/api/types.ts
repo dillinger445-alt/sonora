@@ -683,6 +683,8 @@ export interface PreparedPlayback {
   mime: string;
   transcoded: boolean;
   duration: number | null;
+  /** Desktop app: the id the shell serves this one file under. */
+  stream?: string;
 }
 
 // ---------------------------------------------------------------- events

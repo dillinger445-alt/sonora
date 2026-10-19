@@ -1,6 +1,6 @@
 [package]
 name = "sonora-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "SONORA desktop application (Tauri 2 shell around sonora-core)"
 authors = ["SONORA"]
 edition = "2021"
@@ -27,12 +27,13 @@ tauri-build = { version = "~2.7", features = [] }
 # Pinned to the same minor versions as @tauri-apps/api and the
 # @tauri-apps/plugin-* packages in package.json (`~`): `tauri build` refuses
 # a major/minor mismatch between them. Upgrade both sides together.
-# `protocol-asset`: the web view plays library files through the asset
-# protocol, limited at run time to the files prepared for playback.
-tauri = { version = "~2.12", features = ["protocol-asset"] }
+tauri = { version = "~2.12", features = [] }
 tauri-plugin-dialog = "~2.8"
 tauri-plugin-opener = "~2.7"
 tauri-plugin-single-instance = "~2.5"
+# In-app updates from GitHub releases (signature-checked) and the restart after them.
+tauri-plugin-updater = "~2.14"
+tauri-plugin-process = "~2.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # SQLite compiled from source and statically linked on every platform. The

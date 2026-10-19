@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the SONORA main window: core defaults, window dragging for the overlay title bar, native open/save dialogs, Reveal in Finder/Explorer, and opening Discogs pages in the browser.",
+  "description": "Permissions for the SONORA main window: core defaults, window dragging for the overlay title bar, native open/save dialogs, Reveal in Finder/Explorer, opening Discogs pages in the browser, and checking for, installing and restarting into updates.",
   "windows": [
     "main"
   ],
@@ -18,6 +18,8 @@
           "url": "https://www.discogs.com/*"
         }
       ]
-    }
+    },
+    "updater:default",
+    "process:allow-restart"
   ]
 }

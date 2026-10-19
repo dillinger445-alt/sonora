@@ -15,10 +15,13 @@ use sonora_engine::export::id3::TagSet;
 use sonora_engine::meta::probe_file;
 use sonora_json::{obj, Value};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Decoded copies kept for playback (the newest ones).
 const CACHE_FILES: usize = 6;
+
+/// Distinguishes temporary files of decodes running at the same time.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// What the web view needs to know to play a file: the codec family and MIME type.
 pub fn kind(t: &TrackRow) -> Option<(&'static str, &'static str)> {
@@ -92,16 +95,20 @@ pub fn prepare(cache_dir: &Path, t: &TrackRow, playable: &[String], force_decode
         return Ok(Prepared { path: dest, mime: "audio/wav", transcoded: true });
     }
     let facts = probe_file(src, tools).map_err(|e| e.to_string())?;
-    let tmp = cache_dir.join(format!("track-{}-{stamp}.{}.part", t.id, std::process::id()));
+    let tmp = cache_dir.join(format!("track-{}-{stamp}.{}-{}.part", t.id, std::process::id(), TEMP_SEQ.fetch_add(1, Ordering::Relaxed)));
     let cancel = AtomicBool::new(false);
     let tags = TagSet::default();
     let req = ConvertRequest { src, facts: &facts, target: Target::Wav, quality: Quality::High, tags: &tags, dest: &tmp, tools, cancel: &cancel };
     match convert(&req, &mut |_| {}) {
         Ok(_) => {
-            std::fs::rename(&tmp, &dest).map_err(|e| {
+            if let Err(e) = std::fs::rename(&tmp, &dest) {
                 let _ = std::fs::remove_file(&tmp);
-                format!("cannot store the decoded copy: {e}")
-            })?;
+                // Another request decoded the same track first (or it is
+                // being played and cannot be replaced): use that copy.
+                if !dest.is_file() {
+                    return Err(format!("cannot store the decoded copy: {e}"));
+                }
+            }
             trim_cache(cache_dir, &dest);
             Ok(Prepared { path: dest, mime: "audio/wav", transcoded: true })
         }

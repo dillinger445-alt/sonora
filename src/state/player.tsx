@@ -14,7 +14,8 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TrackRow } from '../api/types.ts';
 import { readPref, writePref } from '../lib/persist.ts';
-import { useCore } from './core.tsx';
+import { useCore, useCoreEvent } from './core.tsx';
+import { throttle } from './emitter.ts';
 
 /** What the player needs to know about a track. */
 export type PlayableTrack = Pick<TrackRow, 'id' | 'displayTitle' | 'artist' | 'duration' | 'djBpm' | 'djKey'>;
@@ -113,6 +114,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const seq = useRef(0);
   const attempt = useRef<Attempt | null>(null);
   const pendingSeek = useRef<number | null>(null);
+  // What the listener last asked for: a pause while the file is still being
+  // prepared must not be undone when it is ready.
+  const wantPlay = useRef(false);
+
+  /** The current attempt is still waiting for the core to prepare its file. */
+  const preparing = useCallback((): Attempt | null => {
+    const a = attempt.current;
+    return a != null && a.id === seq.current && a.src == null && !a.failed ? a : null;
+  }, []);
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -122,11 +132,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const listeners = useRef(new Set<() => void>());
   const time = useRef(0);
   const publish = useCallback(() => {
+    // The element still holds the previous file while the next is prepared.
+    if (preparing()) return;
     const t = audio.currentTime;
     if (t === time.current) return;
     time.current = t;
     for (const l of [...listeners.current]) l();
-  }, [audio]);
+  }, [audio, preparing]);
   const timeSource = useMemo<TimeSource>(
     () => ({
       subscribe: (cb) => {
@@ -153,12 +165,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // ------------------------------------------------------------ loading
   const loadRef = useRef<(track: PlayableTrack, at: number, decode: boolean) => Promise<void>>(async () => undefined);
 
+  const notify = useCallback((t: number) => {
+    time.current = t;
+    for (const l of [...listeners.current]) l();
+  }, []);
+
   /** The current attempt failed: a format the web view cannot read is decoded once in the core. */
   const fail = useCallback((a: Attempt, formatError: boolean, message: string) => {
     if (a.failed || a.id !== seq.current) return;
     a.failed = true;
     if (formatError && !a.decoded) {
-      void loadRef.current(a.track, a.at, true);
+      void loadRef.current(a.track, time.current, true);
       return;
     }
     setState((s) => ({ ...s, status: 'error', error: message }));
@@ -169,21 +186,37 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const id = ++seq.current;
       const a: Attempt = { id, track, at, decoded: decode, src: null, failed: false };
       attempt.current = a;
+      wantPlay.current = true;
+      // The previous track stops now, not when the next one is ready.
+      audio.pause();
+      pendingSeek.current = null;
+      notify(at);
       setState((s) => ({ ...s, track, status: 'loading', error: null, duration: s.track?.id === track.id ? s.duration : (track.duration ?? null) }));
-      let prepared;
+      let url: string;
+      let transcoded: boolean;
       try {
-        prepared = await client.preparePlayback(track.id, playable, decode);
+        const prepared = await client.preparePlayback(track.id, playable, decode);
+        if (id !== seq.current) return;
+        url = bridge.mediaUrl(prepared);
+        transcoded = prepared.transcoded;
       } catch (e) {
-        if (id === seq.current) setState((s) => ({ ...s, status: 'error', error: e instanceof Error ? e.message : String(e) }));
+        if (id === seq.current) {
+          a.failed = true;
+          setState((s) => ({ ...s, status: 'error', error: e instanceof Error ? e.message : String(e) }));
+        }
         return;
       }
-      if (id !== seq.current) return;
-      pendingSeek.current = at > 0 ? at : null;
-      time.current = at;
-      for (const l of [...listeners.current]) l();
-      audio.src = bridge.mediaUrl(prepared.path);
+      // Seeks made while the file was prepared moved `a.at`.
+      pendingSeek.current = a.at > 0 ? a.at : null;
+      notify(a.at);
+      audio.src = url;
       a.src = audio.src;
-      setState((s) => ({ ...s, transcoded: prepared.transcoded }));
+      setState((s) => ({ ...s, transcoded }));
+      if (!wantPlay.current) {
+        // Paused while preparing: ready to play from the chosen position.
+        setState((s) => ({ ...s, status: 'paused' }));
+        return;
+      }
       try {
         await audio.play();
       } catch (e) {
@@ -199,7 +232,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         fail(a, name === 'NotSupportedError', e instanceof Error ? e.message : String(e));
       }
     },
-    [audio, bridge, client, playable, fail],
+    [audio, bridge, client, playable, fail, notify],
   );
   useLayoutEffect(() => {
     loadRef.current = load;
@@ -256,31 +289,62 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [audio, volume]);
 
   // ------------------------------------------------------------ actions
+  /** The file being prepared will start playing (from `at`, if given) once it is ready. */
+  const playWhenReady = useCallback(
+    (a: Attempt, at?: number) => {
+      wantPlay.current = true;
+      if (at != null) {
+        a.at = Math.max(0, at);
+        notify(a.at);
+      }
+      setState((s) => (s.track ? { ...s, status: 'loading' } : s));
+    },
+    [notify],
+  );
+
   const play = useCallback(
     (track: PlayableTrack, at = 0) => {
       const s = stateRef.current;
+      const a = preparing();
+      if (a && a.track.id === track.id) {
+        playWhenReady(a, at);
+        return;
+      }
       if (s.track?.id === track.id && s.status !== 'error' && audio.getAttribute('src')) {
+        wantPlay.current = true;
         audio.currentTime = Math.max(0, at);
         void audio.play().catch(() => undefined);
         return;
       }
       void load(track, at, false);
     },
-    [audio, load],
+    [audio, load, preparing, playWhenReady],
   );
 
   const resume = useCallback(() => {
     const s = stateRef.current;
     if (!s.track) return;
+    const a = preparing();
+    if (a) {
+      playWhenReady(a);
+      return;
+    }
     if (s.status === 'error' || !audio.getAttribute('src')) {
       void load(s.track, time.current, attempt.current?.decoded ?? false);
       return;
     }
+    wantPlay.current = true;
     if (audio.ended) audio.currentTime = 0;
     void audio.play().catch(() => undefined);
-  }, [audio, load]);
+  }, [audio, load, preparing, playWhenReady]);
 
-  const pause = useCallback(() => audio.pause(), [audio]);
+  const pause = useCallback(() => {
+    wantPlay.current = false;
+    audio.pause();
+    // While the file is prepared (or buffering) no pause event changes the
+    // status, so it changes here.
+    setState((s) => (s.track && s.status === 'loading' ? { ...s, status: 'paused' } : s));
+  }, [audio]);
 
   const toggle = useCallback(
     (track: PlayableTrack) => {
@@ -295,19 +359,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const seek = useCallback(
     (seconds: number) => {
       if (!stateRef.current.track) return;
-      const d = Number.isFinite(audio.duration) ? audio.duration : (stateRef.current.duration ?? seconds);
+      const a = preparing();
+      // While preparing, the element still holds the previous file.
+      const d = !a && Number.isFinite(audio.duration) ? audio.duration : (stateRef.current.duration ?? seconds);
       const t = Math.max(0, Math.min(d, seconds));
-      if (audio.readyState === 0) pendingSeek.current = t;
+      if (a) a.at = t;
+      else if (audio.readyState === 0) pendingSeek.current = t;
       else audio.currentTime = t;
-      time.current = t;
-      for (const l of [...listeners.current]) l();
+      notify(t);
     },
-    [audio],
+    [audio, preparing, notify],
   );
 
   const stop = useCallback(() => {
     seq.current += 1;
     attempt.current = null;
+    wantPlay.current = false;
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
@@ -320,6 +387,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setVolumeState(c);
     writePref('player.volume', c);
   }, []);
+
+  // Keep the title, tempo and key shown in the player current when the
+  // track is edited or analyzed again.
+  const refreshTrack = useMemo(
+    () =>
+      throttle(() => {
+        const id = stateRef.current.track?.id;
+        if (id == null) return;
+        client.track(id, { visuals: false }).then(
+          ({ track: t }) =>
+            setState((s) =>
+              s.track?.id === id ? { ...s, track: { id: t.id, displayTitle: t.displayTitle, artist: t.artist, duration: t.duration, djBpm: t.djBpm, djKey: t.djKey } } : s,
+            ),
+          () => undefined,
+        );
+      }, 1000),
+    [client],
+  );
+  useEffect(() => () => refreshTrack.cancel(), [refreshTrack]);
+  useCoreEvent(['library.changed', 'scan.finished'], () => {
+    if (stateRef.current.track) refreshTrack.run();
+  });
 
   // Media keys and the system's now-playing controls.
   useEffect(() => {

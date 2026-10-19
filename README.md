@@ -193,7 +193,7 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 | `crates/sonora-json` | A small JSON value type, parser and serializer. |
 | `crates/sonora-cli` | `sonora analyze / measure / compare / fixtures`, for development and calibration. |
 | `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests, plus the files prepared for playback (with range requests). Rejects other hosts and origins. |
-| `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog and opener plugins and bundles FFmpeg. The asset protocol serves audio for playback, limited at run time to the files the core prepared. |
+| `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog, opener, updater and process plugins and bundles FFmpeg. A private `sonora:` URL scheme serves audio for playback: only the files the core prepared, each under an id handed out with it, so the interface cannot read anything else on disk. |
 | `src/` | The interface: `api/` (bridges, typed client), `state/` (core context, imports, toasts, track actions), `views/`, `components/`, `charts/`, `lib/` (formatting, scores, routing, visual decoding), `styles/` (design tokens). |
 
 **Design decisions and trade-offs:**

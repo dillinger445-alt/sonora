@@ -442,8 +442,10 @@ test('editing tempo, key and genre changes the library, never the file', async (
   await expect(panel).toContainText('Techno');
   await expect(panel).toContainText('Edited');
 
-  // The genre is now a filter.
+  // The genre is now a filter. (Wait for the cleared search to apply first:
+  // a filter change resets the selection.)
   await page.getByRole('button', { name: 'Clear search' }).click();
+  await expect.poll(() => rows(page).count()).toBeGreaterThan(1);
   await page.getByRole('toolbar', { name: 'Filters' }).getByRole('button', { name: /^Genre/ }).click();
   await page.getByRole('menuitemcheckbox', { name: /Techno/ }).click();
   await page.keyboard.press('Escape');

@@ -23,8 +23,10 @@ export interface Jobs {
   discogsProgress: DiscogsProgress | null;
   /** While a dialog shows the export, its outcome is not announced again. Returns the release. */
   watchExport: () => () => void;
-  /** Marks a job as started (its first progress event may take a moment). */
+  /** Marks a job as started, before asking the core: a short job may finish before the answer arrives. */
   started: (job: 'export' | 'discogs') => void;
+  /** Asks the core which jobs run (after a start call failed). */
+  resync: () => void;
   cancelExport: () => void;
   cancelDiscogs: () => void;
 }
@@ -59,8 +61,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [discogsProgress, setDiscogsProgress] = useState<DiscogsProgress | null>(null);
   const watchers = useRef(0);
 
-  // A job may already run (the interface was reloaded during it).
-  useEffect(() => {
+  const resync = useCallback(() => {
     client.exportStatus().then(
       (s) => setExportRunning(s.running),
       () => undefined,
@@ -70,6 +71,9 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       () => undefined,
     );
   }, [client]);
+
+  // A job may already run (the interface was reloaded during it).
+  useEffect(resync, [resync]);
 
   useCoreEvent(['djexport.progress', 'djexport.finished', 'discogs.progress', 'discogs.finished'], (name, payload) => {
     switch (name) {
@@ -139,8 +143,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   }, [client]);
 
   const value = useMemo<Jobs>(
-    () => ({ exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, watchExport, started, cancelExport, cancelDiscogs }),
-    [exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, watchExport, started, cancelExport, cancelDiscogs],
+    () => ({ exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, watchExport, started, resync, cancelExport, cancelDiscogs }),
+    [exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, watchExport, started, resync, cancelExport, cancelDiscogs],
   );
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;
 }

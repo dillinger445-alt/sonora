@@ -10,6 +10,8 @@
  * Everything else in the UI talks only to this interface.
  */
 
+import type { PreparedPlayback } from './types.ts';
+
 export type Platform = 'macos' | 'windows' | 'linux' | 'web';
 
 /** Error raised by the core: a stable machine code plus a readable message. */
@@ -49,7 +51,7 @@ export interface Bridge {
   /** Opens a web page in the default browser (Discogs pages only). */
   openExternal(url: string): Promise<void>;
   /** URL the audio element can play for a file the core prepared for playback. */
-  mediaUrl(path: string): string;
+  mediaUrl(prepared: PreparedPlayback): string;
   /** Reveals a file in Finder / File Explorer. */
   reveal(path: string): Promise<void>;
   /** Registers file drag-and-drop handlers; resolves to an unregister function. */

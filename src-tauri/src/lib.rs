@@ -3,18 +3,126 @@
 //! Deliberately thin: it opens the analysis core (`crates/sonora-core`),
 //! exposes one IPC command that forwards JSON calls to it, relays core events
 //! to the webview, and registers the plugins it needs: single-instance (one
-//! process per library), dialog (native file pickers) and opener ("Reveal in
-//! Finder / File Explorer"). All application logic lives in the core, where
+//! process per library), dialog (native file pickers), opener ("Reveal in
+//! Finder / File Explorer"), updater and process (updates from GitHub
+//! releases, then a restart). All application logic lives in the core, where
 //! it is tested without a webview.
 
 use serde::Serialize;
 use serde_json::json;
 use sonora_core::{App as Core, AppConfig};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 /// Webview event that carries every core event as `{ name, payload }`.
 const EVENT_CHANNEL: &str = "sonora://event";
+
+/// URI scheme the web view plays audio from: `sonora://localhost/<id>` on
+/// macOS and `http://sonora.localhost/<id>` on Windows. It serves only the
+/// files the core prepared for playback, under an id handed out with them,
+/// so the interface cannot read anything else on disk (Tauri's general asset
+/// protocol would also expose folders picked in dialogs or dropped on the
+/// window).
+const AUDIO_SCHEME: &str = "sonora";
+/// Most bytes sent for one request; the audio element asks for the rest.
+const AUDIO_CHUNK: u64 = 2 * 1024 * 1024;
+/// Prepared files that stay playable (the most recent ones).
+const AUDIO_KEEP: usize = 16;
+
+/// Files the core prepared for playback: (id, path, MIME type), newest last.
+#[derive(Default)]
+struct AudioFiles {
+    next: AtomicU64,
+    files: Mutex<Vec<(String, PathBuf, String)>>,
+}
+
+impl AudioFiles {
+    fn add(&self, path: PathBuf, mime: String) -> String {
+        let id = format!("t{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
+        let mut files = self.files.lock().unwrap_or_else(|e| e.into_inner());
+        files.push((id.clone(), path, mime));
+        let excess = files.len().saturating_sub(AUDIO_KEEP);
+        files.drain(..excess);
+        id
+    }
+
+    fn get(&self, id: &str) -> Option<(PathBuf, String)> {
+        let files = self.files.lock().unwrap_or_else(|e| e.into_inner());
+        files.iter().find(|(i, _, _)| i == id).map(|(_, p, m)| (p.clone(), m.clone()))
+    }
+}
+
+/// `bytes=a-b`, `bytes=a-` or `bytes=-n` → first and last byte, or `Err` when
+/// it lies outside the file. `None` when there is no usable range.
+fn parse_range(value: &str, len: u64) -> Option<Result<(u64, u64), ()>> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    let (a, b) = spec.split(',').next()?.trim().split_once('-')?;
+    let (a, b) = (a.trim(), b.trim());
+    let range = if a.is_empty() {
+        let n: u64 = b.parse().ok()?;
+        if n == 0 {
+            return Some(Err(()));
+        }
+        (len.saturating_sub(n), len.checked_sub(1)?)
+    } else {
+        let start: u64 = a.parse().ok()?;
+        let end = if b.is_empty() { len.saturating_sub(1) } else { b.parse::<u64>().ok()?.min(len.saturating_sub(1)) };
+        (start, end)
+    };
+    if len == 0 || range.0 >= len || range.0 > range.1 {
+        return Some(Err(()));
+    }
+    Some(Ok(range))
+}
+
+fn plain(status: StatusCode) -> Response<Vec<u8>> {
+    Response::builder().status(status).body(Vec::new()).unwrap_or_default()
+}
+
+/// Answers one request of the audio element (range requests for seeking).
+fn serve_audio(files: &AudioFiles, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let id = request.uri().path().trim_start_matches('/');
+    let Some((path, mime)) = files.get(id) else { return plain(StatusCode::NOT_FOUND) };
+    let Ok(mut file) = std::fs::File::open(&path) else { return plain(StatusCode::NOT_FOUND) };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return plain(StatusCode::INTERNAL_SERVER_ERROR) };
+    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).and_then(|v| parse_range(v, len));
+    let (status, start, end) = match range {
+        Some(Ok((start, end))) => (StatusCode::PARTIAL_CONTENT, start, end.min(start + AUDIO_CHUNK - 1)),
+        Some(Err(())) => {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(header::CONTENT_RANGE, format!("bytes */{len}"))
+                .body(Vec::new())
+                .unwrap_or_default()
+        }
+        None if len == 0 || request.method() == tauri::http::Method::HEAD => {
+            return Response::builder()
+                .header(header::CONTENT_TYPE, mime)
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_LENGTH, len.to_string())
+                .body(Vec::new())
+                .unwrap_or_default()
+        }
+        None => (StatusCode::OK, 0, len - 1),
+    };
+    let mut body = vec![0u8; (end - start + 1) as usize];
+    if file.seek(SeekFrom::Start(start)).and_then(|_| file.read_exact(&mut body)).is_err() {
+        return plain(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let mut response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, body.len().to_string());
+    if status == StatusCode::PARTIAL_CONTENT {
+        response = response.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}"));
+    }
+    response.body(body).unwrap_or_default()
+}
 
 /// sonora-core declares the SQLite C API without linking a library (feature
 /// `external-sqlite`); libsqlite3-sys supplies it, compiled from source, so
@@ -85,26 +193,32 @@ async fn sonora_call(
         ApiErrorDto::internal()
     })?;
     match outcome {
-        Ok(text) => {
-            if name == "playback.prepare" {
-                allow_playback(&app, &text);
-            }
-            Ok(tauri::ipc::Response::new(text))
-        }
+        Ok(text) if name == "playback.prepare" => Ok(tauri::ipc::Response::new(register_playback(&app, text))),
+        Ok(text) => Ok(tauri::ipc::Response::new(text)),
         Err(e) => Err(ApiErrorDto { code: e.code, message: e.message }),
     }
 }
 
-/// Lets the web view read the one file the core prepared for playback
-/// through the asset protocol, whose scope is otherwise empty: the
-/// interface can never read arbitrary files from disk.
-fn allow_playback(app: &AppHandle, core_result: &str) {
-    let path = serde_json::from_str::<serde_json::Value>(core_result).ok().and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string));
-    if let Some(path) = path {
-        if let Err(e) = app.asset_protocol_scope().allow_file(&path) {
-            log("warn", "could not allow playback of a file", json!({ "error": e.to_string() }));
-        }
-    }
+/// Makes the file the core prepared for playback reachable through
+/// [`AUDIO_SCHEME`], and adds its id (`stream`) to the core's answer.
+fn register_playback(app: &AppHandle, core_result: String) -> String {
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&core_result) else { return core_result };
+    let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from);
+    let mime = v.get("mime").and_then(|m| m.as_str()).unwrap_or("application/octet-stream").to_string();
+    let Some(path) = path else { return core_result };
+    let id = app.state::<AudioFiles>().add(path, mime);
+    v["stream"] = json!(id);
+    v.to_string()
+}
+
+/// Stops the core's background work (scans, exports, lookups) before an
+/// update is installed: on Windows the installer ends this process, on macOS
+/// the app restarts into the new version. The library database is not
+/// touched by updates, so settings, edits and results are kept.
+#[tauri::command]
+async fn prepare_update(app: AppHandle) -> Result<(), ApiErrorDto> {
+    log("info", "stopping the core for an update", json!({}));
+    tauri::async_runtime::spawn_blocking(move || shutdown(&app)).await.map_err(|_| ApiErrorDto::internal())
 }
 
 /// In debug builds, prefer an FFmpeg fetched into `src-tauri/binaries/` by
@@ -191,8 +305,19 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sonora_call])
+        .plugin(tauri_plugin_process::init())
+        .manage(AudioFiles::default())
+        .register_asynchronous_uri_scheme_protocol(AUDIO_SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            // Reading a chunk is quick, but never on the thread that asked.
+            std::thread::spawn(move || responder.respond(serve_audio(&app.state::<AudioFiles>(), &request)));
+        })
+        .invoke_handler(tauri::generate_handler![sonora_call, prepare_update])
         .setup(|app| {
+            // Updates are signed; the public key and the GitHub endpoint are in
+            // tauri.conf.json (plugins > updater).
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let shell = open_core(app.handle());
             app.manage(shell);
             Ok(())
@@ -204,4 +329,21 @@ pub fn run() {
             shutdown(handle);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_range;
+
+    #[test]
+    fn ranges() {
+        assert_eq!(parse_range("bytes=0-", 100), Some(Ok((0, 99))));
+        assert_eq!(parse_range("bytes=10-19", 100), Some(Ok((10, 19))));
+        assert_eq!(parse_range("bytes=90-200", 100), Some(Ok((90, 99))));
+        assert_eq!(parse_range("bytes=-10", 100), Some(Ok((90, 99))));
+        assert_eq!(parse_range("bytes=100-", 100), Some(Err(())));
+        assert_eq!(parse_range("bytes=5-2", 100), Some(Err(())));
+        assert_eq!(parse_range("items=0-1", 100), None);
+        assert_eq!(parse_range("bytes=x-1", 100), None);
+    }
 }

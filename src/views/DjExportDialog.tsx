@@ -5,7 +5,7 @@
  * anything.
  */
 
-import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LuCircleAlert, LuCircleCheck, LuFolderOpen, LuTriangleAlert } from 'react-icons/lu';
 import type { ExportFormat, ExportOptions, ExportPlan, ExportQuality, ExportReport, KeyNotation } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
@@ -84,6 +84,10 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
   const [report, setReport] = useState<ExportReport | null>(null);
   const [starting, setStarting] = useState(false);
   const [showItems, setShowItems] = useState(false);
+  // Plans again when another export finishes while this one is set up.
+  const [planTick, setPlanTick] = useState(0);
+  // Set before the start call: a short export may finish before it returns.
+  const awaiting = useRef(false);
   const open = target != null;
 
   const options = useMemo<ExportOptions>(() => ({ format, quality, keyNotation: notation, bestCopy, rekordboxXml: xml }), [format, quality, notation, bestCopy, xml]);
@@ -93,6 +97,7 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
   useEffect(() => {
     if (!target) return;
     setPhase('setup');
+    awaiting.current = false;
     setReport(null);
     setPlan(null);
     setPlanError(null);
@@ -102,9 +107,10 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetKey]);
 
-  // While open, the dialog reports the outcome itself.
+  // While it shows a running export, the dialog reports the outcome itself.
   const watch = jobs.watchExport;
-  useEffect(() => (open ? watch() : undefined), [open, watch]);
+  const watching = open && phase === 'running';
+  useEffect(() => (watching ? watch() : undefined), [watching, watch]);
 
   // What would happen with these options.
   useEffect(() => {
@@ -128,15 +134,23 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
       clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetKey, options, phase, client]);
+  }, [targetKey, options, phase, client, planTick]);
 
   useCoreEvent(['djexport.finished'], (_n, payload) => {
-    if (!open || phase !== 'running') return;
+    if (!open) return;
+    if (!awaiting.current) {
+      // Someone else's export ended: this one may start now.
+      setPlanTick((n) => n + 1);
+      return;
+    }
+    awaiting.current = false;
     setReport(payload as ExportReport);
     setPhase('done');
   });
 
-  if (!target) return null;
+  // The dialog element stays mounted while closed, so closing it returns
+  // focus to where it was.
+  if (!target) return <Dialog open={false} title="" onClose={onClose}>{null}</Dialog>;
 
   const chooseFolder = async () => {
     const f = await bridge.pickFolder('Choose where to export');
@@ -153,14 +167,19 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
       return;
     }
     setStarting(true);
+    writePref('djexport.format', format);
+    writePref('djexport.quality', quality);
+    writePref('djexport.folder', dest);
+    // Running before the call returns: its finish event may come first.
+    awaiting.current = true;
+    setPhase('running');
+    jobs.started('export');
     try {
-      writePref('djexport.format', format);
-      writePref('djexport.quality', quality);
-      writePref('djexport.folder', dest);
       await client.exportStart(target.ids, options, dest, playlist.trim() || defaultPlaylist());
-      jobs.started('export');
-      setPhase('running');
     } catch (e) {
+      awaiting.current = false;
+      setPhase('setup');
+      jobs.resync();
       toast({ tone: 'error', title: 'The export could not start', body: e instanceof Error ? e.message : String(e) });
     } finally {
       setStarting(false);

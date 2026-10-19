@@ -64,7 +64,9 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
   const keyInvalid = keyText.trim() !== '' && key == null;
   const selectedKeys = useMemo(() => new Set(key != null ? [key] : []), [key]);
 
-  if (!target) return null;
+  // The dialog element stays mounted while closed, so closing it returns
+  // focus to where it was.
+  if (!target) return <Dialog open={false} title="" onClose={onClose}>{null}</Dialog>;
 
   const initial = {
     bpm: row?.djBpm != null ? formatBpm(row.djBpm) : '',

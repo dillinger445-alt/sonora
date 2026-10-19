@@ -9,6 +9,7 @@
  */
 
 import { CoreError, type Bridge, type DropHandlers } from './bridge.ts';
+import type { PreparedPlayback } from './types.ts';
 
 const EVENT_NAMES = [
   'scan.started',
@@ -124,7 +125,7 @@ export function createHttpBridge(base = ''): Bridge {
       window.open(url, '_blank', 'noopener,noreferrer');
       return Promise.resolve();
     },
-    mediaUrl: (path: string) => `${base}/api/audio?path=${encodeURIComponent(path)}`,
+    mediaUrl: (prepared: PreparedPlayback) => `${base}/api/audio?path=${encodeURIComponent(prepared.path)}`,
     reveal: async (path: string) => {
       await call('system.reveal', { path });
     },

@@ -80,7 +80,9 @@ impl Transport for Curl {
         }
         config += "write-out = \"\\n%{http_code}\"\n";
         let mut cmd = sonora_engine::decode::tools::quiet_command(&self.program);
-        cmd.args(["--silent", "--show-error", "--proto", "=https", "--tlsv1.2", "--max-time", "20", "--config", "-"])
+        // `-q` first: ignore the user's .curlrc, which could add headers,
+        // cookies or tracing to requests that carry the token.
+        cmd.args(["-q", "--silent", "--show-error", "--proto", "=https", "--tlsv1.2", "--max-time", "20", "--config", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -116,7 +118,13 @@ impl Transport for Curl {
         let body = String::from_utf8_lossy(&reader.join().unwrap_or_default()).to_string();
         let err = String::from_utf8_lossy(&err_reader.join().unwrap_or_default()).trim().to_string();
         if !status.success() {
-            return Err(if err.is_empty() { "the request to Discogs failed".into() } else { format!("could not reach Discogs: {}", err.trim_start_matches("curl: ")) });
+            // Only curl's own error line ("curl: (6) Could not resolve host…"),
+            // never anything else it printed.
+            let line = err.lines().rev().find(|l| l.starts_with("curl: (")).map(|l| l.trim_start_matches("curl: ").to_string());
+            return Err(match line {
+                Some(l) => format!("could not reach Discogs: {l}"),
+                None => "the request to Discogs failed".into(),
+            });
         }
         let (body, code) = body.rsplit_once('\n').unwrap_or(("", body.as_str()));
         let status = code.trim().parse::<u16>().map_err(|_| "unexpected answer from curl".to_string())?;
@@ -415,7 +423,8 @@ impl Discogs {
                 break;
             }
             events.emit("discogs.progress", &obj! { "done" => i, "total" => total, "found" => found, "current" => t.display_title() });
-            if !overwrite && t.dj_genre.is_some() {
+            // A genre taken from a folder name is only a fallback: look it up anyway.
+            if !overwrite && t.dj_genre.is_some() && t.dj_genre_source.as_deref() != Some("folder") {
                 skipped += 1;
                 continue;
             }

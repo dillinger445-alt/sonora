@@ -35,7 +35,14 @@ export function BpmText({ bpm, variable }: { bpm: number | null | undefined; var
   return (
     <span className="num bpm-text" data-tip={variable ? 'The tempo changes or drifts in this track' : undefined}>
       {formatBpm(bpm)}
-      {variable ? <span className="bpm-var" aria-label=" (variable tempo)">~</span> : null}
+      {variable ? (
+        <>
+          <span className="bpm-var" aria-hidden>
+            ~
+          </span>
+          <span className="visually-hidden"> (variable tempo)</span>
+        </>
+      ) : null}
     </span>
   );
 }

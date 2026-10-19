@@ -127,7 +127,17 @@ export function BpmFilter({ value, onChange, playingBpm }: { value: BpmRange; on
             </div>
           ) : null}
           <div className="pop-foot">
-            <Button size="sm" variant="ghost" disabled={!active && !value.halfDouble} onClick={() => onChange(NO_BPM)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!active && !value.halfDouble && !minText && !maxText}
+              onClick={() => {
+                // Also numbers still being typed, or out of range.
+                setMinText('');
+                setMaxText('');
+                onChange(NO_BPM);
+              }}
+            >
               Clear
             </Button>
           </div>

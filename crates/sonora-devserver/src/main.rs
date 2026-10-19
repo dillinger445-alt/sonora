@@ -8,7 +8,7 @@
 //! - `GET /api/events` → Server-Sent Events (`event: <name>`, `data: <json>`)
 //! - `GET /api/audio?path=…` → a file the core prepared for playback
 //!   (`playback.prepare`), with HTTP range support for seeking. Other paths
-//!   are refused, like the desktop app's scoped asset protocol.
+//!   are refused, like the desktop app's private `sonora:` scheme.
 //!
 //! Development only: it listens on 127.0.0.1, rejects cross-origin and
 //! foreign-Host requests, and is never part of the desktop build.

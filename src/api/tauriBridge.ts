@@ -15,6 +15,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { CoreError } from './bridge.ts';
 import type { Bridge, DropHandlers, Platform } from './bridge.ts';
+import type { PreparedPlayback } from './types.ts';
 
 const EVENT_CHANNEL = 'sonora://event';
 
@@ -125,9 +126,10 @@ export function createTauriBridge(): Bridge {
       return native('open_failed', () => openUrl(url));
     },
 
-    mediaUrl(path: string): string {
-      // The asset protocol, scoped by the shell to files prepared for playback.
-      return convertFileSrc(path);
+    mediaUrl(prepared: PreparedPlayback): string {
+      // The shell serves only files the core prepared for playback, by id.
+      if (!prepared.stream) throw new CoreError('playback_failed', 'This file could not be opened for playback.');
+      return convertFileSrc(prepared.stream, 'sonora');
     },
 
     async onFileDrop(handlers: DropHandlers): Promise<() => void> {
