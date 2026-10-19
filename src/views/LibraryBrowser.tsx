@@ -264,8 +264,8 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
         <div className="banner banner-info" role="status">
           <LuAudioLines aria-hidden />
           <span>
-            {plural(djPending, 'track')} {djPending === 1 ? 'was' : 'were'} analyzed before SONORA detected tempo and key. Detecting them reads each file once
-            more; scores do not change.
+            {plural(djPending, 'track')} {djPending === 1 ? 'was' : 'were'} analyzed before SONORA detected tempo and key. Detecting them analyzes{' '}
+            {djPending === 1 ? 'that file' : 'those files'} again in the background.
           </span>
           <Button size="sm" variant="primary" onClick={() => void detectDj()}>
             Detect BPM and key
