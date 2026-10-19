@@ -54,7 +54,18 @@ jobs:
           set -euo pipefail
           node scripts/release.ts notes "${GITHUB_REF_NAME#v}" > notes.md
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "A release for $GITHUB_REF_NAME exists already; its files are replaced."
+            # Made earlier, or on the GitHub website (which creates the tag
+            # by publishing a release): it gets the changelog as its notes
+            # and title when it has none, and stays a draft until its files
+            # are in place. Its files are replaced.
+            if [ -z "$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body // ""')" ]; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+            fi
+            if [ -z "$(gh release view "$GITHUB_REF_NAME" --json name --jq '.name // ""')" ]; then
+              gh release edit "$GITHUB_REF_NAME" --title "SONORA ${GITHUB_REF_NAME#v}"
+            fi
+            gh release edit "$GITHUB_REF_NAME" --draft=true
+            echo "A release for $GITHUB_REF_NAME exists already: a draft until its files are in place."
           else
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "SONORA ${GITHUB_REF_NAME#v}" --notes-file notes.md
           fi

@@ -46,6 +46,13 @@ so; nothing is published.
    git push origin v0.2.0
    ```
 
+   Or from the GitHub website: **Releases → Draft a new release**, type the
+   tag (`v0.2.0`) under *Choose a tag* and pick *Create new tag on
+   publish*, with `main` as the target, then **Publish release**. Publishing
+   creates the tag, which starts the same workflow; it takes the release back
+   to a draft until the installers are in place, and fills in the title and
+   notes from CHANGELOG.md if they were left empty.
+
 The workflow then:
 
 1. checks that the tag matches the three versions and that CHANGELOG.md has
