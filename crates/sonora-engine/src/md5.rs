@@ -81,11 +81,10 @@ impl Md5 {
             Self::compress(&mut self.state, &block);
             self.buf_len = 0;
         }
-        let mut chunks = data.chunks_exact(64);
-        for block in &mut chunks {
+        let (blocks, rest) = data.as_chunks::<64>();
+        for block in blocks {
             Self::compress(&mut self.state, block);
         }
-        let rest = chunks.remainder();
         self.buf[..rest.len()].copy_from_slice(rest);
         self.buf_len = rest.len();
     }

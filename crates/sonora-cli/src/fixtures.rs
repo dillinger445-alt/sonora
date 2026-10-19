@@ -92,7 +92,7 @@ pub fn generate(out: &Path, seconds: f64, ffmpeg: Option<&Path>) -> Result<Gener
     manifest.push(entry("polarity_inverted.wav", "Right channel polarity inverted (wiring error)", &["lossless", "phase"]));
 
     let mut mono = Vec::with_capacity(clean16.len());
-    for fr in clean16.chunks_exact(2) {
+    for fr in clean16.as_chunks::<2>().0 {
         let m = (fr[0] + fr[1]) * 0.5;
         mono.push(m);
         mono.push(m);
@@ -148,7 +148,9 @@ pub fn generate(out: &Path, seconds: f64, ffmpeg: Option<&Path>) -> Result<Gener
     let mut sl = BiquadState::default();
     let mut sr = BiquadState::default();
     let dark: Vec<f32> = base
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .flat_map(|fr| [sl.process(&c, fr[0] as f64) as f32, sr.process(&c, fr[1] as f64) as f32])
         .collect();
     let dark_wav = w(".tmp/dark.wav", 16, &quantize16(&dark))?;
@@ -158,7 +160,9 @@ pub fn generate(out: &Path, seconds: f64, ffmpeg: Option<&Path>) -> Result<Gener
     let mut st_l = vec![BiquadState::default(); 16];
     let mut st_r = vec![BiquadState::default(); 16];
     let brick: Vec<f32> = base
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .flat_map(|fr| {
             let mut l = fr[0] as f64;
             let mut r = fr[1] as f64;

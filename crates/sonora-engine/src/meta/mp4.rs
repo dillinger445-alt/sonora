@@ -904,7 +904,7 @@ fn data_value(data: &[u8]) -> Option<(u32, &[u8])> {
 fn text_of(type_code: u32, payload: &[u8]) -> Option<String> {
     let s = match type_code {
         2 => {
-            let units: Vec<u16> = payload.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+            let units: Vec<u16> = payload.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
             String::from_utf16_lossy(&units)
         }
         _ => String::from_utf8_lossy(payload).to_string(),

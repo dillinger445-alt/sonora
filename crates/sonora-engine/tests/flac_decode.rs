@@ -92,7 +92,7 @@ fn reference_s32(ff: &Path, path: &Path) -> Vec<i32> {
         .output()
         .expect("run ffmpeg");
     assert!(out.status.success(), "ffmpeg failed to decode {}", path.display());
-    out.stdout.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    out.stdout.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c)).collect()
 }
 
 fn decode_native(path: &Path, chunk: usize) -> (Vec<f32>, StreamInfo, DecodeStats) {

@@ -173,8 +173,8 @@ fn record(report: &mut ImportReport, o: Outcome, restored: bool) {
 /// Marks tracks under `root` that were not seen during the walk and no
 /// longer exist on disk as missing (their results are kept).
 fn mark_missing_under(c: &Connection, root: &Path, seen: &HashSet<String>) -> Result<u64, StoreError> {
-    let prefix = format!("{}{}", escape_like(path_str(root).trim_end_matches(['/', '\\'])), std::path::MAIN_SEPARATOR);
-    let rows = c.query("SELECT id, path FROM tracks WHERE missing_since IS NULL AND path LIKE ? ESCAPE '\\'", params![format!("{}%", escape_like_sep(&prefix))], |r| (r.i64(0), r.text(1)))?;
+    let pattern = format!("{}%", under_pattern(root));
+    let rows = c.query("SELECT id, path FROM tracks WHERE missing_since IS NULL AND path LIKE ? ESCAPE '\\'", params![pattern], |r| (r.i64(0), r.text(1)))?;
     let now = now_ms();
     let mut n = 0;
     for (id, p) in rows {
@@ -186,9 +186,15 @@ fn mark_missing_under(c: &Connection, root: &Path, seen: &HashSet<String>) -> Re
     Ok(n)
 }
 
-// The separator itself needs no escaping; this exists to keep the intent explicit.
-fn escape_like_sep(s: &str) -> String {
-    s.to_string()
+/// LIKE prefix (escaped for `ESCAPE '\\'`) of the paths inside `root`: the
+/// root and the platform's separator. The separator is escaped too: on
+/// Windows it is the backslash, which would otherwise escape what follows.
+fn under_pattern(root: &Path) -> String {
+    like_prefix(&path_str(root), std::path::MAIN_SEPARATOR)
+}
+
+fn like_prefix(root: &str, sep: char) -> String {
+    escape_like(&format!("{}{}", root.trim_end_matches(['/', '\\']), sep))
 }
 
 /// Indexes `paths` (files and/or folders). Folders are registered as
@@ -817,6 +823,21 @@ pub fn remove_folder(c: &Connection, id: i64, remove_tracks_too: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_prefix_pattern_matches_only_paths_inside() {
+        let c = Connection::open_in_memory().unwrap();
+        // Both separators, whatever this platform uses: LIKE wildcards in a
+        // folder name stay literal, and a backslash separator (Windows) must
+        // not escape the trailing %.
+        for (root, sep) in [("/music/100%_club", '/'), ("C:\\music\\100%_club", '\\')] {
+            let pattern = format!("{}%", like_prefix(root, sep));
+            let hit = |p: String| c.query_row("SELECT ? LIKE ? ESCAPE '\\'", params![p, pattern.as_str()], |r| r.i64(0)).unwrap() == Some(1);
+            assert!(hit(format!("{root}{sep}a.wav")), "{pattern}");
+            assert!(!hit(format!("{root}bing{sep}b.wav")), "{pattern}");
+            assert!(!hit(root.replace("100%_club", "100x club") + &format!("{sep}c.wav")), "{pattern}");
+        }
+    }
 
     #[test]
     fn filter_sql_is_parameterised() {

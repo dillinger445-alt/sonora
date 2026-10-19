@@ -182,13 +182,13 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 157 Rust tests: DSP, decoders, scoring, indexing, scan queue, database, API
+npm run test:rust          # 158 Rust tests: DSP, decoders, scoring, indexing, scan queue, database, API
 npm run test:unit          # 20 interface unit tests (formatting, scores, routing, paths, visual decoding)
 npm run typecheck          # strict TypeScript, including tests and e2e
 npm run build && npm run test:e2e   # 13 Playwright tests: real interface + real core on a generated corpus
 ```
 
-One Rust test is Unix-only (symlink loops), so Windows runs 156. The
+One Rust test is Unix-only (symlink loops), so Windows runs 157. The
 FFmpeg-based checks are skipped with a note when FFmpeg is not installed.
 
 The end-to-end suite imports the corpus through the interface and

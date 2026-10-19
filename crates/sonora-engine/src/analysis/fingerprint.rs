@@ -122,7 +122,7 @@ pub fn to_bytes(fp: &[u32]) -> Vec<u8> {
 }
 
 pub fn from_bytes(b: &[u8]) -> Vec<u32> {
-    b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
 }
 
 #[cfg(test)]

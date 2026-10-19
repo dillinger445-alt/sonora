@@ -33,10 +33,7 @@ fn decode_text(enc: u8, bytes: &[u8]) -> String {
                     body = &body[2..];
                 }
             }
-            let units: Vec<u16> = body
-                .chunks_exact(2)
-                .map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) })
-                .collect();
+            let units: Vec<u16> = body.as_chunks::<2>().0.iter().map(|c| if be { u16::from_be_bytes(*c) } else { u16::from_le_bytes(*c) }).collect();
             String::from_utf16_lossy(&units)
         }
         _ => String::from_utf8_lossy(bytes).to_string(),
@@ -115,7 +112,7 @@ pub fn parse_tag(tag: &[u8]) -> Vec<(String, String)> {
                 let enc = data[0];
                 let rest = &data[4..];
                 let sep = if enc == 1 || enc == 2 {
-                    rest.chunks_exact(2).position(|c| c == [0, 0]).map(|p| p * 2 + 2)
+                    rest.as_chunks::<2>().0.iter().position(|c| *c == [0, 0]).map(|p| p * 2 + 2)
                 } else {
                     rest.iter().position(|&b| b == 0).map(|p| p + 1)
                 };

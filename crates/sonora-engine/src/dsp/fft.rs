@@ -57,7 +57,7 @@ impl Fft {
             }
         }
         // First stage: twiddle 1.
-        for (r, i) in re.chunks_exact_mut(2).zip(im.chunks_exact_mut(2)) {
+        for (r, i) in re.as_chunks_mut::<2>().0.iter_mut().zip(im.as_chunks_mut::<2>().0.iter_mut()) {
             let (a, b) = (r[0], r[1]);
             r[0] = a + b;
             r[1] = a - b;
@@ -132,7 +132,7 @@ impl RealFft {
     /// Computes the complex spectrum of `input` (length `n`) into `out_re`/`out_im` (length `n/2+1`).
     pub fn forward(&mut self, input: &[f32], out_re: &mut [f32], out_im: &mut [f32]) {
         let h = self.n / 2;
-        for ((r, i), pair) in self.re.iter_mut().zip(self.im.iter_mut()).zip(input.chunks_exact(2)) {
+        for ((r, i), pair) in self.re.iter_mut().zip(self.im.iter_mut()).zip(input.as_chunks::<2>().0) {
             *r = pair[0];
             *i = pair[1];
         }

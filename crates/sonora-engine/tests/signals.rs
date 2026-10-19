@@ -72,7 +72,9 @@ fn lowpass_cascade(x: &[f32], hz: f64, sections: usize) -> Vec<f32> {
     let c = BiquadCoef::lowpass(FS as f64, hz, std::f64::consts::FRAC_1_SQRT_2);
     let mut l = vec![BiquadState::default(); sections];
     let mut r = vec![BiquadState::default(); sections];
-    x.chunks_exact(2)
+    x.as_chunks::<2>()
+        .0
+        .iter()
         .flat_map(|fr| {
             let (mut a, mut b) = (fr[0] as f64, fr[1] as f64);
             for s in l.iter_mut() {
@@ -278,7 +280,7 @@ fn dc_offset_padding_and_dual_mono() {
     assert_eq!(p.signal.measurements.effective_bits, Some(16));
     assert!(find(&p, "padded_bits").is_some());
 
-    let mono: Vec<f32> = x.chunks_exact(2).flat_map(|f| [f[0], f[0]]).collect();
+    let mono: Vec<f32> = x.as_chunks::<2>().0.iter().flat_map(|f| [f[0], f[0]]).collect();
     let m = native(&write("dualmono.wav", 16, &mono));
     assert!(m.signal.measurements.stereo.as_ref().unwrap().identical);
     assert!(find(&m, "dual_mono").is_some());

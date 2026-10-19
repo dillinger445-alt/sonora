@@ -1027,7 +1027,7 @@ impl FlacSource {
         // layout libFLAC hashes). Fixed-width paths avoid per-sample memcpy.
         macro_rules! pack {
             ($n:literal) => {{
-                let mut cells = out.chunks_exact_mut($n);
+                let mut cells = out.as_chunks_mut::<$n>().0.iter_mut();
                 for i in 0..bs {
                     for c in chans.iter().take(ch) {
                         let s = c[i];
