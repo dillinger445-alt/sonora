@@ -116,6 +116,11 @@ This builds for the current machine and bundles FFmpeg. It produces
 Windows, in `src-tauri/target/release/bundle/`. Build each platform on that
 platform. Cross-compiling is not supported, and CI uses one runner per OS.
 
+CI also builds the installers for macOS (Apple silicon and Intel) and
+Windows x64 on every push to `main`. Download them from the *Artifacts*
+section of a CI run on GitHub's Actions tab. GitHub keeps them for 14 days
+and asks you to sign in to download.
+
 Signing and notarization are optional: on macOS through environment
 variables, on Windows through Tauri configuration (a certificate thumbprint
 or a sign command). See [docs/BUILDING.md](docs/BUILDING.md#signing-and-notarization)
@@ -208,6 +213,8 @@ keyboard use of menus.
   button.
 - **macOS says the app can't be opened.** Unsigned builds need
   *Open Anyway* in System Settings → Privacy & Security once.
+- **Windows says "Windows protected your PC".** SmartScreen warns about
+  unsigned installers. Choose *More info*, then *Run anyway*.
 - **A folder shows as unavailable.** Its drive is disconnected. Its tracks
   keep their results and are restored when the drive returns and the
   folder is rescanned.
@@ -218,11 +225,10 @@ There are more answers in [docs/BUILDING.md](docs/BUILDING.md#troubleshooting).
 
 ## Status and known limitations
 
-- The Tauri desktop shell was written and reviewed, but it was not compiled
-  in the environment where SONORA was built, because package registries
-  were unreachable. The first real build happens on CI or on your machine
-  (`npm run app:dev`). The core, the engine, the dev bridge and the
-  interface were built and tested.
+- The installers are not signed, so macOS and Windows warn before the first
+  launch (see Troubleshooting). Automated tests cover the core, the engine,
+  the dev bridge and the interface, but not the packaged desktop app: CI
+  builds the installers without launching them.
 - Mains hum, clicks and crackle, and wow and flutter are not detected.
   High-bitrate lossy sources (AAC 256, MP3 V0 or 320) in lossless
   containers are usually inconclusive by nature.
