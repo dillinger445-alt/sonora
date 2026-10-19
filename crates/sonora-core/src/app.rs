@@ -43,6 +43,7 @@ pub struct App {
     pub dup_running: Arc<AtomicBool>,
     dup_cancel: Arc<AtomicBool>,
     pub exporter: Arc<crate::djexport::Exporter>,
+    pub syncer: Arc<crate::usb::Syncer>,
     pub discogs: Arc<crate::discogs::Discogs>,
 }
 
@@ -92,6 +93,7 @@ impl App {
             dup_running: Arc::new(AtomicBool::new(false)),
             dup_cancel: Arc::new(AtomicBool::new(false)),
             exporter: Arc::new(crate::djexport::Exporter::default()),
+            syncer: Arc::new(crate::usb::Syncer::default()),
             discogs: Arc::new(crate::discogs::Discogs::new(&version)),
         });
         // Work interrupted by a crash or by quitting mid-scan continues where
@@ -183,6 +185,7 @@ impl App {
     pub fn shutdown(&self) {
         self.dup_cancel.store(true, Ordering::Relaxed);
         self.exporter.cancel();
+        self.syncer.cancel();
         self.discogs.cancel();
         self.scans.shutdown(Duration::from_secs(5));
         logging::log("info", "app", "core stopped");

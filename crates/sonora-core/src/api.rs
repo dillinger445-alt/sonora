@@ -138,6 +138,25 @@ fn queued_json(q: crate::jobs::Queued) -> R {
     Ok(obj! { "queued" => q.queued, "alreadyQueued" => q.already })
 }
 
+/// Where to send playlists, which ones, and how.
+fn usb_params(p: &Value) -> Result<(PathBuf, Vec<i64>, crate::usb::SyncOptions), ApiError> {
+    let root = PathBuf::from(p.req_str("root").map_err(|e| ApiError::invalid(e.to_string()))?);
+    if !root.is_absolute() {
+        return Err(ApiError::invalid("root must be an absolute path"));
+    }
+    if !root.is_dir() {
+        return Err(ApiError::not_found(format!("{} is not available", root.display())));
+    }
+    let ids = ids_param(p, "playlistIds")?;
+    let opts = crate::usb::SyncOptions::from_json(p).map_err(ApiError::invalid)?;
+    Ok((root, ids, opts))
+}
+
+fn usb_tools_problem(plan: &crate::usb::SyncPlan, tools: &sonora_engine::decode::ToolPaths) -> Option<String> {
+    let items: Vec<crate::djexport::PlanItem> = plan.files.iter().map(|f| plan.leaves[f.leaf].items[f.item].clone()).collect();
+    crate::djexport::check_tools(&plan.options.export, &items, tools).err()
+}
+
 pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
     match method {
         "app.info" => Ok(app.info()),
@@ -479,6 +498,9 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             })
         }
         "djexport.start" => {
+            if app.syncer.is_running() {
+                return Err(ApiError::new("busy", "Playlists are being sent to a drive; wait for that to finish."));
+            }
             let ids = ids_param(p, "ids")?;
             let opts = crate::djexport::ExportOptions::from_json(p).map_err(ApiError::invalid)?;
             let folder = PathBuf::from(p.req_str("folder").map_err(|e| ApiError::invalid(e.to_string()))?);
@@ -504,6 +526,36 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         }
         "djexport.cancel" => Ok(obj! { "ok" => app.exporter.cancel() }),
         "djexport.status" => Ok(obj! { "running" => app.exporter.is_running(), "last" => app.exporter.last() }),
+
+        // --------------------------------------------------- USB drives
+        "usb.drives" => Ok(obj! { "drives" => Value::Array(crate::usb::drives().iter().map(ToJson::to_json).collect()) }),
+        "usb.plan" => {
+            let (root, ids, opts) = usb_params(p)?;
+            let mut plan = crate::usb::plan(&app.db.read(), &root, &ids, &opts)?;
+            let tools = app.scans.shared.tools.read().unwrap_or_else(|e| e.into_inner()).clone();
+            if plan.problem.is_none() {
+                plan.problem = usb_tools_problem(&plan, &tools);
+            }
+            Ok(plan.to_json(app.syncer.is_running() || app.exporter.is_running()))
+        }
+        "usb.start" => {
+            if app.exporter.is_running() {
+                return Err(ApiError::new("busy", "A DJ export is running; wait for it to finish."));
+            }
+            let (root, ids, opts) = usb_params(p)?;
+            let plan = crate::usb::plan(&app.db.read(), &root, &ids, &opts)?;
+            let tools = app.scans.shared.tools.read().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Some(problem) = plan.problem.clone().or_else(|| usb_tools_problem(&plan, &tools)) {
+                return Err(ApiError::new("cannot_send", problem));
+            }
+            let total = plan.files.len();
+            if !app.syncer.start(plan, Arc::clone(&app.events), tools, app.config.app_version.clone()) {
+                return Err(ApiError::new("busy", "Playlists are already being sent to a drive."));
+            }
+            Ok(obj! { "accepted" => true, "total" => total })
+        }
+        "usb.cancel" => Ok(obj! { "ok" => app.syncer.cancel() }),
+        "usb.status" => Ok(obj! { "running" => app.syncer.is_running(), "last" => app.syncer.last() }),
 
         // ------------------------------------------------------ Discogs
         "discogs.status" => Ok(obj! {

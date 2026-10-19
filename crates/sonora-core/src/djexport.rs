@@ -98,7 +98,7 @@ impl ToJson for PlanItem {
 }
 
 /// Characters no file system accepts in names, plus control characters.
-fn clean_name(s: &str) -> String {
+pub(crate) fn clean_name(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
@@ -246,7 +246,7 @@ pub fn plan(c: &Connection, ids: &[i64], opts: &ExportOptions) -> Result<Vec<Pla
 }
 
 /// A path in `folder` for `name` that does not exist yet ("Name (2).aiff", …).
-fn unique_path(folder: &Path, name: &str) -> PathBuf {
+pub(crate) fn unique_path(folder: &Path, name: &str) -> PathBuf {
     let p = folder.join(name);
     if !p.exists() {
         return p;
@@ -260,7 +260,7 @@ fn unique_path(folder: &Path, name: &str) -> PathBuf {
 
 // ------------------------------------------------------------ rekordbox
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -506,16 +506,30 @@ fn run(job: &Job, events: &EventBus, tools: &ToolPaths, cancel: &AtomicBool) -> 
     }
 }
 
-enum ExportError {
+pub(crate) enum ExportError {
     Cancelled,
     Failed(String),
 }
 
 fn export_one(item: &PlanItem, job: &Job, tools: &ToolPaths, cancel: &AtomicBool, emit: &mut dyn FnMut(f64, bool)) -> Result<Written, ExportError> {
+    export_file(item, &job.folder, &item.file_name, &job.options, tools, cancel, emit)
+}
+
+/// Writes one DJ-ready file for `item` into `folder`, as `file_name` or,
+/// when that name is taken, "name (2)" and so on: nothing is overwritten.
+pub(crate) fn export_file(
+    item: &PlanItem,
+    folder: &Path,
+    file_name: &str,
+    options: &ExportOptions,
+    tools: &ToolPaths,
+    cancel: &AtomicBool,
+    emit: &mut dyn FnMut(f64, bool),
+) -> Result<Written, ExportError> {
     let src = Path::new(&item.source.path);
     let facts = probe_file(src, tools).map_err(|e| ExportError::Failed(format!("the source cannot be read: {e}")))?;
     let t = &item.track;
-    let key = t.dj_key.filter(|k| (0..24).contains(k)).map(|k| format_key(k as u8, job.options.notation, true));
+    let key = t.dj_key.filter(|k| (0..24).contains(k)).map(|k| format_key(k as u8, options.notation, true));
     let tags = TagSet {
         title: t.title.clone().or_else(|| facts.tags.title.clone()).or_else(|| Some(t.display_title())),
         artist: t.artist.clone().or_else(|| facts.tags.artist.clone()),
@@ -527,10 +541,10 @@ fn export_one(item: &PlanItem, job: &Job, tools: &ToolPaths, cancel: &AtomicBool
         comment: facts.tags.comment.clone(),
         picture: picture::extract(src, facts.container, tools),
     };
-    let dest = unique_path(&job.folder, &item.file_name);
+    let dest = unique_path(folder, file_name);
     let final_name = dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let tmp = job.folder.join(format!(".{final_name}.sonora-part"));
-    let req = ConvertRequest { src, facts: &facts, target: job.options.target, quality: job.options.quality, tags: &tags, dest: &tmp, tools, cancel };
+    let tmp = folder.join(format!(".{final_name}.sonora-part"));
+    let req = ConvertRequest { src, facts: &facts, target: options.target, quality: options.quality, tags: &tags, dest: &tmp, tools, cancel };
     let result = convert(&req, &mut |p| emit(p, false));
     let out = match result {
         Ok(o) => o,
@@ -543,7 +557,7 @@ fn export_one(item: &PlanItem, job: &Job, tools: &ToolPaths, cancel: &AtomicBool
         }
     };
     // Another file may have taken the name meanwhile: never replace it.
-    let dest = if dest.exists() { unique_path(&job.folder, &item.file_name) } else { dest };
+    let dest = if dest.exists() { unique_path(folder, file_name) } else { dest };
     if let Err(e) = std::fs::rename(&tmp, &dest) {
         let _ = std::fs::remove_file(&tmp);
         return Err(ExportError::Failed(format!("the file could not be saved as {}: {e}", dest.display())));
