@@ -192,10 +192,13 @@ export function DndProvider({ children }: { children: ReactNode }) {
       };
 
       const key = (ev: KeyboardEvent) => {
-        if (ev.key === 'Escape') {
+        if (ev.key !== 'Escape') return;
+        // Escape cancels a drag, and only that (not the selection too).
+        if (started) {
           ev.preventDefault();
-          stop();
+          ev.stopPropagation();
         }
+        stop();
       };
 
       function stop() {

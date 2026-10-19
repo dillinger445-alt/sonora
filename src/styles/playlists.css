@@ -218,6 +218,11 @@
   color: var(--c-text-3);
 }
 
+/* Only there to keep the menu's events from reaching the row. */
+.pl-menu {
+  display: contents;
+}
+
 .pl-more {
   display: grid;
   place-items: center;
@@ -358,12 +363,6 @@ body.is-dragging * {
   display: block;
   overflow: visible;
   outline: none;
-}
-
-.tl svg:focus-visible {
-  outline: 1px solid var(--c-lime-line);
-  outline-offset: 3px;
-  border-radius: 2px;
 }
 
 .tl-seg {
@@ -949,6 +948,16 @@ body.is-dragging * {
   gap: 10px;
   padding-top: 14px;
   border-top: 1px solid var(--c-line-faint);
+}
+
+.usb-status {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usb-status:empty {
+  display: none;
 }
 
 .usb-summary strong {

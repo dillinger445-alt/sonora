@@ -349,8 +349,12 @@ impl Entry {
 
     fn from_json(v: &Value) -> Option<Entry> {
         let path = v.get("path")?.as_str()?.to_string();
-        // Only plain relative paths inside the drive.
-        if path.is_empty() || path.starts_with('/') || path.contains('\\') || path.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+        // Only plain relative paths in the folders SONORA writes to. The
+        // record is on the drive, so it is not trusted: no "..", no drive
+        // letters or streams (":"), no other separators.
+        let parts: Vec<&str> = path.split('/').collect();
+        let inside = parts.len() >= 2 && (parts[0] == SYNC_DIR || parts[0] == "_Serato_");
+        if !inside || parts.iter().any(|c| c.is_empty() || *c == "." || *c == ".." || c.contains([':', '\\']) || c.chars().any(char::is_control)) {
             return None;
         }
         Some(Entry {
@@ -1454,7 +1458,8 @@ mod tests {
     fn manifest_paths_stay_on_the_drive() {
         let ok = obj! { "path" => "SONORA/01 Set/001 - A.aiff", "bytes" => 10 };
         assert!(Entry::from_json(&ok).is_some());
-        for bad in ["../x.aiff", "/etc/passwd", "SONORA/../../x", "SONORA//x", "C:\\x", ""] {
+        assert!(Entry::from_json(&obj! { "path" => "_Serato_/Subcrates/SONORA%%01 Set.crate", "bytes" => 10 }).is_some());
+        for bad in ["../x.aiff", "/etc/passwd", "SONORA/../../x", "SONORA//x", "C:\\x", "", "SONORA/C:x.aiff", "SONORA/a\\..\\..\\x", "Music/x.aiff", "SONORA", "SONORA/x.aiff:stream"] {
             assert!(Entry::from_json(&obj! { "path" => bad, "bytes" => 10 }).is_none(), "{bad}");
         }
         assert_eq!(pad(7, 12), "07");

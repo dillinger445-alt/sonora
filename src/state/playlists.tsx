@@ -9,7 +9,8 @@ import type { LibraryFilter, PlaylistKind, PlaylistNode, SmartRules, Sort } from
 import { useConfirm } from '../components/Dialog.tsx';
 import { plural } from '../lib/format.ts';
 import { readPref, writePref } from '../lib/persist.ts';
-import { navigate, useRoute } from '../lib/router.ts';
+import { reinsertions } from '../lib/reinsert.ts';
+import { navigate, parseRoute } from '../lib/router.ts';
 import { OrganizeDialog, type OrganizeTarget } from '../views/OrganizeDialog.tsx';
 import { SmartRulesDialog, type RulesTarget } from '../views/SmartRulesDialog.tsx';
 import { UsbDialog } from '../views/UsbDialog.tsx';
@@ -33,7 +34,8 @@ export interface Playlists {
   createSmart: (name: string, rules: SmartRules) => Promise<PlaylistNode | null>;
   rename: (id: number, name: string) => Promise<void>;
   move: (id: number, parentId: number | null, index: number) => Promise<void>;
-  remove: (id: number) => Promise<void>;
+  /** Deletes after asking; true once deleted. */
+  remove: (id: number) => Promise<boolean>;
   duplicate: (id: number) => Promise<void>;
   addTracks: (id: number, trackIds: number[], index?: number) => Promise<void>;
   /** Removes, with Undo in the notification. `order` is the order before. */
@@ -69,7 +71,6 @@ function freeName(base: string, taken: Iterable<string>): string {
 export function PlaylistsProvider({ children }: { children: ReactNode }) {
   const { client } = useCore();
   const toast = useToast();
-  const route = useRoute();
   const [confirm, confirmDialog] = useConfirm();
   const list = useResource(() => client.playlists(), [], { events: ['playlists.changed', 'library.changed', 'scan.finished'], throttleMs: 400 });
   // Nodes just made here, shown until the reloaded list holds them.
@@ -192,7 +193,7 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
   const remove = useCallback(
     async (id: number) => {
       const n = byId.get(id);
-      if (!n) return;
+      if (!n) return false;
       const inside = n.kind === 'folder' ? nodes.filter((x) => x.id !== id && isWithin(x.id, id)).length : 0;
       const what = n.kind === 'folder' ? 'folder' : n.kind === 'smart' ? 'smart playlist' : 'playlist';
       const { confirmed } = await confirm({
@@ -205,18 +206,22 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
         ),
         confirmLabel: `Delete ${what}`,
       });
-      if (!confirmed) return;
+      if (!confirmed) return false;
       try {
         await client.deletePlaylist(id);
         setFresh((f) => f.filter((x) => x.id !== id && !isWithin(x.id, id)));
         reload();
-        if (route.view === 'playlist' && isWithin(route.id, id)) navigate({ view: 'library' }, true);
+        // Where the window is now, not where it was when this started.
+        const now = parseRoute(window.location.hash);
+        if (now.view === 'playlist' && isWithin(now.id, id)) navigate({ view: 'library' }, true);
         toast({ tone: 'success', title: `Deleted “${n.name}”` });
+        return true;
       } catch (e) {
         fail('Could not delete', e);
+        return false;
       }
     },
-    [byId, nodes, isWithin, confirm, client, reload, route, toast, fail],
+    [byId, nodes, isWithin, confirm, client, reload, toast, fail],
   );
 
   const duplicate = useCallback(
@@ -239,19 +244,20 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
       try {
         const r = await client.addToPlaylist(id, trackIds, index);
         const name = n ? `“${n.name}”` : 'the playlist';
+        const now = parseRoute(window.location.hash);
         if (r.added === 0) toast({ tone: 'info', title: r.already === 1 ? `Already in ${name}` : `All already in ${name}` });
         else
           toast({
             tone: 'success',
             title: `Added ${plural(r.added, 'track')} to ${name}`,
             body: r.already > 0 ? `${plural(r.already, 'track')} ${r.already === 1 ? 'was' : 'were'} there already.` : undefined,
-            action: route.view === 'playlist' && route.id === id ? undefined : { label: 'Open', run: () => navigate({ view: 'playlist', id }) },
+            action: now.view === 'playlist' && now.id === id ? undefined : { label: 'Open', run: () => navigate({ view: 'playlist', id }) },
           });
       } catch (e) {
         fail('Could not add to the playlist', e);
       }
     },
-    [byId, client, toast, route, fail],
+    [byId, client, toast, fail],
   );
 
   const removeTracks = useCallback(
@@ -265,10 +271,11 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
           action: {
             label: 'Undo',
             run: () => {
-              void client
-                .addToPlaylist(id, trackIds)
-                .then(() => client.reorderPlaylist(id, order))
-                .catch((e: unknown) => fail('Could not undo', e));
+              // Back where they were, even if the playlist changed since.
+              void (async () => {
+                const now = (await client.playlistTracks(id)).rows.map((t) => t.id);
+                for (const step of reinsertions(order, trackIds, now)) await client.addToPlaylist(id, step.ids, step.index);
+              })().catch((e: unknown) => fail('Could not undo', e));
             },
           },
           timeout: 8000,

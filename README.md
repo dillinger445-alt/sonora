@@ -254,13 +254,13 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 218 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, API
-npm run test:unit          # 36 unit tests (formatting, key notations, mixing, scores, routing, paths, visual decoding, release notes and the release script)
+npm run test:rust          # 219 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, API
+npm run test:unit          # 38 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
 npm run build && npm run test:e2e   # 22 Playwright tests: real interface + real core on a generated corpus
 ```
 
-One Rust test is Unix-only (symlink loops), so Windows runs 217. The
+One Rust test is Unix-only (symlink loops), so Windows runs 218. The
 FFmpeg-based checks are skipped with a note when FFmpeg is not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
@@ -279,7 +279,8 @@ DJ export with its rekordbox.xml, playback (including a format the browser
 cannot play), the Discogs token prompt, updates (with a simulated release),
 playlists (made and renamed in the sidebar, filled by dragging and from the
 details panel, reordered by keyboard and by dragging, Undo after taking a
-track out), smart playlists and folders, and Send to USB (the files,
+track out), smart playlists and folders (moved by dragging and from the
+keyboard, and row menus), and Send to USB (the files,
 playlists and rekordbox.xml on the drive, a second send that renames and
 removes only SONORA's own files, and files of the owner's left alone).
 

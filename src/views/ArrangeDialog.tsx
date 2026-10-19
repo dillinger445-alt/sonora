@@ -63,6 +63,8 @@ export function ArrangeDialog({
     if (!open) return;
     let stale = false;
     setError(null);
+    // An order worked out for other choices must not be used meanwhile.
+    setResult(null);
     client.arrangePlaylist(playlistId, { start: keepFirst ? (first?.id ?? null) : null, tempo: rising ? 'rising' : 'any' }).then(
       (r) => {
         if (!stale) setResult(r);

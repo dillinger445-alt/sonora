@@ -68,16 +68,18 @@ from nothing. The rules:
   falling;
 - at most a number of tracks (up to 10,000).
 
-Other library filters you saved with it (format, issue, status, folder,
-score range) are kept as they are. **Edit rules…** changes the rules at any
-time, and **Convert to a playlist** turns a smart playlist into an ordinary
-playlist of what it lists now, which you can then order by hand.
+Other library filters you saved with it (format, issue, status, folder, a
+score range) are kept as they are, and the window lists them. A smart
+playlist holds one score range, so choosing a DJ score replaces a saved
+one. **Edit rules…** changes the rules at any time, and **Convert to a
+playlist** turns a smart playlist into an ordinary playlist of what it lists
+now, which you can then order by hand.
 
 ### Keyboard
 
 | Where | Keys |
 | --- | --- |
-| The playlists in the sidebar | **↑** **↓** move between them, **→** **←** open and close folders, **Enter** opens, **F2** renames, **Delete** deletes, **Alt+↑** **Alt+↓** move a playlist among its neighbours |
+| The playlists in the sidebar | **↑** **↓** move between them, **→** **←** open and close folders, **Enter** opens, **F2** renames, **Delete** deletes, **Alt+↑** **Alt+↓** move a playlist among its neighbours, **Alt+→** moves it into the folder above it and **Alt+←** out of its folder, **Shift+F10** opens its menu |
 | The tracks of a playlist | **↑** **↓** move (with **Shift** to select), **Space** selects, **Ctrl+A** (**⌘A**) selects all, **Alt+↑** **Alt+↓** move the selected tracks, **Delete** takes them out, **P** plays, **Enter** opens the track's analysis |
 
 ## A playlist as a set
@@ -103,7 +105,7 @@ change. The heading sums it up: how many changes are in keys that mix.
 
 ## Arrange for mixing
 
-**Arrange for mixing…** (for playlists of three or more tracks) suggests a
+**Arrange for mixing…** (for playlists of 3 to 1,000 tracks) suggests a
 running order: neighbours in keys that mix, and close in tempo. It shows the
 set as it is and as arranged, one above the other, with the changes in keys
 that mix, the key clashes and the average tempo change, before and after.
@@ -199,8 +201,14 @@ SONORA keeps a record of the files it wrote, in `SONORA/.sonora-sync.json`,
 and only ever renames, replaces or removes those files, and only while they
 are exactly as it left them. Anything else on the drive is never touched:
 when a name SONORA wants is taken by a file of yours, its file gets another
-name. Tracks taken out of a playlist leave their files on the drive until
-you tick *Remove the … files that left these playlists* on a later send.
+name.
+
+Tracks taken out of a playlist, and playlists you delete in SONORA, leave
+their files on the drive until you tick *Remove the … files SONORA put
+there for tracks no longer in these playlists, or for playlists you
+deleted* on a later send. A deleted playlist's M3U playlist and Serato
+crate go at the next send without asking, so DJ software does not list a
+playlist that no longer exists, and rekordbox.xml stops listing it.
 
 Before sending, SONORA checks that the files fit (with 64 MB to spare), and
 that no file is 4 GB or larger on a FAT32 drive, which cannot hold such
@@ -225,8 +233,9 @@ Eject the drive in Finder or File Explorer before unplugging it.
 - A playlist holds up to 10,000 tracks, and a smart playlist lists up to
   10,000. Names are up to 120 characters.
 - Arranging is a suggestion from keys and tempos alone. It does not hear
-  energy, vocals or mood. With more than 150 tracks it does not try every
-  opener: it starts with your first track (with *Build up*, the slowest).
+  energy, vocals or mood. It works on playlists of up to 1,000 tracks, and
+  with more than 150 it does not try every opener: it starts with your
+  first track (with *Build up*, the slowest).
 - The drive gets files and playlists, not beat grids, cue points or
   waveforms: rekordbox, Serato and the others compute and store those
   themselves.

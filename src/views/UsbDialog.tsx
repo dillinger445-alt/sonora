@@ -413,35 +413,43 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
             </div>
           </section>
         </div>
-        <section className="usb-plan" aria-live="polite" aria-label="What happens">
-          {!target ? (
-            <p className="faint">Choose a drive.</p>
-          ) : ids.length === 0 ? (
-            <p className="faint">Choose the playlists to send.</p>
-          ) : planError ? (
-            <p className="xp-problem">
-              <LuCircleAlert aria-hidden /> {planError}
-            </p>
-          ) : !plan ? (
-            <p className="faint">{planning ? 'Checking the drive…' : ''}</p>
-          ) : (
-            <>
-              <p className="usb-summary">
-                <strong>{summary(plan)}</strong>
-                {plan.bytes.free != null ? <span className="faint"> {formatBytes(plan.bytes.free)} free on the drive.</span> : null}
+        <section className="usb-plan" aria-label="What happens">
+          {/* Only the outcome is announced as it changes, not the file list. */}
+          <div className="usb-status" aria-live="polite">
+            {!target ? (
+              <p className="faint">Choose a drive.</p>
+            ) : ids.length === 0 ? (
+              <p className="faint">Choose the playlists to send.</p>
+            ) : planError ? (
+              <p className="xp-problem">
+                <LuCircleAlert aria-hidden /> {planError}
               </p>
-              {plan.problem ? (
-                <p className="xp-problem">
-                  <LuCircleAlert aria-hidden /> {plan.problem}
+            ) : !plan ? (
+              <p className="faint">{planning ? 'Checking the drive…' : ''}</p>
+            ) : (
+              <>
+                <p className="usb-summary">
+                  <strong>{summary(plan)}</strong>
+                  {plan.bytes.free != null ? <span className="faint"> {formatBytes(plan.bytes.free)} free on the drive.</span> : null}
                 </p>
-              ) : null}
-              {busyElsewhere ? <p className="t-amber">An export or another send is running; wait for it to finish.</p> : null}
+                {plan.problem ? (
+                  <p className="xp-problem">
+                    <LuCircleAlert aria-hidden /> {plan.problem}
+                  </p>
+                ) : null}
+                {busyElsewhere ? <p className="t-amber">An export or another send is running; wait for it to finish.</p> : null}
+              </>
+            )}
+          </div>
+          {target && ids.length > 0 && !planError && plan ? (
+            <>
               {plan.files.stale > 0 ? (
                 <label className="check-row usb-stale">
                   <input type="checkbox" className="check" checked={removeStale} onChange={(e) => setRemoveStale(e.target.checked)} />
                   <span>
-                    Remove the {plural(plan.files.stale, 'file')} ({formatBytes(plan.files.staleBytes)}) that left these playlists.{' '}
-                    <span className="faint">SONORA put them there and they have not changed since. Nothing else on the drive is ever removed.</span>
+                    Remove the {plural(plan.files.stale, 'file')} ({formatBytes(plan.files.staleBytes)}) SONORA put there for tracks no longer in these playlists, or for
+                    playlists you deleted.{' '}
+                    <span className="faint">They have not changed since. Nothing else on the drive is ever removed.</span>
                   </span>
                 </label>
               ) : null}
@@ -457,7 +465,7 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
               ) : null}
               {plan.preview.length ? <Preview plan={plan} /> : null}
             </>
-          )}
+          ) : null}
         </section>
       </div>
     );

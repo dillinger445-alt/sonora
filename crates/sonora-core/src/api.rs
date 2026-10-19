@@ -450,6 +450,9 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             }
             let rows = playlists::tracks(&c, id)?;
             drop(c);
+            if rows.len() > playlists::MAX_ARRANGE {
+                return Err(ApiError::invalid(format!("arranging works on playlists of up to {} tracks", playlists::MAX_ARRANGE)));
+            }
             let order = playlists::arrange(&rows, start, rising);
             let by_id: std::collections::HashMap<i64, &TrackRow> = rows.iter().map(|r| (r.id, r)).collect();
             let before: Vec<&TrackRow> = rows.iter().collect();

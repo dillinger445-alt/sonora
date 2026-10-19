@@ -43,15 +43,31 @@ function num(text: string): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+/** The "DJ score" choice a saved score filter shows as, or "any". */
+function scoreChoice(f: LibraryFilter): string {
+  return f.scoreKind === 'dj' && f.maxScore == null && f.minScore != null && SCORES.some((s) => s.value === String(f.minScore)) ? String(f.minScore) : 'any';
+}
+
+/** A saved score range in words: "overall score 55+", "DJ score 75–89". */
+function scoreRange(f: LibraryFilter): string | null {
+  if (f.minScore == null && f.maxScore == null) return null;
+  const kind = f.scoreKind === 'dj' ? 'DJ' : f.scoreKind === 'listening' ? 'listening' : 'overall';
+  const lo = f.minScore != null ? Math.round(f.minScore) : null;
+  // "up to 54.999" is how "below 55" is saved.
+  const hi = f.maxScore != null ? Math.floor(f.maxScore) : null;
+  if (lo != null && hi != null) return `${kind} score ${lo}–${hi}`;
+  return lo != null ? `${kind} score ${lo}+` : `${kind} score up to ${hi}`;
+}
+
 /** Saved filters this dialog does not edit, in words. */
-function others(f: LibraryFilter): string[] {
+function others(f: LibraryFilter, withScore: boolean): string[] {
   const out: string[] = [];
   if (f.formats?.length) out.push(`format ${f.formats.join(', ')}`);
   if (f.flags?.length) out.push(`${plural(f.flags.length, 'issue')}`);
   if (f.statuses?.length) out.push(`status ${f.statuses.join(', ')}`);
   if (f.folderId != null) out.push('one library folder');
-  if (f.minScore != null && f.scoreKind && f.scoreKind !== 'dj') out.push(`${f.scoreKind} score ${f.minScore}+`);
-  if (f.maxScore != null) out.push(`score up to ${Math.round(f.maxScore)}`);
+  const range = withScore ? scoreRange(f) : null;
+  if (range) out.push(range);
   if (f.attention) out.push('needs attention');
   return out;
 }
@@ -64,6 +80,7 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
   const editing = target?.mode === 'edit' ? pl.byId.get(target.id) : undefined;
   const initial: SmartRules = target?.mode === 'create' ? target.rules : (editing?.rules ?? EMPTY);
   const initialName = target?.mode === 'create' ? target.name : (editing?.name ?? '');
+  const initialScore = scoreChoice(initial.filter);
   const notation = settings?.keyNotation ?? 'camelot';
 
   const [name, setName] = useState('');
@@ -95,7 +112,7 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
     setKeys(f.keys ?? []);
     setMix(false);
     setGenres(f.genres ?? []);
-    setScore(f.scoreKind === 'dj' && f.minScore != null ? String(f.minScore) : 'any');
+    setScore(scoreChoice(f));
     setSort(initial.sort ?? { key: 'bpm', desc: false });
     setLimit(initial.limit ? String(initial.limit) : '');
     setBusy(false);
@@ -121,9 +138,16 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
     delete f.bpmHalfDouble;
     delete f.keys;
     delete f.genres;
-    if (f.scoreKind === 'dj') {
+    // The score range saved with it stays as it was until a DJ score is
+    // chosen here, which replaces it (a filter holds one score range).
+    if (score !== initialScore) {
       delete f.scoreKind;
       delete f.minScore;
+      delete f.maxScore;
+      if (score !== 'any') {
+        f.scoreKind = 'dj';
+        f.minScore = Number(score);
+      }
     }
     if (search.trim()) f.search = search.trim();
     if (lo != null) f.bpmMin = lo;
@@ -132,10 +156,6 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
     if ((lo != null || hi != null) && halfDouble) f.bpmHalfDouble = true;
     if (matchedKeys.length) f.keys = matchedKeys;
     if (genres.length) f.genres = genres;
-    if (score !== 'any') {
-      f.scoreKind = 'dj';
-      f.minScore = Number(score);
-    }
     return { filter: f, sort, limit: lim != null && !limitBad ? lim : null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, search, lo, hi, halfDouble, matchedKeys, genres, score, sort, lim, limitBad]);
@@ -184,7 +204,7 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
   };
 
   const toggleKey = (k: number) => setKeys(keys.includes(k) ? keys.filter((x) => x !== k) : [...keys, k]);
-  const kept = others(initial.filter);
+  const kept = others(initial.filter, score === initialScore && initialScore === 'any');
   const selected = new Set(keys);
   const related = new Set(mix ? matchedKeys.filter((k) => !selected.has(k)) : []);
 

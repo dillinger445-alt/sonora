@@ -757,6 +757,15 @@ test('smart playlists keep up with their rules; folders hold playlists', async (
   await expect(friday).toHaveAttribute('aria-expanded', 'true');
   await drag(page, peak, friday);
   await expect(peak).toHaveAttribute('aria-level', '2');
+  // From the keyboard: Alt+← takes a playlist out of its folder, Alt+→ puts
+  // it into the folder above it.
+  await peak.focus();
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect(peak).toHaveAttribute('aria-level', '1');
+  await expect(peak).toBeFocused();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect(peak).toHaveAttribute('aria-level', '2');
+  await expect(peak).toBeFocused();
 
   await friday.click();
   await expect(page.locator('.view-title')).toHaveText('Friday');
@@ -770,6 +779,17 @@ test('smart playlists keep up with their rules; folders hold playlists', async (
   await expect(warmup).toBeHidden();
   await page.keyboard.press('ArrowRight');
   await expect(warmup).toBeVisible();
+
+  // A row's menu acts on that row and does not open it.
+  const here = page.url();
+  await tree.getByRole('button', { name: 'Actions for Peak time' }).click();
+  await page.getByRole('menuitem', { name: 'Rename' }).click();
+  const renaming = page.getByRole('textbox', { name: 'New name for Peak time' });
+  await expect(renaming).toBeFocused();
+  expect(page.url()).toBe(here);
+  await renaming.press('Escape');
+  await expect(peak).toBeFocused();
+  await expect(peak).toHaveAccessibleName('Peak time, 2 tracks');
 });
 
 test('Send to USB writes numbered folders of DJ-ready files and playlists, and changes only the files it wrote', async ({ page }) => {

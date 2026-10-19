@@ -5,7 +5,7 @@
  * lists what its rules match, in their order. A folder shows what it holds.
  */
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import {
   LuArrowDownUp,
   LuEllipsis,
@@ -47,6 +47,8 @@ import { Inspector } from './Inspector.tsx';
 
 const ROW = 32;
 const OVERSCAN = 10;
+/** As `MAX_ARRANGE` in crates/sonora-core/src/playlists.rs. */
+const MAX_ARRANGE = 1000;
 
 /** "BPM 120–125, keys 8A 9A, House; by tempo". */
 function describeRules(n: PlaylistNode, notation: KeyNotation): string {
@@ -102,6 +104,8 @@ function MixCell({ prev, row }: { prev: TrackRow | undefined; row: TrackRow }) {
 }
 
 interface TableProps {
+  /** The grid, for the view to give the keyboard back to it. */
+  gridRef: RefObject<HTMLDivElement | null>;
   playlistId: number;
   rows: TrackRow[];
   editable: boolean;
@@ -116,12 +120,11 @@ interface TableProps {
   scrollTo: { id: number; n: number } | null;
 }
 
-function PlaylistTable({ playlistId, rows, editable, notation, selection, onSelection, onActive, active, onReorder, onRemove, onAddAt, scrollTo }: TableProps) {
+function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selection, onSelection, onActive, active, onReorder, onRemove, onAddAt, scrollTo }: TableProps) {
   const player = usePlayer();
   const begin = useDragStart();
   const drag = useDragState();
   const gridId = useId();
-  const gridRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(500);
@@ -538,7 +541,16 @@ function TracksView({ node }: { node: PlaylistNode }) {
   const [arranging, setArranging] = useState(false);
   const [scrollTo, setScrollTo] = useState<{ id: number; n: number } | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
+  // After a button in the details panel removes the track it shows, the
+  // panel goes: the keyboard goes back to the tracks.
+  const focusGrid = useCallback(() => {
+    requestAnimationFrame(() => {
+      const now = document.activeElement;
+      if (now == null || now === document.body) gridRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
 
   useLayoutEffect(() => {
     const el = wrap.current;
@@ -578,9 +590,10 @@ function TracksView({ node }: { node: PlaylistNode }) {
       setPending(before.filter((x) => !ids.includes(x)));
       setSelection(new Set());
       setActive(null);
+      focusGrid();
       void pl.removeTracks(node.id, ids, before);
     },
-    [rows, pl, node.id],
+    [rows, pl, node.id, focusGrid],
   );
 
   const stats = useMemo(() => mixStats(rows), [rows]);
@@ -640,6 +653,7 @@ function TracksView({ node }: { node: PlaylistNode }) {
       <div className={`browser-body ${showInspector ? 'with-inspector' : ''}`}>
         <div className="browser-table">
           <PlaylistTable
+            gridRef={gridRef}
             playlistId={node.id}
             rows={rows}
             editable={editable}
@@ -665,6 +679,7 @@ function TracksView({ node }: { node: PlaylistNode }) {
               if (ok) {
                 setSelection(new Set());
                 setActive(null);
+                focusGrid();
               }
             }}
             onClearSelection={() => setSelection(new Set())}
@@ -692,7 +707,16 @@ function TracksView({ node }: { node: PlaylistNode }) {
         actions={
           <>
             {editable ? (
-              <Button icon={LuArrowDownUp} disabled={rows.length < 3} onClick={() => setArranging(true)} data-tip="Order the tracks so neighbours mix: keys that fit on the Camelot wheel, small tempo changes">
+              <Button
+                icon={LuArrowDownUp}
+                disabled={rows.length < 3 || rows.length > MAX_ARRANGE}
+                onClick={() => setArranging(true)}
+                data-tip={
+                  rows.length > MAX_ARRANGE
+                    ? `Arranging works on playlists of up to ${formatCount(MAX_ARRANGE)} tracks`
+                    : 'Order the tracks so neighbours mix: keys that fit on the Camelot wheel, small tempo changes'
+                }
+              >
                 Arrange for mixing…
               </Button>
             ) : (

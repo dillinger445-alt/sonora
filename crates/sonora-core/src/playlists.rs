@@ -26,6 +26,8 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_NAME: usize = 120;
 /// Most tracks a playlist holds, and most a smart playlist lists.
 pub const MAX_TRACKS: usize = 10_000;
+/// Most tracks [`arrange`] orders (its work grows with the square).
+pub const MAX_ARRANGE: usize = 1_000;
 /// Most playlists one "organize" creates.
 const MAX_GROUPS: usize = 200;
 
@@ -922,9 +924,13 @@ pub fn summarize(rows: &[&TrackRow]) -> MixSummary {
 
 /// A running order for mixing: neighbours close in tempo and in keys that
 /// mix. Starts with `start` when given; with `rising`, tempos build up.
-/// Returns the track ids in the new order.
+/// Returns the track ids in the new order (the same order for more than
+/// [`MAX_ARRANGE`] tracks).
 pub fn arrange(rows: &[TrackRow], start: Option<i64>, rising: bool) -> Vec<i64> {
     let n = rows.len();
+    if n > MAX_ARRANGE {
+        return rows.iter().map(|r| r.id).collect();
+    }
     if n < 3 {
         let mut ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         if let Some(s) = start {
@@ -968,17 +974,21 @@ pub fn arrange(rows: &[TrackRow], start: Option<i64>, rising: bool) -> Vec<i64> 
     // transition's direction, so it suits the direction-dependent costs of a
     // build-up too; then reverse stretches (2-opt) when costs are symmetric.
     let budget = std::time::Instant::now();
+    let limit = std::time::Duration::from_millis(1500);
     let edge = |a: Option<usize>, b: Option<usize>| match (a, b) {
         (Some(a), Some(b)) => cost[a][b],
         _ => 0.0,
     };
     let mut improved = true;
     let mut rounds = 0;
-    while improved && rounds < 50 && budget.elapsed() < std::time::Duration::from_millis(1500) {
+    while improved && rounds < 50 && budget.elapsed() < limit {
         improved = false;
         rounds += 1;
         let first_movable = usize::from(pinned);
         for i in first_movable..n {
+            if budget.elapsed() >= limit {
+                break;
+            }
             let v = best[i];
             let prev = i.checked_sub(1).map(|k| best[k]);
             let next = best.get(i + 1).copied();
@@ -1005,6 +1015,9 @@ pub fn arrange(rows: &[TrackRow], start: Option<i64>, rising: bool) -> Vec<i64> 
         }
         if !rising {
             for i in first_movable.max(1)..n.saturating_sub(1) {
+                if budget.elapsed() >= limit {
+                    break;
+                }
                 for j in i + 1..n {
                     let before = cost[best[i - 1]][best[i]] + if j + 1 < n { cost[best[j]][best[j + 1]] } else { 0.0 };
                     let after = cost[best[i - 1]][best[j]] + if j + 1 < n { cost[best[i]][best[j + 1]] } else { 0.0 };
@@ -1083,5 +1096,20 @@ mod tests {
         let rows = vec![row(1, 128.0, 21), row(2, 120.0, 21), row(3, 124.0, 21), row(4, 122.0, 21), row(5, 126.0, 21)];
         let order = arrange(&rows, None, true);
         assert_eq!(order, vec![2, 4, 3, 5, 1]);
+    }
+
+    #[test]
+    fn large_sets_are_arranged_in_time_or_left_as_they_are() {
+        // The largest set arranged: every track once, and quickly.
+        let rows: Vec<TrackRow> = (0..MAX_ARRANGE as i64).map(|i| row(i + 1, 100.0 + (i * 37 % 60) as f64, i * 7 % 24)).collect();
+        let started = std::time::Instant::now();
+        let order = arrange(&rows, None, false);
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (1..=MAX_ARRANGE as i64).collect::<Vec<_>>());
+        // Beyond it, the order stays.
+        let more: Vec<TrackRow> = (0..MAX_ARRANGE as i64 + 1).map(|i| row(i + 1, 120.0, i % 24)).collect();
+        assert_eq!(arrange(&more, None, false), (1..=MAX_ARRANGE as i64 + 1).collect::<Vec<_>>());
     }
 }

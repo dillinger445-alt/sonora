@@ -4,9 +4,13 @@
  * across, and at each change a mark for how the keys mix (lime: they mix,
  * amber: with care, red: they clash). The track playing shows its
  * position.
+ *
+ * It is a picture of the table below it, which says the same in words and
+ * works from the keyboard; pointing at a block shows its details, and
+ * clicking it selects the track there.
  */
 
-import { useMemo, useState, type KeyboardEvent } from 'react';
+import { useMemo, useState } from 'react';
 import type { KeyNotation, TrackRow } from '../api/types.ts';
 import { formatDuration } from '../lib/format.ts';
 import { formatBpm, formatKey, keyHue } from '../lib/keys.ts';
@@ -89,25 +93,6 @@ export function SetTimeline({
   const playing = player.track ? segs.find((s) => s.r.id === player.track?.id) : undefined;
   const h = hover != null ? segs[hover] : undefined;
 
-  const onKey = (e: KeyboardEvent<SVGSVGElement>) => {
-    if (!segs.length) return;
-    const cur = hover ?? -1;
-    let next: number | null = null;
-    if (e.key === 'ArrowRight') next = Math.min(segs.length - 1, cur + 1);
-    else if (e.key === 'ArrowLeft') next = Math.max(0, cur - 1);
-    else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = segs.length - 1;
-    else if ((e.key === 'Enter' || e.key === ' ') && hover != null && onPick) {
-      e.preventDefault();
-      const s = segs[hover];
-      if (s) onPick(s.r.id, s.i);
-      return;
-    }
-    if (next == null) return;
-    e.preventDefault();
-    setHover(next);
-  };
-
   return (
     <div className={`tl ${compact ? 'is-compact' : ''}`} style={{ width }}>
       <svg
@@ -115,10 +100,7 @@ export function SetTimeline({
         height={height}
         role="img"
         aria-label={label}
-        tabIndex={onPick && !compact ? 0 : -1}
-        onKeyDown={onKey}
         onMouseLeave={() => setHover(null)}
-        onBlur={() => setHover(null)}
       >
         {segs.map((s) => {
           const k = s.r.djKey;
@@ -155,7 +137,7 @@ export function SetTimeline({
         {playing ? <Playhead seg={playing} /> : null}
       </svg>
       {!compact && h ? (
-        <div className="tl-tip" style={{ left: Math.min(Math.max(0, h.x + h.w / 2 - 130), Math.max(0, width - 260)) }} role="status">
+        <div className="tl-tip" style={{ left: Math.min(Math.max(0, h.x + h.w / 2 - 130), Math.max(0, width - 260)) }} aria-hidden>
           <span className="tl-tip-title ellipsis">
             <span className="num faint">{h.i + 1}.</span> {h.r.displayTitle}
           </span>
