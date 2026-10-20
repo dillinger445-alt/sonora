@@ -56,6 +56,8 @@ const LOCKED_CHUNK_FIRST: u64 = 768 * 1024;
 const LOCKED_CHUNK: u64 = 6 * 1024 * 1024;
 /// The served WAV's header.
 const HEADER: u64 = 44;
+/// A file whose audio has not begun within this many bytes is not previewed.
+const NO_AUDIO_LIMIT: u64 = 32 * 1024 * 1024;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -178,26 +180,6 @@ fn find_finished(root: &Path, filename: &str, name: &str, size: u64, windows: bo
             if ft.is_dir() && depth < 3 && e.file_name() != PREVIEW_DIR {
                 stack.push((p, depth + 1));
             } else if ft.is_file() && e.file_name().to_string_lossy() == want && fits(&p) {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
-/// Looks for the partial file under the user's folder when it is not where
-/// slskd usually puts it (another slskd version, say): a file with that name.
-fn find_partial(root: &Path, username: &str, name: &str, windows: bool) -> Option<PathBuf> {
-    let want = safe_segment(name, windows);
-    let mut stack = vec![(root.join(safe_segment(username, windows)), 0)];
-    while let Some((dir, depth)) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for e in rd.flatten() {
-            let p = e.path();
-            let Ok(ft) = e.file_type() else { continue };
-            if ft.is_dir() && depth < 16 {
-                stack.push((p, depth + 1));
-            } else if ft.is_file() && e.file_name().to_string_lossy() == want {
                 return Some(p);
             }
         }
@@ -513,10 +495,33 @@ impl Previews {
 
     /// SONORA quits: every preview stops. What they leave is removed now if
     /// there is time, otherwise at the next start (see [`recover`]).
-    pub fn stop_all(&self) {
-        for s in lock(&self.sessions).values() {
+    /// SONORA is quitting: every preview stops, and its transfer is
+    /// cancelled now (slskd may run on in the background and would fetch the
+    /// rest). What is left on disk goes here if there is time, otherwise at
+    /// the next start.
+    pub fn stop_all(&self, app: &App) {
+        let sessions: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
+        for s in &sessions {
             s.stop.store(true, Ordering::Relaxed);
             s.notify();
+        }
+        for s in &sessions {
+            let t = {
+                let st = lock(&s.st);
+                if st.owned && !st.handed_over {
+                    st.transfer.clone()
+                } else {
+                    None
+                }
+            };
+            if let Some(t) = t {
+                let _ = app.slskd.cancel_transfer(app, &s.username, &t, false);
+            }
+        }
+        // The previews' own threads clean up; a little time for them.
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline && !(lock(&self.sessions).is_empty() && lock(&self.cleaning).is_empty()) {
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 
@@ -528,7 +533,11 @@ impl Previews {
         for s in sessions {
             let transfer = {
                 let mut st = lock(&s.st);
-                if !st.owned || st.handed_over {
+                // Following a download already, or all of the file is here
+                // (in the preview's own folder): nothing to hand over. The
+                // download fetches the file itself; the preview's copy goes
+                // when the preview stops.
+                if !st.owned || st.handed_over || st.source_complete {
                     continue;
                 }
                 st.handed_over = true;
@@ -539,6 +548,28 @@ impl Previews {
                 stop_transfer(app, &s.username, &t);
             }
             logging::log_fields("info", "preview", "download chosen while previewing", obj! { "id" => s.id as i64 });
+            s.notify();
+        }
+    }
+
+    /// The download that previews handed over to did not start: they fetch
+    /// the file again themselves, from what they have.
+    pub fn take_back(&self, username: &str, filenames: &[String]) {
+        let sessions: Vec<Arc<Session>> = lock(&self.sessions).values().filter(|s| s.username == username && filenames.contains(&s.filename)).cloned().collect();
+        for s in sessions {
+            {
+                let mut st = lock(&s.st);
+                if !st.handed_over {
+                    continue;
+                }
+                st.handed_over = false;
+                st.owned = true;
+                st.transfer = None;
+                if !matches!(st.phase, Phase::Complete | Phase::Failed) {
+                    st.phase = Phase::Connecting;
+                }
+            }
+            logging::log_fields("info", "preview", "the download did not start: the preview fetches again", obj! { "id" => s.id as i64 });
             s.notify();
         }
     }
@@ -672,7 +703,7 @@ fn pump(app: &Arc<App>, s: &Arc<Session>) {
     let windows = cfg!(windows);
     // An earlier preview of the same file finishes cleaning up first (it
     // removes the partial file this one is about to write).
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !s.stopped() && Instant::now() < deadline && app.previews.cleaning_same(s) {
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -714,12 +745,26 @@ fn pump(app: &Arc<App>, s: &Arc<Session>) {
             break;
         }
         update_received(s, windows);
-        let (owned, handed_over, transfer, phase) = {
+        let no_audio = {
             let st = lock(&s.st);
-            (st.owned, st.handed_over, st.transfer.clone(), st.phase)
+            st.rate == 0 && !st.unavailable && st.received > NO_AUDIO_LIMIT
         };
-        if matches!(phase, Phase::Failed) {
-            // Wait for the interface to stop it.
+        if no_audio {
+            unavailable(app, s, "No audio was found in the first 32 MB of this file, so it cannot be previewed.");
+        }
+        let (owned, handed_over, transfer, phase, unplayable) = {
+            let st = lock(&s.st);
+            (st.owned, st.handed_over, st.transfer.clone(), st.phase, st.unavailable)
+        };
+        if matches!(phase, Phase::Failed) || unplayable {
+            // Nothing more is fetched for a preview that cannot play; the
+            // interface stops it, and what it left goes.
+            if owned && !handed_over && transfer.is_some() {
+                if let Some(t) = lock(&s.st).transfer.take() {
+                    stop_transfer(app, &s.username, &t);
+                }
+                Previews::emit(app, s, true);
+            }
             wait(s, 300);
             continue;
         }
@@ -921,9 +966,9 @@ fn control_read_ahead(app: &App, s: &Arc<Session>) {
 
 /// How many bytes of the file are on disk (and where).
 fn update_received(s: &Session, windows: bool) -> u64 {
-    let (path, root) = {
+    let path = {
         let st = lock(&s.st);
-        (st.final_path.clone().or_else(|| st.incomplete.clone()), st.incomplete_root.clone())
+        st.final_path.clone().or_else(|| st.incomplete.clone())
     };
     let Some(mut path) = path else { return 0 };
     if !path.exists() {
@@ -949,13 +994,10 @@ fn update_received(s: &Session, windows: bool) -> u64 {
                     return lock(&s.st).received;
                 }
             }
-        } else if let Some(root) = root {
-            // Not where slskd usually puts it: look for it under the user's folder.
-            if let Some(found) = find_partial(&root, &s.username, &s.name, windows) {
-                lock(&s.st).incomplete = Some(found.clone());
-                path = found;
-            }
         }
+        // Otherwise slskd has not made its partial file yet. (A file of the
+        // same name elsewhere is never taken for it: it may be another
+        // download of the person's.)
     }
     let n = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let mut st = lock(&s.st);
@@ -1061,8 +1103,10 @@ impl Seek for Growing {
 fn unavailable(app: &App, s: &Session, message: impl Into<String>) {
     {
         let mut st = lock(&s.st);
+        if !st.unavailable {
+            st.error = Some(message.into());
+        }
         st.unavailable = true;
-        st.error = Some(message.into());
         st.source_dead = true;
     }
     s.notify();
@@ -1224,14 +1268,11 @@ fn cleanup(app: &Arc<App>, s: &Arc<Session>) {
                 remove_file_and_empty_parents(&partial, &root);
             }
         }
-        if let Some(dir) = dir {
-            if dir.is_dir() && dir.parent().is_some_and(|p| p.file_name().is_some_and(|n| n == PREVIEW_DIR)) {
-                let _ = std::fs::remove_dir_all(&dir);
-                if let Some(p) = dir.parent() {
-                    let _ = std::fs::remove_dir(p);
-                }
-            }
-        }
+    }
+    // The preview's own folder (the file, if it arrived whole) goes in any
+    // case: a download chosen since puts its file elsewhere.
+    if let Some(dir) = dir {
+        remove_preview_dir(&dir);
     }
     // The decoder lets go of the cache file once it sees the preview stopped.
     for _ in 0..30 {
@@ -1249,6 +1290,18 @@ fn cleanup(app: &Arc<App>, s: &Arc<Session>) {
     lock(&app.previews.cleaning).remove(&s.id);
     write_ledger(app);
     logging::log_fields("info", "preview", "preview cleaned up", obj! { "id" => s.id as i64, "handedOver" => handed_over });
+}
+
+/// Removes a preview's folder in slskd's download folder (and the
+/// `.sonora-preview` folder once it is empty). Only ever a folder inside one
+/// named `.sonora-preview`.
+fn remove_preview_dir(dir: &Path) {
+    if dir.is_dir() && dir.parent().is_some_and(|p| p.file_name().is_some_and(|n| n == PREVIEW_DIR)) {
+        let _ = std::fs::remove_dir_all(dir);
+        if let Some(p) = dir.parent() {
+            let _ = std::fs::remove_dir(p);
+        }
+    }
 }
 
 /// Removes a file, then its folders up to `root` while they are empty.
@@ -1328,6 +1381,12 @@ pub fn recover(app: &Arc<App>) {
         for t in &transfers {
             lock(&app.previews.hidden).insert(t.clone());
         }
+        // The preview's own folder goes in any case (again once its transfer
+        // is stopped, in case the file arrived in the meantime).
+        let own_dir = s("dir").map(PathBuf::from);
+        if let Some(d) = &own_dir {
+            remove_preview_dir(d);
+        }
         if handed_over {
             continue;
         }
@@ -1344,19 +1403,14 @@ pub fn recover(app: &Arc<App>) {
                 stop_transfer(app, &username, t);
             }
         }
+        if let Some(d) = &own_dir {
+            remove_preview_dir(d);
+        }
         let in_use = list.iter().any(|t| t.filename == filename && t.active() && !transfers.contains(&t.id));
         if let (Some(partial), Some(root)) = (s("partial"), s("root")) {
             let (partial, root) = (PathBuf::from(partial), PathBuf::from(root));
             if !e.get("preexisting").and_then(Value::as_bool).unwrap_or(true) && !in_use && partial.starts_with(&root) {
                 remove_file_and_empty_parents(&partial, &root);
-            }
-        }
-        if let Some(d) = s("dir").map(PathBuf::from) {
-            if d.is_dir() && d.parent().is_some_and(|p| p.file_name().is_some_and(|n| n == PREVIEW_DIR)) {
-                let _ = std::fs::remove_dir_all(&d);
-                if let Some(p) = d.parent() {
-                    let _ = std::fs::remove_dir(p);
-                }
             }
         }
     }

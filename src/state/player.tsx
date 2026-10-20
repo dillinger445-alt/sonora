@@ -269,17 +269,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const a = attempt.current;
       if (!a || a.previewId !== p.id || a.id !== seq.current) return;
       setState((s) => ({ ...s, preview: p, duration: p.totalSeconds ?? s.duration }));
-      if (p.state === 'failed' || p.state === 'unavailable') {
+      if (p.state === 'failed' || p.state === 'unavailable' || p.state === 'stopped') {
         if (!a.failed) {
           a.failed = true;
           audio.pause();
-          setState((s) => ({ ...s, status: 'error', error: p.error ?? 'This preview cannot be played.' }));
+          setState((s) => ({ ...s, status: 'error', error: p.error ?? (p.state === 'stopped' ? 'The preview stopped.' : 'This preview cannot be played.') }));
+          // What it fetched goes now; Play asks for the file again.
+          releasePreview(a);
         }
         return;
       }
       if (p.ready && a.src == null && !a.failed) void begin(a, bridge.previewUrl(p.id));
     },
-    [audio, begin, bridge],
+    [audio, begin, bridge, releasePreview],
   );
   const onPreviewRef = useRef(onPreview);
   useLayoutEffect(() => {
@@ -437,7 +439,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (a?.previewId == null || a.id !== seq.current) return;
       client.previewStatus(a.previewId).then(
         (p) => onPreviewRef.current(p),
-        () => undefined,
+        (e: unknown) => {
+          // The core no longer has it (stopped elsewhere): say so instead of waiting.
+          if (e instanceof CoreError && e.code === 'not_found' && attempt.current === a && !a.failed) {
+            a.failed = true;
+            a.previewId = null;
+            setState((s) => ({ ...s, status: 'error', error: 'The preview stopped.' }));
+          }
+        },
       );
     }, 2000);
     return () => clearInterval(timer);
