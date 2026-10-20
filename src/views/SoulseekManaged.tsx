@@ -10,6 +10,7 @@ import type { ManagedSlskd, SetupPlan, SetupRun, SetupStepId, SlskdProcess } fro
 import { Button } from '../components/Button.tsx';
 import { ProgressBar, Switch } from '../components/Controls.tsx';
 import { Dialog, useConfirm } from '../components/Dialog.tsx';
+import { copyText } from '../lib/clipboard.ts';
 import { formatBytes } from '../lib/format.ts';
 import { navigate } from '../lib/router.ts';
 import { useCore } from '../state/core.tsx';
@@ -497,10 +498,16 @@ export function ManagedPanel({ m, state, onUpdate }: { m: ManagedSlskd; state: S
   };
 
   const copyWebPassword = async () => {
-    try {
-      const { password: pw } = await client.slskdWebPassword();
+    const password = client.slskdWebPassword().then(({ password: pw }) => {
       if (!pw) throw new Error('slskd’s settings have no web password.');
-      await navigator.clipboard.writeText(pw);
+      return pw;
+    });
+    // Handed to the clipboard while the click is handled (see copyText).
+    const copied = copyText(password);
+    void copied.catch(() => undefined);
+    try {
+      await password;
+      await copied;
       toast({ tone: 'success', title: 'Copied slskd’s web password', body: 'Its user name is slskd.' });
     } catch (e) {
       toast({ tone: 'error', title: 'Could not copy the password', body: message(e) });

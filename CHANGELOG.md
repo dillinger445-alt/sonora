@@ -12,6 +12,9 @@ written for the people using SONORA.
   only darkened, and Esc closed it. So **Set up Soulseek…**, updating to a
   new version, and the questions SONORA asks before removing or changing
   something could not be used. They show again. Windows was not affected.
+- **Copy web password** on the Soulseek page works on a Mac. It said it
+  could not copy the password: the Mac allows copying only at the moment
+  of the click, and the password arrived a moment later.
 - **The path of slskd's settings file** on the Soulseek page breaks inside
   its column instead of running over the text next to it.
 

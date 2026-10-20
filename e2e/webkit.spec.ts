@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test';
 /**
  * The macOS app shows SONORA's interface in WebKit, Safari's engine. These
  * checks run there (after the main suite, in the state it leaves: slskd set
- * up by SONORA), for what WebKit lays out differently from Chromium.
+ * up by SONORA), for what WebKit does differently from Chromium: how it lays
+ * things out, and when a page may write to the clipboard.
  */
 
 test('dialogs open with their content in WebKit', async ({ page }) => {
@@ -21,4 +22,13 @@ test('dialogs open with their content in WebKit', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('button', { name: 'Turn off' })).toBeEnabled();
+});
+
+test('slskd’s web password goes to the clipboard in WebKit', async ({ page }) => {
+  // WebKit lets a page write to the clipboard only while a click is
+  // handled, and the password comes from SONORA's core after that.
+  await page.goto('/#/soulseek');
+  await page.getByRole('tab', { name: 'Setup' }).click();
+  await page.getByRole('button', { name: 'Copy web password' }).click();
+  await expect(page.getByText('Copied slskd’s web password')).toBeVisible();
 });
