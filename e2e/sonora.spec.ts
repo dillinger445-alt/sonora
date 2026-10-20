@@ -9,7 +9,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startFakeSlskd } from './fakeSlskd.ts';
-import { DATA, MUSIC } from './paths.ts';
+import { DATA, LIBRARY, MANAGED_SLSKD_PORT, MUSIC } from './paths.ts';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -977,8 +977,10 @@ test('Soulseek: search through slskd, download, and the files join the library w
     await expect(page.getByRole('note', { name: 'Before you start' })).toContainText('you are responsible for making sure each download');
     await page.getByRole('button', { name: 'Accept and continue' }).click();
 
-    // Setup: slskd's address, a key SONORA makes, then the download folder.
+    // Setup by hand: slskd's address, a key SONORA makes, then the download folder.
     await expect(page.getByRole('tab', { name: 'Setup' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('heading', { name: 'Set up Soulseek for me' })).toBeVisible();
+    await page.getByRole('button', { name: 'I’ll set up slskd myself' }).click();
     const address = page.getByRole('textbox', { name: 'slskd’s address' });
     await address.fill(slskd.url);
     await address.press('Enter');
@@ -1049,6 +1051,59 @@ test('Soulseek: search through slskd, download, and the files join the library w
 
     // slskd's files stay exactly where it put them.
     expect(readdirSync(dir).sort()).toEqual(['01 Lights.flac', '02 Afterglow.flac']);
+  } finally {
+    await slskd.close();
+  }
+});
+
+test('Soulseek: one button sets slskd up, a failed step can be tried again, and Repair puts the key back', async ({ page }) => {
+  // SONORA's own slskd answers on MANAGED_SLSKD_PORT; here a stand-in that
+  // reads the slskd.yml SONORA writes, as slskd does. Nothing reaches GitHub,
+  // launchd or Soulseek (SONORA_SLSKD_SYSTEM=test in e2e/serve.mjs).
+  const config = join(LIBRARY, 'slskd', 'data', 'slskd.yml');
+  const downloads = join(DATA, 'managed-downloads');
+  rmSync(downloads, { recursive: true, force: true });
+  await page.goto('/#/soulseek');
+  const accept = page.getByRole('button', { name: 'Accept and continue' });
+  if (await accept.isVisible()) await accept.click();
+  await page.getByRole('tab', { name: 'Setup' }).click();
+
+  // One permission screen that says exactly what will happen.
+  await page.getByRole('button', { name: 'Set up Soulseek…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Set up Soulseek' });
+  await expect(dialog.getByText('Check it against the checksum built into SONORA, and stop if it differs.')).toBeVisible();
+  await expect(dialog.getByText(/It shares nothing\./)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Allow and set up' })).toBeDisabled();
+  await dialog.getByRole('textbox', { name: 'Soulseek user name' }).fill('e2e-dj');
+  await dialog.getByLabel('Password').fill('right');
+  await dialog.getByRole('textbox', { name: 'Folder for finished downloads' }).fill(downloads);
+  await dialog.getByRole('button', { name: 'Allow and set up' }).click();
+
+  // slskd does not answer yet: the step that failed says so, and can be tried again.
+  const steps = page.getByRole('region', { name: 'Setting up slskd' });
+  await expect(steps.getByText('Starting slskd did not work.')).toBeVisible({ timeout: 30_000 });
+  await expect(steps.locator('.sk-step.is-done')).toHaveCount(4);
+  expect(existsSync(config)).toBe(true);
+  const slskd = await startFakeSlskd([], { port: MANAGED_SLSKD_PORT, config });
+  try {
+    await steps.getByRole('button', { name: 'Try again' }).click();
+    await expect(steps.getByText('Signed in to Soulseek as e2e-dj.', { exact: false })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.view-sub')).toContainText('Signed in to Soulseek as e2e-dj', { timeout: 15_000 });
+
+    // SONORA keeps slskd running, and watches the folder it saves to.
+    const panel = page.getByRole('region', { name: 'slskd', exact: true });
+    await expect(panel.getByRole('switch', { name: 'Run slskd in the background' })).toBeChecked();
+    await expect(page.getByText(downloads, { exact: true })).toBeVisible();
+    expect(readFileSync(config, 'utf8')).toContain(`downloads: '${downloads}'`);
+
+    // slskd.yml lost SONORA's key: Repair puts it back and slskd answers again.
+    const yml = readFileSync(config, 'utf8');
+    writeFileSync(config, yml.split('\n').filter((l) => !l.trimStart().startsWith('key:')).join('\n'));
+    await panel.getByRole('button', { name: 'Restart' }).click();
+    await panel.getByRole('button', { name: 'Repair' }).click();
+    await expect(page.getByText('Repaired: slskd has SONORA’s key again')).toBeVisible();
+    expect(readFileSync(config, 'utf8')).toMatch(/^ {8}key: '[A-Za-z0-9]{16,}'$/m);
+    await expect(page.locator('.view-sub')).toContainText('Signed in to Soulseek as e2e-dj', { timeout: 15_000 });
   } finally {
     await slskd.close();
   }

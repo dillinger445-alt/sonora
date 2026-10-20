@@ -51,6 +51,8 @@ pub struct App {
     pub slskd: crate::slskd::Slskd,
     /// Secrets kept by the system (slskd's API key).
     pub secrets: Arc<dyn crate::secrets::SecretStore>,
+    /// slskd set up and run by SONORA (macOS).
+    pub service: Arc<crate::slskd_service::Service>,
 }
 
 impl App {
@@ -89,6 +91,7 @@ impl App {
         }
         let events = Arc::new(EventBus::default());
         let secrets = crate::secrets::system(&config.data_dir);
+        let service = Arc::new(crate::slskd_service::Service::with_system(crate::slskd_service::system_for(&config.data_dir)));
         let version = config.app_version.clone();
         let rescan = settings.rescan_on_launch == "changed";
         let scans = ScanManager::new(Arc::clone(&db), Arc::clone(&events), tools, settings);
@@ -105,8 +108,21 @@ impl App {
             sources: crate::sources::Watcher::default(),
             slskd: crate::slskd::Slskd::default(),
             secrets,
+            service,
         });
         crate::sources::Watcher::start(&app);
+        // SONORA's own slskd (when it set one up) runs while SONORA does, and
+        // in the background mode from login on.
+        {
+            let app2 = Arc::clone(&app);
+            let _ = std::thread::Builder::new().name("sonora-slskd-ensure".into()).spawn(move || {
+                if crate::sources::accepted_at(&app2.db.read()).is_some() {
+                    if let Err(e) = app2.service.ensure(&app2) {
+                        logging::log_fields("warn", "slskd", "could not start slskd", obj! { "error" => e });
+                    }
+                }
+            });
+        }
         // Work interrupted by a crash or by quitting mid-scan continues where
         // it stopped. Cancelled work is not resumed.
         match app.interrupted_work() {
@@ -203,6 +219,7 @@ impl App {
         self.syncer.cancel();
         self.discogs.cancel();
         self.scans.shutdown(Duration::from_secs(5));
+        self.service.on_quit(self);
         logging::log("info", "app", "core stopped");
     }
 

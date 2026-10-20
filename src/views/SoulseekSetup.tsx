@@ -13,6 +13,7 @@ import { isAbsolutePath } from '../lib/paths.ts';
 import { useCore } from '../state/core.tsx';
 import { useToast } from '../state/toasts.tsx';
 import { LAWFUL_USE, SEARCHES_SEEN, type SoulseekState } from './Soulseek.tsx';
+import { ManagedPanel, SetupCard, SetupDialog, SetupProgress } from './SoulseekManaged.tsx';
 import { Group, Row } from './Settings.tsx';
 
 const SLSKD_PAGE = 'https://github.com/slskd/slskd';
@@ -43,6 +44,8 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
   const [url, setUrl] = useState(status?.url ?? '');
   const [folderText, setFolderText] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<'setup' | 'update' | null>(null);
+  const [manual, setManual] = useState(false);
   if (!status || !src) return null;
 
   const run = async (what: string, f: () => Promise<void>) => {
@@ -166,11 +169,32 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
   const c = state.connection;
   const suggestions = status.defaultFolders.filter((f) => f !== src.folder);
   const windows = bridge.platform === 'windows';
+  const m = state.managed.data;
+  const run = m?.setup ?? null;
+  // SONORA runs slskd here: the manual steps are only for looking things up.
+  const managed = !!m?.supported && m.configured;
+  const showManual = !m?.supported || manual || (!m.configured && status.keySaved) || (managed && manual);
+  const n = (i: number, title: string) => (managed ? title : `${i}. ${title}`);
 
   return (
     <div className="settings sk-setup">
+      {m?.supported && run && (run.active || run.error || run.finished) ? <SetupProgress run={run} others={m.others} onChanged={state.managed.reload} /> : null}
+      {m?.supported && !m.configured && !run?.active ? <SetupCard onStart={() => setDialog('setup')} onManual={() => setManual(true)} /> : null}
+      {m && managed ? <ManagedPanel m={m} state={state} onUpdate={() => setDialog('update')} /> : null}
+      {m?.supported ? (
+        <SetupDialog open={dialog != null} update={dialog === 'update'} onClose={() => setDialog(null)} onStarted={() => state.managed.reload()} />
+      ) : null}
+      {managed && !manual ? (
+        <p className="sk-gap">
+          <button type="button" className="link" onClick={() => setManual(true)}>
+            Show the connection details
+          </button>
+        </p>
+      ) : null}
+      {showManual ? (
+        <>
       <Group
-        title="1. slskd"
+        title={managed ? 'Connection details' : '1. slskd'}
         description="A free Soulseek client that runs in the background, with its own web page for sharing, chat and settings. SONORA searches and downloads through it."
       >
         <Row
@@ -197,7 +221,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
         </Row>
       </Group>
 
-      <Group title="2. API key" description={`SONORA signs its requests to slskd with a key, kept in ${STORE_NAME[status.keyStore]}. slskd accepts the key once it is in slskd.yml.`}>
+      <Group title={n(2, 'API key')} description={`SONORA signs its requests to slskd with a key, kept in ${STORE_NAME[status.keyStore]}. slskd accepts the key once it is in slskd.yml.`}>
         {newKey ? (
           <div className="sk-key">
             <p>
@@ -261,7 +285,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
         ) : null}
       </Group>
 
-      <Group title="3. Connection" description="Where slskd’s web page answers. It is on this computer unless you run slskd elsewhere.">
+      <Group title={n(3, 'Connection')} description="Where slskd’s web page answers. It is on this computer unless you run slskd elsewhere.">
         <Row
           label="slskd’s address"
           description={
@@ -308,8 +332,11 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
         </Row>
       </Group>
 
+        </>
+      ) : null}
+
       <Group
-        title="4. Download folder"
+        title={n(4, 'Download folder')}
         description="Where slskd puts finished downloads. SONORA adds each finished file to your library from there, and never moves, renames or deletes anything in it."
       >
         <Row

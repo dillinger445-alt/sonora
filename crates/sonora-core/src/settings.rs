@@ -41,6 +41,13 @@ pub struct Settings {
     pub soulseek_review: bool,
     /// Where slskd, the Soulseek client SONORA can search through, answers.
     pub slskd_url: String,
+    /// slskd set up by SONORA runs in the background from login on (true),
+    /// or only while SONORA is open (false).
+    pub slskd_background: bool,
+    /// How far a Soulseek preview reads ahead of what plays, in seconds.
+    pub preview_ahead_s: i64,
+    /// Most disk space previews may use at a time, in megabytes.
+    pub preview_cache_mb: i64,
 }
 
 pub fn default_workers() -> usize {
@@ -68,6 +75,9 @@ impl Default for Settings {
             soulseek_folder: None,
             soulseek_review: false,
             slskd_url: crate::slskd::DEFAULT_URL.into(),
+            slskd_background: true,
+            preview_ahead_s: 60,
+            preview_cache_mb: 1024,
         }
     }
 }
@@ -134,6 +144,21 @@ impl Settings {
             "slskdUrl" => {
                 let u = v.as_str().ok_or("slskdUrl must be a web address")?;
                 self.slskd_url = crate::slskd::normalize_url(u)?;
+            }
+            "slskdBackground" => self.slskd_background = v.as_bool().ok_or("slskdBackground must be true or false")?,
+            "previewAhead" => {
+                let n = v.as_i64().ok_or("previewAhead must be a number of seconds")?;
+                if !(20..=600).contains(&n) {
+                    return Err("previewAhead must be between 20 and 600 seconds".into());
+                }
+                self.preview_ahead_s = n;
+            }
+            "previewCacheMb" => {
+                let n = v.as_i64().ok_or("previewCacheMb must be a number of megabytes")?;
+                if !(128..=16384).contains(&n) {
+                    return Err("previewCacheMb must be between 128 and 16384".into());
+                }
+                self.preview_cache_mb = n;
             }
             "keepVisuals" => self.keep_visuals = v.as_bool().ok_or("keepVisuals must be true or false")?,
             "maxDurationMin" => {
@@ -211,6 +236,9 @@ impl ToJson for Settings {
             "soulseekFolder" => self.soulseek_folder.clone().map(Value::String).unwrap_or(Value::Null),
             "soulseekReview" => self.soulseek_review,
             "slskdUrl" => self.slskd_url,
+            "slskdBackground" => self.slskd_background,
+            "previewAhead" => self.preview_ahead_s,
+            "previewCacheMb" => self.preview_cache_mb,
         }
     }
 }

@@ -34,6 +34,9 @@ import type {
   ScanStatus,
   SearchResults,
   Settings,
+  ManagedSlskd,
+  SetupPlan,
+  SetupRun,
   SlskdInfo,
   SlskdStatus,
   SmartRules,
@@ -177,6 +180,24 @@ export class Client {
   slskdDownloads = () => this.call<DownloadList>('slskd.downloads');
   slskdCancel = (username: string, id: string) => this.call<{ ok: boolean }>('slskd.cancel', { username, id });
   slskdClearFinished = () => this.call<{ ok: boolean }>('slskd.clearFinished');
+  slskdReconnect = () => this.call<{ ok: boolean }>('slskd.reconnect');
+
+  // slskd set up and run by SONORA (macOS).
+  /** With `ensure`, SONORA's slskd is started first when it is not running. */
+  slskdManaged = (ensure = false) => this.call<ManagedSlskd>('slskd.managed', { ensure });
+  slskdSetupPlan = () => this.call<SetupPlan>('slskd.setupPlan');
+  slskdSetupStart = (r: { username: string; password?: string; downloads: string; share?: string | null; adopt?: string | null }) => this.call<SetupRun>('slskd.setupStart', r);
+  slskdSetupRetry = (password?: string) => this.call<SetupRun>('slskd.setupRetry', password ? { password } : {});
+  slskdSetupCancel = () => this.call<{ ok: boolean }>('slskd.setupCancel');
+  slskdSetupDiscard = () => this.call<{ removed: string[] }>('slskd.setupDiscard');
+  slskdService = (action: 'start' | 'stop' | 'restart') => this.call<ManagedSlskd>('slskd.service', { action });
+  slskdBackground = (enabled: boolean) => this.call<ManagedSlskd>('slskd.background', { enabled });
+  slskdRemoveAgent = () => this.call<ManagedSlskd & { kept: string }>('slskd.removeAgent');
+  slskdRepair = () => this.call<ManagedSlskd>('slskd.repair');
+  slskdPassword = (password: string) => this.call<ManagedSlskd>('slskd.password', { password });
+  slskdStopOther = (pid: number) => this.call<ManagedSlskd>('slskd.stopOther', { pid });
+  slskdQuitSoulseekQt = () => this.call<ManagedSlskd>('slskd.quitSoulseekQt');
+  slskdWebPassword = () => this.call<{ password: string | null }>('slskd.webPassword');
 
   // Folders
   folders = () => this.call<Folder[]>('folders.list');

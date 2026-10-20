@@ -345,6 +345,12 @@ export interface Settings {
   soulseekReview: boolean;
   /** slskd's web address. */
   slskdUrl: string;
+  /** slskd set up by SONORA runs in the background from login on, or only while SONORA is open. */
+  slskdBackground: boolean;
+  /** How far a Soulseek preview reads ahead of what plays, in seconds. */
+  previewAhead: number;
+  /** Most disk space previews use at a time, in megabytes. */
+  previewCacheMb: number;
 }
 
 export interface CacheStats {
@@ -657,6 +663,82 @@ export interface SlskdStatus {
   keyStore: 'keychain' | 'credential-manager' | 'file';
   /** slskd's usual download folders that exist on this computer. */
   defaultFolders: string[];
+}
+
+export type SetupStepId = 'download' | 'verify' | 'install' | 'configure' | 'start' | 'signin';
+export type SetupFix = 'retry' | 'password' | 'stop_other' | 'quit_soulseek_qt' | 'network' | 'folder';
+
+/** Where SONORA's setup of slskd stands (`slskd.setup` events). */
+export interface SetupRun {
+  active: boolean;
+  finished: boolean;
+  steps: { id: SetupStepId; state: 'waiting' | 'running' | 'done' | 'failed' }[];
+  /** Bytes of slskd downloaded so far, of `total`. */
+  downloaded: number;
+  total: number;
+  error: { step: SetupStepId; message: string; fix: SetupFix } | null;
+  /** Files and folders this run made (removed only when the person asks). */
+  created: string[];
+  /** The password is still in memory, so "Try again" needs no new one. */
+  passwordKept: boolean;
+  signedInAs: string | null;
+  startedAt: number | null;
+}
+
+export interface SlskdProcess {
+  pid: number;
+  path: string;
+}
+
+/** slskd set up and run by SONORA (`slskd.managed`, macOS). */
+export interface ManagedSlskd {
+  /** SONORA can set slskd up on this computer. */
+  supported: boolean;
+  /** The slskd version this SONORA sets up. */
+  version: string;
+  /** The version unpacked, if any. */
+  installed: string | null;
+  updateAvailable: boolean;
+  /** SONORA set up slskd here. */
+  configured: boolean;
+  folder: string;
+  config: string | null;
+  /** slskd's newest log file (or its log folder). */
+  log: string | null;
+  background: boolean;
+  agent: { installed: boolean; loaded: boolean; running: boolean; pid: number | null; lastExit: number | null };
+  username: string | null;
+  downloads: string | null;
+  shares: string[];
+  /** slskd.yml has no key for SONORA, or another one. */
+  keyProblem: 'missing' | 'different' | 'not_saved' | null;
+  /** Why slskd is not signed in, from its log. */
+  reason: { code: 'no_account' | 'wrong_password' | 'signed_in_elsewhere' | 'network'; message: string } | null;
+  /** slskd processes other than SONORA's. */
+  others: SlskdProcess[];
+  /** The Soulseek app is open. */
+  soulseekQt: boolean;
+  setup: SetupRun | null;
+}
+
+/** What the setup screen offers (`slskd.setupPlan`). */
+export interface SetupPlan {
+  supported: boolean;
+  version: string;
+  download: { url: string; size: number; runtime: string; sha256: string } | null;
+  folder: string;
+  /** The launch agent's file. */
+  agent: string | null;
+  /** slskd settings found on this computer (the password itself never leaves the core). */
+  found: { path: string; username: string | null; hasPassword: boolean; downloads: string | null; shares: string[] } | null;
+  downloads: string;
+  share: string | null;
+  soulseekQt: boolean;
+  others: SlskdProcess[];
+  /** Folders macOS asks about before a program may use them. */
+  protected: string[];
+  /** The person's home folder. */
+  home: string;
 }
 
 /** What slskd says about itself (`slskd.test`). */
@@ -1010,6 +1092,8 @@ export interface CoreEvents {
   'sources.changed': SourceCounts | null;
   /** An import of downloads finished; `first` = the first ever. */
   'sources.imported': { source: 'soulseek'; added: number; failed: number; first: boolean };
+  /** SONORA's setup of slskd moved on (or stopped). */
+  'slskd.setup': SetupRun | null;
 }
 
 export type CoreEventName = keyof CoreEvents;
