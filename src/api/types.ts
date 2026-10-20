@@ -666,7 +666,7 @@ export interface SlskdStatus {
 }
 
 export type SetupStepId = 'download' | 'verify' | 'install' | 'configure' | 'start' | 'signin';
-export type SetupFix = 'retry' | 'password' | 'stop_other' | 'quit_soulseek_qt' | 'network' | 'folder';
+export type SetupFix = 'retry' | 'password' | 'stop_other' | 'quit_soulseek_qt' | 'network' | 'folder' | 'gatekeeper';
 
 /** Where SONORA's setup of slskd stands (`slskd.setup` events). */
 export interface SetupRun {

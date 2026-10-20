@@ -118,7 +118,7 @@ impl App {
         // in the background mode from login on.
         {
             let app2 = Arc::clone(&app);
-            let _ = std::thread::Builder::new().name("sonora-slskd-ensure".into()).spawn(move || {
+            let _ = std::thread::Builder::new().name("sonora-slskd-watch".into()).spawn(move || {
                 if crate::sources::accepted_at(&app2.db.read()).is_some() {
                     if let Err(e) = app2.service.ensure(&app2) {
                         logging::log_fields("warn", "slskd", "could not start slskd", obj! { "error" => e });
@@ -126,6 +126,11 @@ impl App {
                     // What previews left when SONORA quit during them.
                     crate::preview::recover(&app2);
                 }
+                // Then it keeps slskd running, and signs it in again after sleep.
+                let service = Arc::clone(&app2.service);
+                let weak = Arc::downgrade(&app2);
+                drop(app2);
+                service.watch(&weak);
             });
         }
         // Work interrupted by a crash or by quitting mid-scan continues where

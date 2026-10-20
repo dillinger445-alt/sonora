@@ -20,6 +20,10 @@ struct FakeSlskd {
     logs: PathBuf,
     /// Another program signs in with the same account.
     kicked: Mutex<bool>,
+    /// The Soulseek server cannot be reached (the computer just woke, say).
+    offline: Mutex<bool>,
+    /// Answers only while this stand-in system says slskd runs.
+    follows: Mutex<Option<Arc<TestSystem>>>,
     requests: Mutex<Vec<String>>,
 }
 
@@ -35,6 +39,9 @@ impl FakeSlskd {
 impl Http for FakeSlskd {
     fn send(&self, req: &Request) -> Result<Response, NetError> {
         let Some(found) = read_found(&self.config) else { return Err(NetError::Unreachable("not running".into())) };
+        if self.follows.lock().unwrap().as_ref().is_some_and(|sys| !sys.state.lock().unwrap().running) {
+            return Err(NetError::Unreachable("not running".into()));
+        }
         let path = req.url.split("/api/v0/").nth(1).unwrap_or("").to_string();
         assert!(req.url.starts_with("http://127.0.0.1:5030/"), "SONORA talks to its own slskd: {}", req.url);
         self.requests.lock().unwrap().push(format!("{} {path}", req.method));
@@ -42,12 +49,18 @@ impl Http for FakeSlskd {
         if found.api_key.is_none() || key != found.api_key {
             return Ok(Response { status: 401, body: String::new() });
         }
+        if path == "server" && req.method == "PUT" {
+            return Ok(Response { status: 200, body: String::new() });
+        }
         if path == "application" {
             let kicked = *self.kicked.lock().unwrap();
-            let ok = found.password.as_deref() == Some("right") && !kicked;
+            let offline = *self.offline.lock().unwrap();
+            let ok = found.password.as_deref() == Some("right") && !kicked && !offline;
             if !ok {
                 self.log(if kicked {
                     "Disconnected from the Soulseek server: another client logged in using the same username"
+                } else if offline {
+                    "Failed to reconnect: Network is unreachable"
                 } else {
                     "Disconnected from the Soulseek server: invalid username or password"
                 });
@@ -103,6 +116,8 @@ fn env(name: &str) -> Option<Env> {
         config: data.join("slskd").join("data").join("slskd.yml"),
         logs: data.join("slskd").join("data").join("logs"),
         kicked: Mutex::new(false),
+        offline: Mutex::new(false),
+        follows: Mutex::new(None),
         requests: Mutex::new(Vec::new()),
     });
     app.slskd.set_http(fake.clone());
@@ -250,11 +265,36 @@ fn one_button_setup_from_download_to_signed_in() {
     call(app, "slskd.service", &obj! { "action" => "start" });
     assert_eq!(call(app, "slskd.managed", &obj! {}).get("agent").and_then(|a| a.get("running")).and_then(Value::as_bool), Some(true));
 
+    // After the computer wakes, slskd is asked to sign in again at once, but
+    // only when the connection is what stands in the way.
+    let puts = |f: &FakeSlskd| f.requests.lock().unwrap().iter().filter(|r| r.as_str() == "PUT server").count();
+    e.app.service.sign_in_again(app);
+    assert_eq!(puts(&e.fake), 0, "signed in already");
+    *e.fake.offline.lock().unwrap() = true;
+    e.app.service.sign_in_again(app);
+    assert_eq!(puts(&e.fake), 1, "not signed in: the Soulseek server could not be reached");
+    *e.fake.offline.lock().unwrap() = false;
+    *e.fake.kicked.lock().unwrap() = true;
+    e.app.service.sign_in_again(app);
+    assert_eq!(puts(&e.fake), 1, "signed in elsewhere: asking again would sign the other one out");
+    *e.fake.kicked.lock().unwrap() = false;
+
     // Turned off for good: the launch agent goes, everything else stays.
     let r = call(app, "slskd.removeAgent", &obj! {});
     assert!(!plist.exists());
     assert!(e.fake.config.is_file());
     assert!(r.get("kept").and_then(Value::as_str).is_some());
+    // And it stays off: opening SONORA or its Soulseek page, or the
+    // background switch, does not bring it back; Start does.
+    let running = |app: &Arc<App>| call(app, "slskd.managed", &obj! {}).get("agent").and_then(|a| a.get("running")).and_then(Value::as_bool);
+    call(app, "slskd.managed", &obj! { "ensure" => true });
+    call(app, "slskd.background", &obj! { "enabled" => false });
+    call(app, "slskd.background", &obj! { "enabled" => true });
+    assert!(!plist.exists());
+    assert_eq!(running(app), Some(false));
+    call(app, "slskd.service", &obj! { "action" => "start" });
+    assert!(plist.exists());
+    assert_eq!(running(app), Some(true));
     let _ = std::fs::remove_dir_all(&e.root);
 }
 
@@ -300,6 +340,19 @@ fn what_stands_in_the_way_is_named_and_cleared_with_the_persons_ok() {
     // The person stops it; the setup goes on from where it stopped.
     call(app, "slskd.stopOther", &obj! { "pid" => 999 });
     assert!(e.sys.state.lock().unwrap().calls.iter().any(|c| c == "terminate 999"));
+
+    // macOS stops a program marked as downloaded from the internet (SONORA's
+    // own download is not): the step says where the person can allow it,
+    // and SONORA changes nothing there itself.
+    *e.fake.follows.lock().unwrap() = Some(e.sys.clone());
+    e.sys.state.lock().unwrap().quarantined = true;
+    call(app, "slskd.setupRetry", &obj! {});
+    let setup = wait_setup(app);
+    assert_eq!(failed_step(&setup), ("start".to_string(), "gatekeeper".to_string()), "{setup:?}");
+    let message = setup.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("").to_string();
+    assert!(message.contains("Privacy & Security") && message.contains("Open Anyway"), "{message}");
+    // The person allowed it in System Settings.
+    e.sys.state.lock().unwrap().quarantined = false;
     call(app, "slskd.setupRetry", &obj! {});
     let setup = wait_setup(app);
     assert_eq!(failed_step(&setup), ("signin".to_string(), "quit_soulseek_qt".to_string()), "{setup:?}");

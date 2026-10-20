@@ -103,6 +103,19 @@ jobs:
           grep -q "store: keychain" secrets-output.txt || { [ "$status" -ne 0 ] || { echo "::error::the keychain was not used"; status=1; }; }
           exit "$status"
 
+      # SONORA runs slskd with a launch agent on macOS. This loads one for
+      # the runner's user (with a stand-in program), checks that launchd
+      # runs it, restarts it after a crash and stops it, and removes it.
+      - name: Launch agent (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set +e
+          SONORA_LAUNCHD_TEST=1 cargo test -p sonora-core --lib --locked -- --ignored --exact slskd_service::tests::launchd_takes_the_launch_agent --nocapture 2>&1 | tee launchd-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk launchd-output.txt; fi
+          grep -q "launchd ran it in both modes" launchd-output.txt || { [ "$status" -ne 0 ] || { echo "::error::the launch agent test did not run"; status=1; }; }
+          exit "$status"
+
       - name: Secret store (Windows)
         if: runner.os == 'Windows'
         run: |
