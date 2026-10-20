@@ -43,6 +43,10 @@ impl Http for FakeSlskd {
             return Err(NetError::Unreachable("not running".into()));
         }
         let path = req.url.split("/api/v0/").nth(1).unwrap_or("").to_string();
+        if req.url.starts_with("http://nas.local:5030/") {
+            // Another slskd, which does not take the key SONORA sends it.
+            return Ok(Response { status: 401, body: String::new() });
+        }
         assert!(req.url.starts_with("http://127.0.0.1:5030/"), "SONORA talks to its own slskd: {}", req.url);
         self.requests.lock().unwrap().push(format!("{} {path}", req.method));
         let key = req.headers.iter().find(|(k, _)| k == "X-API-Key").map(|(_, v)| v.clone());
@@ -214,13 +218,34 @@ fn one_button_setup_from_download_to_signed_in() {
     assert!(managed.get("keyProblem").unwrap().is_null());
     let key_before = found.api_key.clone().unwrap();
 
+    // The person changes slskd's settings themselves (slots, a second
+    // shared folder, another key, a comment) and runs the setup again.
+    let shared = [e.root.join("Shared A"), e.root.join("Shared B")];
+    for d in &shared {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let yml = std::fs::read_to_string(&e.fake.config).unwrap();
+    let yml = yml.replace("shares:\n  directories: []\n", &format!("shares:\n  directories:\n    - '{}'\n    - '{}'\n", shared[0].display(), shared[1].display()));
+    let yml = yml.replace("      sonora:\n", "      phone:\n        key: 'phonekey0123456789'\n        role: readonly\n      sonora:\n");
+    let yml = format!("{yml}# my own notes\nglobal:\n  upload:\n    slots: 7\n");
+    std::fs::write(&e.fake.config, &yml).unwrap();
+
     // Running the setup again changes the setup in place: the same key, one
-    // launch agent, a backup of the settings as they were, nothing downloaded again.
+    // launch agent, a backup of the settings as they were, nothing downloaded
+    // again, and the person's other settings as they were.
     e.sys.state.lock().unwrap().calls.clear();
-    call(app, "slskd.setupStart", &obj! { "username" => "dj", "password" => "right", "downloads" => downloads.to_str().unwrap() });
+    call(app, "slskd.setupStart", &obj! { "username" => "dj", "password" => "right", "downloads" => downloads.to_str().unwrap(), "share" => shared[0].to_str().unwrap() });
     let setup = wait_setup(app);
     assert!(setup.get("error").unwrap().is_null(), "{setup:?}");
     assert_eq!(read_found(&e.fake.config).unwrap().api_key.as_deref(), Some(key_before.as_str()));
+    let after = std::fs::read_to_string(&e.fake.config).unwrap();
+    assert!(after.contains("phonekey0123456789") && after.contains("slots: 7") && after.contains("# my own notes"), "{after}");
+    assert_eq!(read_found(&e.fake.config).unwrap().shares, vec![shared[0].to_string_lossy().into_owned(), shared[1].to_string_lossy().into_owned()], "both shares stay");
+    // Sharing turned off in the setup: nothing is shared any more; the rest stays.
+    call(app, "slskd.setupStart", &obj! { "username" => "dj", "password" => "right", "downloads" => downloads.to_str().unwrap() });
+    assert!(wait_setup(app).get("error").unwrap().is_null());
+    assert!(read_found(&e.fake.config).unwrap().shares.is_empty());
+    assert!(std::fs::read_to_string(&e.fake.config).unwrap().contains("slots: 7"));
     let calls = e.sys.state.lock().unwrap().calls.clone();
     assert!(!calls.iter().any(|c| c.starts_with("fetch ")), "already downloaded and checked: {calls:?}");
     assert!(calls.iter().any(|c| c == "restart"), "slskd starts again to read its new settings: {calls:?}");
@@ -235,6 +260,11 @@ fn one_button_setup_from_download_to_signed_in() {
     let t = call(app, "slskd.test", &obj! {});
     assert_eq!(t.get("loggedIn").and_then(Value::as_bool), Some(true));
     assert_eq!(app.slskd.key(app).unwrap().as_deref(), Some(key_before.as_str()));
+    // But never the key of another slskd SONORA was pointed at (a NAS, say).
+    call(app, "slskd.configure", &obj! { "url" => "http://nas.local:5030", "apiKey" => "naskey0123456789abc" });
+    let _ = app.call("slskd.test", "{}");
+    assert_eq!(app.slskd.key(app).unwrap().as_deref(), Some("naskey0123456789abc"));
+    call(app, "slskd.configure", &obj! { "url" => "http://127.0.0.1:5030", "apiKey" => key_before.as_str() });
 
     // slskd.yml lost its key line: Repair puts SONORA's key back.
     let yml = std::fs::read_to_string(&e.fake.config).unwrap();
@@ -258,25 +288,34 @@ fn one_button_setup_from_download_to_signed_in() {
     call(app, "slskd.background", &obj! { "enabled" => true });
     assert!(std::fs::read_to_string(&plist).unwrap().contains("<key>RunAtLoad</key>\n\t<true/>"));
 
-    // Stopped by the person: it stays stopped until they start it.
+    // Stopped by the person: it stays stopped until they start it, also
+    // when SONORA opens again (the choice is saved) and at login (the launch
+    // agent no longer starts it).
     call(app, "slskd.service", &obj! { "action" => "stop" });
+    assert_eq!(call(app, "settings.get", &obj! {}).get("slskdStopped").and_then(Value::as_bool), Some(true));
+    assert!(std::fs::read_to_string(&plist).unwrap().contains("<key>RunAtLoad</key>\n\t<false/>"));
+    call(app, "slskd.background", &obj! { "enabled" => true });
+    assert!(std::fs::read_to_string(&plist).unwrap().contains("<key>RunAtLoad</key>\n\t<false/>"), "the background switch does not start a stopped slskd");
     call(app, "slskd.managed", &obj! { "ensure" => true });
     assert_eq!(call(app, "slskd.managed", &obj! {}).get("agent").and_then(|a| a.get("running")).and_then(Value::as_bool), Some(false));
     call(app, "slskd.service", &obj! { "action" => "start" });
     assert_eq!(call(app, "slskd.managed", &obj! {}).get("agent").and_then(|a| a.get("running")).and_then(Value::as_bool), Some(true));
+    assert_eq!(call(app, "settings.get", &obj! {}).get("slskdStopped").and_then(Value::as_bool), Some(false));
+    assert!(std::fs::read_to_string(&plist).unwrap().contains("<key>RunAtLoad</key>\n\t<true/>"), "it starts at login again");
 
     // After the computer wakes, slskd is asked to sign in again at once, but
     // only when the connection is what stands in the way.
     let puts = |f: &FakeSlskd| f.requests.lock().unwrap().iter().filter(|r| r.as_str() == "PUT server").count();
+    let before = puts(&e.fake);
     e.app.service.sign_in_again(app);
-    assert_eq!(puts(&e.fake), 0, "signed in already");
+    assert_eq!(puts(&e.fake), before, "signed in already");
     *e.fake.offline.lock().unwrap() = true;
     e.app.service.sign_in_again(app);
-    assert_eq!(puts(&e.fake), 1, "not signed in: the Soulseek server could not be reached");
+    assert_eq!(puts(&e.fake), before + 1, "not signed in: the Soulseek server could not be reached");
     *e.fake.offline.lock().unwrap() = false;
     *e.fake.kicked.lock().unwrap() = true;
     e.app.service.sign_in_again(app);
-    assert_eq!(puts(&e.fake), 1, "signed in elsewhere: asking again would sign the other one out");
+    assert_eq!(puts(&e.fake), before + 1, "signed in elsewhere: asking again would sign the other one out");
     *e.fake.kicked.lock().unwrap() = false;
 
     // Turned off for good: the launch agent goes, everything else stays.

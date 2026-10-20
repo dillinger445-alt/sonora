@@ -422,6 +422,18 @@ export function SetupProgress({ run, others, onChanged }: { run: SetupRun; other
               </Button>
             </p>
           ) : null}
+          {run.created.length > 0 ? (
+            <details className="sk-made">
+              <summary>What the setup made so far ({run.created.length}): it stays until you remove it</summary>
+              <ul className="sk-file-list">
+                {run.created.map((p) => (
+                  <li key={p} className="selectable mono-path">
+                    {p}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
           <div className="sk-key-actions">
             {err.fix !== 'password' || run.passwordKept ? (
               <Button size="sm" variant={err.fix === 'password' ? 'ghost' : 'primary'} icon={LuRefreshCw} busy={busy === 'retry'} onClick={() => void retry()}>
@@ -507,15 +519,28 @@ export function ManagedPanel({ m, state, onUpdate }: { m: ManagedSlskd; state: S
       confirmLabel: 'Turn slskd off',
       tone: 'danger',
     });
-    if (confirmed) await act('remove', () => client.slskdRemoveAgent(), 'slskd is off');
+    if (!confirmed) return;
+    setBusy('remove');
+    try {
+      const r = await client.slskdRemoveAgent();
+      state.managed.reload();
+      void state.test();
+      toast({ tone: 'success', title: 'slskd is off', body: `Its folder, settings and log stay in ${r.kept}. Your downloads stay where they are.` });
+    } catch (e) {
+      toast({ tone: 'error', title: 'That did not work', body: message(e) });
+    } finally {
+      setBusy(null);
+    }
   };
 
   const status = m.others.length
     ? 'Not running: another slskd is in the way.'
     : !m.agent.running
-      ? m.agent.loaded || m.agent.installed
-        ? 'Stopped.'
-        : 'Off: its launch agent was removed.'
+      ? !m.agent.installed && !m.agent.loaded
+        ? 'Off: its launch agent was removed.'
+        : m.stopped
+          ? 'Stopped. It stays stopped, also when you log in, until you choose Start.'
+          : 'Stopped.'
       : signedIn
         ? `Running${m.background ? ' in the background' : ' while SONORA is open'}, signed in to Soulseek as ${c.info.username ?? m.username ?? ''}.`
         : c && !c.ok

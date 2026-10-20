@@ -44,6 +44,9 @@ pub struct Settings {
     /// slskd set up by SONORA runs in the background from login on (true),
     /// or only while SONORA is open (false).
     pub slskd_background: bool,
+    /// The person stopped SONORA's slskd: it stays stopped (at login too)
+    /// until they start it.
+    pub slskd_stopped: bool,
     /// How far a Soulseek preview reads ahead of what plays, in seconds.
     pub preview_ahead_s: i64,
     /// Most disk space previews may use at a time, in megabytes.
@@ -76,6 +79,7 @@ impl Default for Settings {
             soulseek_review: false,
             slskd_url: crate::slskd::DEFAULT_URL.into(),
             slskd_background: true,
+            slskd_stopped: false,
             preview_ahead_s: 60,
             preview_cache_mb: 1024,
         }
@@ -146,6 +150,7 @@ impl Settings {
                 self.slskd_url = crate::slskd::normalize_url(u)?;
             }
             "slskdBackground" => self.slskd_background = v.as_bool().ok_or("slskdBackground must be true or false")?,
+            "slskdStopped" => self.slskd_stopped = v.as_bool().ok_or("slskdStopped must be true or false")?,
             "previewAhead" => {
                 let n = v.as_i64().ok_or("previewAhead must be a number of seconds")?;
                 if !(20..=600).contains(&n) {
@@ -237,6 +242,7 @@ impl ToJson for Settings {
             "soulseekReview" => self.soulseek_review,
             "slskdUrl" => self.slskd_url,
             "slskdBackground" => self.slskd_background,
+            "slskdStopped" => self.slskd_stopped,
             "previewAhead" => self.preview_ahead_s,
             "previewCacheMb" => self.preview_cache_mb,
         }

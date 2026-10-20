@@ -681,6 +681,52 @@ pub struct Settings {
     pub api_key: String,
 }
 
+/// SONORA's slskd.yml set up again: the account, the folders, the web page
+/// on this computer only and SONORA's key are written into the file as it
+/// is, and everything else in it stays. The shared folders change only when
+/// the person changed the one the setup showed (`old_shares` is what the
+/// file has; the setup shows the first). `None` when the file lacks a line
+/// SONORA needs: it is then written anew (after a backup).
+pub fn reconfigure(text: &str, s: &Settings, old_shares: &[String], share: Option<&Path>) -> Option<String> {
+    let mut t = text.to_string();
+    let port = s.port.to_string();
+    let values: [(&[&str], String); 9] = [
+        (&["soulseek", "username"], quote(&s.username)),
+        (&["soulseek", "password"], quote(&s.password)),
+        (&["directories", "downloads"], quote(&s.downloads)),
+        (&["directories", "incomplete"], quote(&s.incomplete)),
+        (&["web", "port"], port),
+        (&["web", "ip_address"], "127.0.0.1".into()),
+        (&["web", "https", "disabled"], "true".into()),
+        (&["web", "authentication", "password"], quote(&s.web_password)),
+        (&["web", "authentication", "api_keys", "sonora", "key"], quote(&s.api_key)),
+    ];
+    for (path, value) in values.iter() {
+        t = yaml::replace_scalar(&t, path, value)?;
+    }
+    let shares: Vec<String> = match share {
+        None => Vec::new(),
+        Some(p) => {
+            let p = p.to_string_lossy().into_owned();
+            if old_shares.contains(&p) {
+                old_shares.to_vec()
+            } else {
+                let mut v = old_shares.to_vec();
+                if v.is_empty() {
+                    v.push(p);
+                } else {
+                    v[0] = p;
+                }
+                v
+            }
+        }
+    };
+    if shares != old_shares {
+        t = yaml::replace_list(&t, &["shares", "directories"], &shares)?;
+    }
+    Some(t)
+}
+
 /// slskd.yml as SONORA writes it.
 pub fn render(s: &Settings) -> String {
     let mut out = String::new();
@@ -1006,6 +1052,9 @@ struct Run {
     request: Option<Request>,
     signed_in_as: Option<String>,
     started_at: Option<i64>,
+    /// slskd's log and its length when the Start step began: what slskd
+    /// says from there on is about this setup.
+    log_mark: Option<(PathBuf, u64)>,
 }
 
 /// SONORA's slskd: its setup, its launch agent and its health.
@@ -1013,13 +1062,11 @@ pub struct Service {
     system: Mutex<Arc<dyn System>>,
     run: Mutex<Run>,
     cancel: AtomicBool,
-    /// The person stopped slskd: SONORA does not start it again by itself
-    /// until they start it (or SONORA opens again).
-    stopped: AtomicBool,
     /// SONORA is quitting: the watcher stops.
     quitting: AtomicBool,
-    /// Held while SONORA starts slskd or lets it go on quitting, so the two
-    /// never cross (slskd started again just as SONORA quits).
+    /// Held while SONORA changes the launch agent (writes, loads, starts,
+    /// stops or removes it), so no two of these cross: the watcher never
+    /// starts slskd again in the middle of Stop, Turn off or SONORA quitting.
     agent_turn: Mutex<()>,
 }
 
@@ -1029,7 +1076,6 @@ impl Default for Service {
             system: Mutex::new(Arc::new(MacSystem)),
             run: Mutex::new(Run::default()),
             cancel: AtomicBool::new(false),
-            stopped: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
             agent_turn: Mutex::new(()),
         }
@@ -1075,6 +1121,23 @@ impl Service {
 
     pub fn layout(&self, app: &App) -> Layout {
         Layout::new(&app.config.data_dir, self.system().agents_dir())
+    }
+
+    /// The person stopped slskd: SONORA does not start it again until they
+    /// start it (and launchd does not at login either).
+    pub fn is_stopped(&self, app: &App) -> bool {
+        app.settings().slskd_stopped
+    }
+
+    fn set_stopped(&self, app: &App, on: bool) -> Result<(), String> {
+        let mut s = app.settings();
+        if s.slskd_stopped == on {
+            return Ok(());
+        }
+        s.slskd_stopped = on;
+        s.save(&app.db.write()).map_err(|e| e.to_string())?;
+        *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
+        Ok(())
     }
 
     /// SONORA set up this slskd (its settings file is there).
@@ -1175,6 +1238,7 @@ impl Service {
             "config" => configured.then(|| layout.config.to_string_lossy().into_owned()),
             "log" => if configured { newest_log(&layout.logs).or_else(|| Some(layout.logs.clone())).map(|p| p.to_string_lossy().into_owned()) } else { None },
             "background" => app.settings().slskd_background,
+            "stopped" => app.settings().slskd_stopped,
             "agent" => obj! {
                 "installed" => layout.plist().is_some_and(|p| p.is_file()),
                 "loaded" => agent.loaded,
@@ -1244,7 +1308,9 @@ impl Service {
             if r.active {
                 return Err("The setup is already running.".into());
             }
-            *r = Run { active: true, request: Some(req), started_at: Some(crate::db::now_ms()), ..Run::default() };
+            // What an earlier run that did not finish made can still be removed.
+            let created = if r.finished { Vec::new() } else { std::mem::take(&mut r.created) };
+            *r = Run { active: true, request: Some(req), started_at: Some(crate::db::now_ms()), created, ..Run::default() };
         }
         self.spawn(app);
         Ok(self.run_json())
@@ -1292,6 +1358,7 @@ impl Service {
             std::mem::take(&mut r.created)
         };
         let layout = self.layout(app);
+        let _turn = lock(&self.agent_turn);
         if created.iter().any(|p| Some(p) == layout.plist().as_ref()) {
             let _ = self.system().unload();
         }
@@ -1506,15 +1573,24 @@ impl Service {
             api_key,
         };
         let existed = layout.config.is_file();
+        // Set up again (or updated): only what SONORA needs changes, and the
+        // rest of the person's slskd.yml stays as it is.
+        let text = match std::fs::read_to_string(&layout.config).ok().and_then(|old| reconfigure(&old, &settings, own.as_ref().map(|f| f.shares.as_slice()).unwrap_or(&[]), req.share.as_deref())) {
+            Some(t) => t,
+            None => render(&settings),
+        };
         backup(&layout.config).map_err(|e| (format!("slskd.yml could not be backed up: {e}"), "retry"))?;
-        write_private(&layout.config, &render(&settings)).map_err(|e| (format!("slskd's settings could not be written: {e}"), "retry"))?;
+        write_private(&layout.config, &text).map_err(|e| (format!("slskd's settings could not be written: {e}"), "retry"))?;
         if !existed {
             self.created(layout.config.clone());
         }
         // SONORA talks to its own slskd, and watches the folder it saves to.
         let mut s = app.settings();
         s.slskd_url = format!("http://127.0.0.1:{}", settings.port);
-        s.slskd_background = true;
+        if !existed {
+            // The first setup runs slskd in the background; later ones keep the person's choice.
+            s.slskd_background = true;
+        }
         let folder = settings.downloads.clone();
         if s.soulseek_folder.as_deref() != Some(folder.as_str()) {
             crate::sources::note_existing(app, &req.downloads).map_err(|e| (format!("The download folder could not be read: {e}"), "folder"))?;
@@ -1565,18 +1641,22 @@ impl Service {
         }
         let version = self.installed_version(app).unwrap_or_else(|| VERSION.to_string());
         let err_len = std::fs::metadata(layout.service_log()).map(|m| m.len()).unwrap_or(0);
-        self.stopped.store(false, Ordering::Relaxed);
-        let agent = self.install_agent(layout, &version, true).map_err(|e| (e, "retry"))?;
-        if agent.new {
-            if let Some(p) = layout.plist() {
-                self.created(p);
+        lock(&self.run).log_mark = newest_log(&layout.logs).and_then(|l| std::fs::metadata(&l).ok().map(|m| (l, m.len())));
+        {
+            let _turn = lock(&self.agent_turn);
+            self.set_stopped(app, false).map_err(|e| (e, "retry"))?;
+            let agent = self.install_agent(layout, &version, app.settings().slskd_background).map_err(|e| (e, "retry"))?;
+            if agent.new {
+                if let Some(p) = layout.plist() {
+                    self.created(p);
+                }
             }
-        }
-        if !agent.loaded_now {
-            // It was running already: start it again so it reads the new slskd.yml.
-            sys.kickstart(true).map_err(|e| (e, "retry"))?;
-        } else if sys.agent().pid.is_none() {
-            let _ = sys.kickstart(false);
+            if !agent.loaded_now {
+                // It was running already: start it again so it reads the new slskd.yml.
+                sys.kickstart(true).map_err(|e| (e, "retry"))?;
+            } else if sys.agent().pid.is_none() {
+                let _ = sys.kickstart(false);
+            }
         }
         let deadline = Instant::now() + Duration::from_secs(wait_secs(90));
         loop {
@@ -1616,7 +1696,14 @@ impl Service {
 
     fn wait_signed_in(&self, app: &Arc<App>, layout: &Layout) -> Result<(), Fail> {
         let deadline = Instant::now() + Duration::from_secs(wait_secs(60));
-        let log_start = newest_log(&layout.logs).and_then(|l| std::fs::metadata(&l).ok().map(|m| (l, m.len())));
+        let log_start = lock(&self.run).log_mark.clone();
+        // slskd signs in by itself after it starts, but not again after
+        // Soulseek signed it out (the account signed in elsewhere): ask.
+        if let Ok(v) = app.slskd.test(app) {
+            if v.get("loggedIn").and_then(Value::as_bool) != Some(true) {
+                let _ = app.slskd.connect(app);
+            }
+        }
         loop {
             if self.cancel.load(Ordering::Relaxed) {
                 return fail("The setup was stopped.", "retry");
@@ -1661,16 +1748,17 @@ impl Service {
     /// asks the person anything. slskd stays off when the person stopped it,
     /// or turned it off (its launch agent is gone).
     pub fn ensure(&self, app: &App) -> Result<(), String> {
+        let _turn = lock(&self.agent_turn);
         if !self.layout(app).plist().is_some_and(|p| p.is_file()) {
             return Ok(());
         }
         self.run_agent(app)
     }
 
-    /// Installs (or updates) the launch agent and starts slskd if it is not running.
+    /// Installs (or updates) the launch agent and starts slskd if it is not
+    /// running. The caller holds `agent_turn`.
     fn run_agent(&self, app: &App) -> Result<(), String> {
-        let _turn = lock(&self.agent_turn);
-        if self.quitting.load(Ordering::Relaxed) || !self.configured(app) || lock(&self.run).active || self.stopped.load(Ordering::Relaxed) {
+        if self.quitting.load(Ordering::Relaxed) || !self.configured(app) || lock(&self.run).active || self.is_stopped(app) {
             return Ok(());
         }
         let layout = self.layout(app);
@@ -1704,21 +1792,40 @@ impl Service {
             return Err("slskd was not set up by SONORA.".into());
         }
         let sys = self.system();
+        let _turn = lock(&self.agent_turn);
         match what {
             "start" => {
-                self.stopped.store(false, Ordering::Relaxed);
+                self.set_stopped(app, false)?;
                 self.run_agent(app)
             }
             "stop" => {
-                self.stopped.store(true, Ordering::Relaxed);
+                // It stays stopped: the launch agent no longer starts it at
+                // login (it is kept, so Start brings it back as it was).
+                self.set_stopped(app, true)?;
+                if let Some(version) = self.installed_version(app) {
+                    let layout = self.layout(app);
+                    if layout.plist().is_some_and(|p| p.is_file()) {
+                        self.install_agent(&layout, &version, false)?;
+                    }
+                }
                 sys.unload()
             }
             "restart" => {
-                self.stopped.store(false, Ordering::Relaxed);
-                if sys.agent().loaded {
-                    sys.kickstart(true)
+                self.set_stopped(app, false)?;
+                if !sys.agent().loaded {
+                    return self.run_agent(app);
+                }
+                let Some(version) = self.installed_version(app) else { return sys.kickstart(true) };
+                // Back to how it starts (a stopped agent does not start at login).
+                let agent = self.install_agent(&self.layout(app), &version, app.settings().slskd_background)?;
+                if agent.loaded_now {
+                    // Written anew and loaded again: launchd started it, or SONORA does.
+                    if sys.agent().pid.is_none() {
+                        sys.kickstart(false)?;
+                    }
+                    Ok(())
                 } else {
-                    self.run_agent(app)
+                    sys.kickstart(true)
                 }
             }
             _ => Err(format!("unknown action {what}")),
@@ -1731,12 +1838,14 @@ impl Service {
         s.slskd_background = on;
         s.save(&app.db.write()).map_err(|e| e.to_string())?;
         *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
-        // Turned off (no launch agent): it stays off; the choice applies when it is started.
+        // Turned off (no launch agent) or stopped: it stays so; the choice
+        // applies when it is started.
+        let _turn = lock(&self.agent_turn);
         let layout = self.layout(app);
-        if self.configured(app) && layout.plist().is_some_and(|p| p.is_file()) {
+        if self.configured(app) && !self.is_stopped(app) && layout.plist().is_some_and(|p| p.is_file()) {
             if let Some(version) = self.installed_version(app) {
                 self.install_agent(&layout, &version, on)?;
-                self.ensure(app)?;
+                self.run_agent(app)?;
             }
         }
         Ok(())
@@ -1745,6 +1854,7 @@ impl Service {
     /// Turns the background service off and removes the launch agent. The
     /// slskd folder, its settings and the downloads stay.
     pub fn remove_agent(&self, app: &App) -> Result<Value, String> {
+        let _turn = lock(&self.agent_turn);
         let layout = self.layout(app);
         self.system().unload()?;
         if let Some(p) = layout.plist() {
@@ -1759,7 +1869,9 @@ impl Service {
     /// The key in slskd.yml differs from the one SONORA keeps: when slskd.yml
     /// has a usable key, SONORA takes it (no file changes). True when it did.
     pub fn adopt_key(&self, app: &App) -> bool {
-        if !self.configured(app) {
+        // Only when SONORA talks to its own slskd: the key of another one
+        // (on a NAS, say) is never replaced with this one's.
+        if !self.configured(app) || app.settings().slskd_url.trim_end_matches('/') != managed_url() {
             return false;
         }
         let Some(found) = read_found(&self.layout(app).config) else { return false };
@@ -1919,7 +2031,7 @@ impl Service {
     /// password, nor the account signed in elsewhere). The watcher does this
     /// after the computer wakes.
     pub fn sign_in_again(&self, app: &App) {
-        if self.stopped.load(Ordering::Relaxed) || self.system().agent().pid.is_none() {
+        if self.is_stopped(app) || self.system().agent().pid.is_none() {
             return;
         }
         let Ok(info) = app.slskd.test(app) else { return };
@@ -1936,6 +2048,11 @@ impl Service {
             Err(e) => logging::log_fields("warn", "slskd", "could not ask slskd to sign in again", obj! { "code" => e.code }),
         }
     }
+}
+
+/// Where SONORA's own slskd answers.
+pub fn managed_url() -> String {
+    format!("http://127.0.0.1:{}", test_port().unwrap_or(PORT))
 }
 
 /// End-to-end tests run their stand-in slskd on another port.
