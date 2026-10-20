@@ -1,6 +1,6 @@
 /** Right-hand panel with a quick read of the focused track. */
 
-import { LuDisc3, LuExternalLink, LuFolderSearch, LuListMinus, LuListMusic, LuLoaderCircle, LuPause, LuPencil, LuPlay, LuRefreshCw, LuTrash2, LuUsb } from 'react-icons/lu';
+import { LuDisc3, LuExternalLink, LuFolderSearch, LuListMinus, LuListMusic, LuListX, LuLoaderCircle, LuPause, LuPencil, LuPlay, LuRefreshCw, LuTrash2, LuUsb } from 'react-icons/lu';
 import type { KeyNotation, TrackDetail, TrackRow } from '../api/types.ts';
 import { AddToPlaylist } from '../components/AddToPlaylist.tsx';
 import { Button } from '../components/Button.tsx';
@@ -88,6 +88,7 @@ export function Inspector({
   selectionCount,
   actions,
   onRemove,
+  onTrash,
   onClearSelection,
   selectedIds,
   playlist,
@@ -97,6 +98,8 @@ export function Inspector({
   selectedIds: number[];
   actions: TrackActions;
   onRemove: (ids: number[], what?: string) => Promise<void>;
+  /** Moves the files to the Trash (after asking) and removes their tracks. */
+  onTrash: (ids: number[], what?: string) => Promise<void>;
   onClearSelection: () => void;
   /** Shown inside a playlist: taking tracks out of it. */
   playlist?: { id: number; name: string; remove: (ids: number[]) => void };
@@ -117,7 +120,7 @@ export function Inspector({
       <aside className="inspector" aria-label="Selection">
         <div className="insp-head">
           <h2 className="insp-title">{plural(selectionCount, 'track')} selected</h2>
-          <p className="insp-sub">Actions apply to every selected track. Files on disk are never changed.</p>
+          <p className="insp-sub">Actions apply to every selected track.</p>
         </div>
         <div className="insp-actions is-stacked">
           {playlist ? (
@@ -139,8 +142,11 @@ export function Inspector({
             Re-analyze {plural(selectionCount, 'track')}
           </Button>
           <Button onClick={() => void actions.exportCsv({ ids: selectedIds }, selectionCount)}>Export as CSV</Button>
-          <Button icon={LuTrash2} variant="danger" onClick={() => void onRemove(selectedIds)}>
+          <Button icon={LuListX} variant="danger" onClick={() => void onRemove(selectedIds)}>
             Remove from library
+          </Button>
+          <Button icon={LuTrash2} variant="ghost" className="is-danger-text" onClick={() => void onTrash(selectedIds)}>
+            Move {plural(selectionCount, 'file')} to {actions.trashName}…
           </Button>
           <Button variant="ghost" onClick={onClearSelection}>
             Clear selection
@@ -239,6 +245,15 @@ export function Inspector({
         </div>
       ) : null}
 
+      {detail.error && row.status === 'done' && !a ? (
+        <p className="insp-load-error" role="status">
+          The findings could not be loaded: {detail.error.message}{' '}
+          <button type="button" className="link" onClick={detail.reload}>
+            Try again
+          </button>
+        </p>
+      ) : null}
+
       {findings.length > 0 ? (
         <ul className="insp-findings" aria-label="Main findings">
           {findings.map((f) => (
@@ -301,12 +316,23 @@ export function Inspector({
           Re-analyze
         </Button>
         <Button
-          icon={LuTrash2}
+          icon={LuListX}
           variant="ghost"
           className="is-danger-text"
           onClick={() => void onRemove([row.id], `“${row.displayTitle}”`)}
+          data-tip="Removes the track from SONORA only: the file stays on disk"
         >
           Remove from library
+        </Button>
+        <Button
+          icon={LuTrash2}
+          variant="ghost"
+          className="is-danger-text"
+          disabled={row.missing}
+          onClick={() => void onTrash([row.id], `“${row.displayTitle}”`)}
+          data-tip={`Moves the audio file to the ${actions.trashName} and removes the track`}
+        >
+          Move to {actions.trashName}…
         </Button>
       </div>
     </aside>

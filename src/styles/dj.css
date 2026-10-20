@@ -582,6 +582,13 @@
   margin-right: auto;
 }
 
+.dj-reset-ask {
+  max-width: 300px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--c-text-2);
+}
+
 /* ----------------------------------------------------- export dialog */
 
 .xp-grid {

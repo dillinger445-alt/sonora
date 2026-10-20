@@ -27,6 +27,38 @@ const SORTS: { value: SortKey; label: string }[] = [
   { value: 'added', label: 'Date added' },
 ];
 
+/** Names for the other orders, which arrive with filters saved from the library. */
+const OTHER_SORTS: Record<SortKey, string> = {
+  title: 'Title',
+  artist: 'Artist',
+  album: 'Album',
+  duration: 'Duration',
+  format: 'Format',
+  sampleRate: 'Sample rate',
+  bitDepth: 'Bit depth',
+  bitrate: 'Bitrate',
+  overall: 'Overall score',
+  dj: 'DJ score',
+  listening: 'Listening score',
+  confidence: 'Confidence',
+  lufs: 'Loudness',
+  truePeak: 'True peak',
+  cutoff: 'Cutoff',
+  size: 'Size',
+  added: 'Date added',
+  analyzed: 'Date analyzed',
+  path: 'Location',
+  status: 'Status',
+  bpm: 'Tempo',
+  key: 'Key',
+  genre: 'Genre',
+};
+
+/** The usual orders, plus `current` when it is another one, so the list always shows the real order. */
+function sortChoices(current: SortKey): { value: SortKey; label: string }[] {
+  return SORTS.some((s) => s.value === current) ? SORTS : [...SORTS, { value: current, label: OTHER_SORTS[current] ?? current }];
+}
+
 const SCORES: { value: string; label: string }[] = [
   { value: 'any', label: 'Any' },
   { value: '55', label: '55+' },
@@ -269,7 +301,7 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
               <span className="field-label">Order</span>
               <div className="rules-order">
                 <select className="select" aria-label="Order by" value={sort.key} onChange={(e) => setSort({ ...sort, key: e.target.value as SortKey })}>
-                  {SORTS.map((s) => (
+                  {sortChoices(sort.key).map((s) => (
                     <option key={s.value} value={s.value}>
                       {s.label}
                     </option>
@@ -328,6 +360,8 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
           </div>
         ) : null}
         {kept.length ? <p className="faint rules-kept">Also from the library's filters: {kept.join(', ')}.</p> : null}
+        {/* Enter in a field saves (a rendered button: WebKit needs one with several fields). */}
+        <button type="submit" className="visually-hidden" aria-hidden tabIndex={-1} disabled={!name.trim() || bpmBad || limitBad || busy} />
       </form>
     </Dialog>
   );

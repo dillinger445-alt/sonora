@@ -68,6 +68,14 @@ impl From<crate::db::sqlite::DbError> for ApiError {
 
 type R = Result<Value, ApiError>;
 
+fn busy_message(n: usize) -> String {
+    if n == 1 {
+        "This track is being analyzed right now. Try again once it is done, or cancel the scan.".into()
+    } else {
+        format!("These {n} tracks are being analyzed right now. Try again once they are done, or cancel the scan.")
+    }
+}
+
 fn ids_param(p: &Value, key: &str) -> Result<Vec<i64>, ApiError> {
     match p.get(key) {
         Some(Value::Array(a)) => {
@@ -197,8 +205,10 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         }
         "tracks.rescan" => {
             let ids = ids_param(p, "ids")?;
-            let existing: Vec<i64> = library::get_tracks(&app.db.read(), &ids)?.into_iter().filter(|t| t.missing_since.is_none()).map(|t| t.id).collect();
-            let missing = (ids.len() - existing.len()) as i64;
+            // Tracks no longer in the library are left out; only files gone from disk count as missing.
+            let (gone, existing): (Vec<_>, Vec<_>) = library::get_tracks(&app.db.read(), &ids)?.into_iter().partition(|t| t.missing_since.is_some());
+            let existing: Vec<i64> = existing.into_iter().map(|t| t.id).collect();
+            let missing = gone.len() as i64;
             let mut v = queued_json(app.scans.enqueue_tracks("rescan", &existing))?;
             v.set("missing", missing);
             Ok(v)
@@ -216,12 +226,36 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         }
         "tracks.remove" => {
             let ids = ids_param(p, "ids")?;
-            // Removing rows a worker is writing would race with it.
-            let Some(n) = app.scans.remove_tracks(&ids)? else {
-                return Err(ApiError::new("busy", "Some of these tracks are being analyzed right now. Wait for them to finish or cancel the scan, then try again."));
-            };
-            app.events.emit("library.changed", &obj! { "reason" => "removed", "count" => n });
-            Ok(obj! { "removed" => n })
+            // Removing rows a worker is writing would race with it: tracks
+            // being analysed right now stay, and the answer counts them.
+            let r = app.scans.remove_tracks(&ids)?;
+            if r.removed == 0 && r.busy > 0 {
+                return Err(ApiError::new("busy", busy_message(r.busy)));
+            }
+            if r.removed > 0 {
+                app.events.emit("library.changed", &obj! { "reason" => "removed", "count" => r.removed });
+            }
+            Ok(obj! { "removed" => r.removed, "busy" => r.busy })
+        }
+        "tracks.trash" => {
+            // Moves the files to the system's Trash (where the user can put
+            // them back), then removes their tracks from the library.
+            let ids = ids_param(p, "ids")?;
+            let r = app.scans.trash_tracks(&ids)?;
+            if r.removed == 0 && r.failed.is_empty() && r.busy > 0 {
+                return Err(ApiError::new("busy", busy_message(r.busy)));
+            }
+            crate::logging::log_fields(
+                "info",
+                "library",
+                "moved files to the trash",
+                obj! { "trashed" => r.trashed, "removed" => r.removed, "failed" => r.failed.len() },
+            );
+            if r.removed > 0 {
+                app.events.emit("library.changed", &obj! { "reason" => "removed", "count" => r.removed });
+            }
+            let failed: Vec<Value> = r.failed.iter().map(|(id, title, error)| obj! { "id" => *id, "title" => title.clone(), "error" => error.clone() }).collect();
+            Ok(obj! { "trashed" => r.trashed, "removed" => r.removed, "failed" => Value::Array(failed), "busy" => r.busy, "trash" => crate::trash::trash_name() })
         }
         "tracks.editDj" => {
             let ids = ids_param(p, "ids")?;
@@ -278,10 +312,24 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let id = id_param(p, "id")?;
             let remove_tracks = p.get("removeTracks").and_then(Value::as_bool).unwrap_or(false);
             let Some(n) = app.scans.remove_folder(id, remove_tracks)? else {
-                return Err(ApiError::new("busy", "A scan is running. Wait for it to finish or cancel it before removing a folder's tracks."));
+                return Err(ApiError::new(
+                    "busy",
+                    "Some of this folder's files are being indexed or analyzed right now. Try again in a moment, or cancel the scan first.",
+                ));
             };
             app.events.emit("library.changed", &obj! { "reason" => "folder_removed" });
             Ok(obj! { "removedTracks" => n })
+        }
+        "folders.bringBack" => {
+            // Files removed from the library earlier are welcome again: the
+            // folder is rescanned to add them.
+            let id = id_param(p, "id")?;
+            let n = library::bring_back(&app.db.write(), id)?;
+            if n > 0 {
+                app.scans.start_indexing("folders", IndexJob::Folders(Some(vec![id])));
+            }
+            app.events.emit("library.changed", &obj! { "reason" => "brought_back", "count" => n });
+            Ok(obj! { "count" => n })
         }
 
         // --------------------------------------------------------- scans
@@ -478,6 +526,11 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             Ok(r.to_json())
         }
         "playlists.containing" => {
+            // Playlists holding one track, or any of several (`trackIds`).
+            if p.get("trackIds").is_some() {
+                let ids = ids_param(p, "trackIds")?;
+                return Ok(obj! { "ids" => playlists::containing_any(&app.db.read(), &ids)? });
+            }
             let id = id_param(p, "trackId")?;
             Ok(obj! { "ids" => playlists::containing(&app.db.read(), id)? })
         }
@@ -667,7 +720,9 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             if !dest.is_absolute() || !dest.parent().map(Path::is_dir).unwrap_or(false) {
                 return Err(ApiError::invalid("path must be an absolute file path in an existing folder"));
             }
-            app.db.backup_to(&dest).map_err(|e| ApiError::new("backup_failed", e.to_string()))?;
+            // `replace`: the person chose an existing file in a save dialog that asked first.
+            let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
+            app.db.backup_to(&dest, replace).map_err(|e| ApiError::new("backup_failed", e.to_string()))?;
             Ok(obj! { "path" => path })
         }
         "system.reveal" => {

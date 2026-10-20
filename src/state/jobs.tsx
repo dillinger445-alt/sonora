@@ -43,7 +43,8 @@ export function describeUsb(r: UsbReport): { tone: 'success' | 'warning' | 'erro
   const parts = [r.written ? `${plural(r.written, 'file')} written` : null, r.renamed ? `${formatCount(r.renamed)} renamed` : null, r.removed ? `${formatCount(r.removed)} removed` : null, r.kept ? `${formatCount(r.kept)} unchanged` : null].filter(Boolean);
   const body = parts.join(', ') || undefined;
   if (r.cancelled) return { tone: 'info', title: 'Sending stopped', body };
-  if (r.failed.length) return { tone: 'warning', title: `Sent, but ${plural(r.failed.length, 'track')} failed`, body: r.failed[0]?.error };
+  const failed = r.failed ?? [];
+  if (failed.length) return { tone: 'warning', title: `Sent, but ${plural(failed.length, 'track')} failed`, body: failed[0]?.error };
   return { tone: 'success', title: `Sent ${plural(r.playlists, 'playlist')} to the drive`, body };
 }
 
@@ -128,7 +129,12 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         const written = r.written ?? [];
         const failed = r.failed ?? [];
         const first = r.rekordboxXml ?? written[0]?.path;
-        const reveal = first ? { label: revealLabel(bridge.platform), run: () => void bridge.reveal(first) } : undefined;
+        const reveal = first
+          ? {
+              label: revealLabel(bridge.platform),
+              run: () => void bridge.reveal(first).catch((e: unknown) => toast({ tone: 'error', title: 'Could not show the files', body: e instanceof Error ? e.message : String(e) })),
+            }
+          : undefined;
         if (r.error) toast({ tone: 'error', title: 'The export stopped', body: r.error });
         else if (r.cancelled) toast({ tone: 'info', title: `Export stopped after ${plural(written.length, 'track')}`, action: reveal });
         else if (failed.length) toast({ tone: 'warning', title: `Exported ${plural(written.length, 'track')}, ${failed.length} failed`, body: failed[0]?.error, action: reveal });
@@ -185,15 +191,23 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // A stop that fails is said: the job keeps running, and a silent button looks broken.
+  const cancelFailed = useCallback(
+    (what: string) => (e: unknown) => {
+      toast({ tone: 'error', title: `Could not stop ${what}`, body: e instanceof Error ? e.message : String(e) });
+      resync();
+    },
+    [toast, resync],
+  );
   const cancelExport = useCallback(() => {
-    client.exportCancel().catch(() => undefined);
-  }, [client]);
+    client.exportCancel().catch(cancelFailed('the export'));
+  }, [client, cancelFailed]);
   const cancelDiscogs = useCallback(() => {
-    client.discogsCancel().catch(() => undefined);
-  }, [client]);
+    client.discogsCancel().catch(cancelFailed('the Discogs lookup'));
+  }, [client, cancelFailed]);
   const cancelUsb = useCallback(() => {
-    client.usbCancel().catch(() => undefined);
-  }, [client]);
+    client.usbCancel().catch(cancelFailed('sending to the drive'));
+  }, [client, cancelFailed]);
 
   const value = useMemo<Jobs>(
     () => ({

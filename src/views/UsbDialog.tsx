@@ -274,7 +274,13 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
   });
 
   const chooseFolder = async () => {
-    const f = await bridge.pickFolder('Choose where to send the playlists');
+    let f: string | null = null;
+    try {
+      f = await bridge.pickFolder('Choose where to send the playlists');
+    } catch (e) {
+      toast({ tone: 'error', title: 'Could not open the folder dialog', body: e instanceof Error ? e.message : String(e) });
+      return;
+    }
     if (f) {
       setCustom(f);
       choose(f);
@@ -514,11 +520,11 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
         </p>
         {d?.body ? <p>{d.body}.</p> : null}
         <p className="mono-path selectable">{report.folder}</p>
-        {report.failed.length ? (
+        {(report.failed ?? []).length ? (
           <div className="xp-list">
-            <p className="t-red">{plural(report.failed.length, 'track')} could not be written:</p>
+            <p className="t-red">{plural((report.failed ?? []).length, 'track')} could not be written:</p>
             <ul>
-              {report.failed.map((f) => (
+              {(report.failed ?? []).map((f) => (
                 <li key={f.trackId}>
                   {f.title}: <span className="faint selectable">{f.error}</span>
                 </li>
@@ -526,9 +532,9 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
             </ul>
           </div>
         ) : null}
-        {report.warnings.length ? (
+        {(report.warnings ?? []).length ? (
           <ul className="usb-warnings">
-            {report.warnings.slice(0, 5).map((w) => (
+            {(report.warnings ?? []).slice(0, 5).map((w) => (
               <li key={w} className="t-amber">
                 <LuTriangleAlert aria-hidden /> {w}
               </li>

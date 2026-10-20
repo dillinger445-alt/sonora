@@ -166,6 +166,42 @@ test('Delete acts on the track the details panel shows, and switching scores kee
   await expect(grid).toBeVisible();
 });
 
+test('right-clicking a row opens its menu, for the row or for the selection it is in', async ({ page }) => {
+  await page.goto('/#/library');
+  const grid = page.getByRole('grid', { name: 'Music library' });
+  await expect(rows(page).nth(3)).toBeVisible();
+  const first = (await rows(page).nth(0).locator('.cell-title').innerText()).trim();
+
+  // One row: it is selected first, and the menu acts on it.
+  await rows(page).nth(0).click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: `Actions for ${first}` });
+  await expect(menu).toBeVisible();
+  await expect(rows(page).nth(0)).toHaveAttribute('aria-selected', 'true');
+  await expect(menu.getByRole('menuitem', { name: /^Remove from library…/ })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /^Move to Trash…/ })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(grid).toBeFocused();
+
+  // Within a selection of several, it acts on all of them.
+  await rows(page).nth(1).click({ modifiers: ['Shift'] });
+  await rows(page).nth(1).click({ button: 'right' });
+  const several = page.getByRole('menu', { name: 'Actions for 2 tracks' });
+  await several.getByRole('menuitem', { name: 'Remove 2 tracks from the library…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Remove 2 tracks from the library?' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(rows(page).nth(0)).toHaveAttribute('aria-selected', 'true');
+
+  // From the keyboard: Shift+F10 opens the active row's menu at its first item.
+  await grid.focus();
+  await page.keyboard.press('Shift+F10');
+  const keyboardMenu = page.getByRole('menu', { name: /^Actions for/ });
+  await expect(keyboardMenu.getByRole('menuitem').first()).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(grid).toBeFocused();
+});
+
 test('track analysis shows scores, real visualizations and explained findings', async ({ page }) => {
   await page.goto('/#/library');
   await page.getByRole('searchbox', { name: 'Search tracks' }).fill('clipped_master');
@@ -255,7 +291,7 @@ test('removing a track asks first and never touches the file', async ({ page }) 
   const panel = page.getByRole('complementary', { name: 'Track details' });
   await panel.getByRole('button', { name: 'Remove from library' }).click();
   const dialog = page.getByRole('dialog', { name: 'Remove from library?' });
-  await expect(dialog).toContainText('nothing on disk is deleted');
+  await expect(dialog).toContainText('The audio file stays where it is');
   // Cancel is focused first, so Enter does not delete by accident.
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await page.keyboard.press('Enter');
@@ -271,7 +307,7 @@ test('removing a track asks first and never touches the file', async ({ page }) 
   expect(existsSync(join(MUSIC, 'dark_master.flac'))).toBe(true);
 });
 
-test('rescanning a folder picks up new files and skips unchanged ones', async ({ page }) => {
+test('rescanning a folder picks up new files, skips unchanged ones and leaves removed tracks out until brought back', async ({ page }) => {
   const extra = join(MUSIC, 'zz_new_copy.flac');
   rmSync(extra, { force: true });
   copyFileSync(join(MUSIC, 'other_track.flac'), extra);
@@ -281,17 +317,79 @@ test('rescanning a folder picks up new files and skips unchanged ones', async ({
     await page.getByRole('button', { name: 'Rescan this folder' }).first().click();
     await waitIdle(page);
     await page.goto('/#/library');
-    await page.getByRole('searchbox', { name: 'Search tracks' }).fill('zz_new_copy');
+    const search = page.getByRole('searchbox', { name: 'Search tracks' });
+    await search.fill('zz_new_copy');
     await expect(rows(page)).toHaveCount(1);
     await expect(rows(page).first().locator('.score-num').first()).not.toHaveText('—');
-    // Unchanged files are skipped: the scan analyzed only the new file and
-    // the one removed from the library earlier, which a rescan brings back.
+    // The track removed earlier stays out, though its file is still there.
+    await search.fill('dark_master');
+    await expect(page.getByText('No tracks match')).toBeVisible();
+    await expect(rows(page)).toHaveCount(0);
+    // Unchanged files are skipped: the scan analyzed only the new file.
     await page.goto('/#/history');
     const latest = page.locator('.history-table tbody tr').first();
     await expect(latest).toContainText('Folder rescan');
-    await expect(latest.locator('td').nth(3)).toHaveText('2');
+    await expect(latest.locator('td').nth(3)).toHaveText('1');
+
+    // The folder says so, and brings it back on request.
+    await page.goto('/#/folders');
+    const note = page.locator('.folder-removed').first();
+    await expect(note).toContainText('1 track removed from the library is left out of rescans');
+    await note.getByRole('button', { name: 'Bring back' }).click();
+    await expect(page.getByText(/Bringing back 1 track/)).toBeVisible();
+    await waitIdle(page);
+    await expect(page.locator('.folder-removed')).toHaveCount(0);
+    await page.goto('/#/library');
+    await page.getByRole('searchbox', { name: 'Search tracks' }).fill('dark_master');
+    await expect(rows(page)).toHaveCount(1);
+    await expect(rows(page).first().locator('.score-num').first()).not.toHaveText('—');
   } finally {
     rmSync(extra, { force: true });
+  }
+});
+
+test('Move to Trash puts the audio file in the Trash and takes its track out of the library', async ({ page }) => {
+  // Elsewhere the system's own Trash would be used: this checks the one kept in e2e/.data.
+  test.skip(process.platform !== 'linux', 'uses the freedesktop trash');
+  const name = 'zz_trash_me.flac';
+  const file = join(MUSIC, name);
+  const trash = join(DATA, 'xdg', 'Trash');
+  rmSync(join(trash, 'files', name), { force: true });
+  rmSync(join(trash, 'info', `${name}.trashinfo`), { force: true });
+  copyFileSync(join(MUSIC, 'other_track.flac'), file);
+  try {
+    // Added by itself, by path (the browser build has no file picker).
+    await page.goto('/#/library');
+    await page.getByRole('button', { name: 'Import music' }).click();
+    await page.getByRole('menuitem', { name: /Add files…/ }).click();
+    const add = page.getByRole('dialog', { name: 'Add files or folders by path' });
+    await add.getByRole('textbox').fill(file);
+    await add.getByRole('button', { name: 'Add to library' }).click();
+    await expect(add).toBeHidden();
+    await waitIdle(page);
+    await page.getByRole('searchbox', { name: 'Search tracks' }).fill('zz_trash_me');
+    await expect(rows(page)).toHaveCount(1);
+    await row(page, 'zz_trash_me').click();
+
+    const panel = page.getByRole('complementary', { name: 'Track details' });
+    await panel.getByRole('button', { name: 'Move to Trash…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Move the file to the Trash?' });
+    await expect(dialog).toContainText('You can put it back from the Trash');
+    // Cancel is first: Enter does not throw a file away by accident.
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    await dialog.getByRole('button', { name: 'Move to Trash' }).click();
+    await expect(page.getByText('Moved 1 file to the Trash')).toBeVisible();
+    await expect(rows(page)).toHaveCount(0);
+
+    // The file is in the Trash, with a note of where it came from; nothing else moved.
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(join(trash, 'files', name))).toBe(true);
+    expect(readFileSync(join(trash, 'info', `${name}.trashinfo`), 'utf8')).toContain(`Path=${file.split('/').map(encodeURIComponent).join('/')}`);
+    expect(existsSync(join(MUSIC, 'other_track.flac'))).toBe(true);
+  } finally {
+    rmSync(file, { force: true });
+    rmSync(join(trash, 'files', name), { force: true });
+    rmSync(join(trash, 'info', `${name}.trashinfo`), { force: true });
   }
 });
 
@@ -476,7 +574,11 @@ test('editing tempo, key and genre changes the library, never the file', async (
   // Back to what was detected.
   await row(page, 'other_track').click();
   await panel.getByRole('button', { name: 'Edit…' }).click();
-  await dialog.getByRole('button', { name: 'Reset to detected' }).click();
+  // Resetting drops every edit at once: it asks first, in the dialog.
+  await dialog.getByRole('button', { name: 'Reset to detected…' }).click();
+  await expect(dialog).toContainText('Remove your edits and Discogs genres?');
+  await expect(dialog.getByRole('button', { name: 'Keep them' })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Reset to detected', exact: true }).click();
   await expect(dialog).toBeHidden();
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await page.getByRole('searchbox', { name: 'Search tracks' }).fill('other_track');
@@ -728,9 +830,13 @@ test('smart playlists keep up with their rules; folders hold playlists', async (
   await expect(page.locator('.view-sub')).toContainText('120–130 BPM');
   await expect.poll(() => rows(page).count()).toBeGreaterThan(matching);
 
-  // Converted, it is an ordinary playlist; deleting it asks first and keeps the tracks.
+  // Converted (after a question: the rules go), it is an ordinary playlist;
+  // deleting it asks first and keeps the tracks.
   await page.getByRole('button', { name: 'More playlist actions' }).click();
   await page.getByRole('menuitem', { name: 'Convert to a playlist' }).click();
+  const convert = page.getByRole('dialog', { name: 'Convert “126–130 BPM” to a playlist?' });
+  await expect(convert).toContainText('its rules are not kept');
+  await convert.getByRole('button', { name: 'Convert to a playlist' }).click();
   await expect(page.getByText(/^Now a playlist of \d+ tracks$/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Arrange for mixing…' })).toBeVisible();
   await page.getByRole('button', { name: 'More playlist actions' }).click();

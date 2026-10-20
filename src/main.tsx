@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { createBridge } from './api/createBridge.ts';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './styles/index.css';
 
 const container = document.getElementById('root');
@@ -12,7 +13,10 @@ createBridge().then(
   (bridge) => {
     root.render(
       <StrictMode>
-        <App bridge={bridge} />
+        {/* The last resort: a window that cannot show anything says so. */}
+        <ErrorBoundary what="SONORA">
+          <App bridge={bridge} />
+        </ErrorBoundary>
       </StrictMode>,
     );
   },

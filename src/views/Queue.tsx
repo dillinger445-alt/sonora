@@ -6,7 +6,7 @@ import type { QueueResult } from '../api/client.ts';
 import type { ScanItemFilter, ScanRecord, ScanStatus, ScanSummary } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { ProgressBar, TabList, tabId } from '../components/Controls.tsx';
-import { EmptyState, Section, ViewHeader } from '../components/Layout.tsx';
+import { EmptyState, ErrorState, Section, ViewHeader } from '../components/Layout.tsx';
 import { FlagList, ScoreCell } from '../components/Marks.tsx';
 import { encodingShort, formatClock, formatCount, formatDate, formatEtaShort, formatPercent, formatSpan, formatTimecode, plural } from '../lib/format.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
@@ -162,7 +162,8 @@ export function ScanResults({ scanId, live }: { scanId: number; live: boolean })
   const idBase = useId();
   const [filter, setFilter] = useState<ScanItemFilter>('all');
   const items = useResource(() => client.scanItems(scanId, filter, 0, 500), [scanId, filter], {
-    events: live ? ['scan.item', 'scan.finished'] : ['library.changed'],
+    // A removed track leaves the results in either case.
+    events: live ? ['scan.item', 'scan.finished', 'library.changed'] : ['library.changed'],
     throttleMs: 900,
   });
   const rows = items.data?.rows ?? [];
@@ -181,7 +182,9 @@ export function ScanResults({ scanId, live }: { scanId: number; live: boolean })
       }
     >
       <div role="tabpanel" id={`${idBase}-panel`} aria-labelledby={tabId(idBase, filter)}>
-      {rows.length === 0 ? (
+      {items.error ? (
+        <ErrorState title="Could not load the results" error={items.error} onRetry={items.reload} />
+      ) : rows.length === 0 ? (
         <p className="faint results-empty">{items.loading ? 'Loading…' : filter !== 'all' ? 'No results in this category.' : live ? 'Results appear here as files finish.' : 'No files were analyzed in this scan.'}</p>
       ) : (
         <div className="results-wrap">
@@ -253,7 +256,7 @@ export function ScanResults({ scanId, live }: { scanId: number; live: boolean })
 }
 
 export function QueueView() {
-  const { client, overview } = useCore();
+  const { client, overview, refreshScan } = useCore();
   const { scan, lastFinished } = useScan();
   const imports = useImports();
   const toast = useToast();
@@ -261,11 +264,24 @@ export function QueueView() {
   const busy = scan != null && scan.state !== 'idle';
   const latest = history.data?.[0] ?? null;
   const scanId = (busy ? scan?.id : null) ?? lastFinished?.id ?? latest?.id ?? null;
-  const pending = overview?.tracks.pending ?? 0;
-  const failed = overview?.tracks.failed ?? 0;
+  // Only files still on disk can be analyzed.
+  const pending = overview?.tracks.pendingPresent ?? 0;
+  const failed = overview?.tracks.failedPresent ?? 0;
 
   const act = (fn: () => Promise<unknown>, failMsg: string) =>
     fn().catch((e: unknown) => toast({ tone: 'error', title: failMsg, body: e instanceof Error ? e.message : String(e) }));
+
+  /** Pause, resume and cancel answer `ok: false` when the scan was already in another state: say so and show the real state. */
+  const control = (fn: () => Promise<{ ok: boolean }>, failMsg: string, staleMsg: string) =>
+    act(
+      () =>
+        fn().then((r) => {
+          if (r.ok) return;
+          toast({ tone: 'info', title: staleMsg });
+          refreshScan();
+        }),
+      failMsg,
+    );
 
   const queued = (r: QueueResult) => toast(describeQueued(r));
 
@@ -284,17 +300,17 @@ export function QueueView() {
         actions={
           <>
             {scan?.state === 'running' ? (
-              <Button icon={LuPause} onClick={() => void act(client.pause, 'Could not pause')}>
+              <Button icon={LuPause} onClick={() => void control(client.pause, 'Could not pause', 'The scan is no longer running')}>
                 Pause
               </Button>
             ) : null}
             {scan?.state === 'paused' ? (
-              <Button variant="primary" icon={LuPlay} onClick={() => void act(client.resume, 'Could not resume')}>
+              <Button variant="primary" icon={LuPlay} onClick={() => void control(client.resume, 'Could not resume', 'The scan is no longer paused')}>
                 Resume
               </Button>
             ) : null}
             {busy && scan?.state !== 'cancelling' ? (
-              <Button variant="danger" icon={LuSquare} onClick={() => void act(client.cancel, 'Could not cancel')}>
+              <Button variant="danger" icon={LuSquare} onClick={() => void control(client.cancel, 'Could not cancel', 'The scan had already finished')}>
                 Cancel scan
               </Button>
             ) : null}

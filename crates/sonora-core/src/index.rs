@@ -24,6 +24,31 @@ pub fn is_audio_path(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).map(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str())).unwrap_or(false)
 }
 
+/// Other audio formats FFmpeg reads, which folder scans leave alone but a
+/// file chosen by name may be.
+const OTHER_AUDIO_EXTENSIONS: &[&str] = &[
+    "dsf", "dff", "mpc", "tta", "ac3", "eac3", "dts", "au", "snd", "amr", "mp2", "mpa", "mpga", "m4b", "m4r", "3gp", "w64", "rf64", "spx", "tak", "ofr", "shn", "voc",
+];
+
+/// Whether a file chosen by name (added or dropped on the window) is worth
+/// analysing: an audio extension, or content that starts like an audio
+/// container (a misnamed file). Cover images, text, playlists and the
+/// metadata files macOS leaves next to music (`._name`, `.DS_Store`) are not.
+pub fn looks_like_audio(path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if name.starts_with("._") || name == ".DS_Store" {
+        return false;
+    }
+    if is_audio_path(path) {
+        return true;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if OTHER_AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+        return true;
+    }
+    matches!(sonora_engine::decode::sniff::sniff_file(path), Ok(c) if c != sonora_engine::decode::Container::Unknown)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub path: PathBuf,
@@ -204,6 +229,29 @@ mod tests {
         let mut all = 0;
         walk(&d, WalkOptions { skip_hidden: false, follow_symlinks: false }, &cancel, |_| all += 1);
         assert_eq!(all, 4);
+    }
+
+    #[test]
+    fn files_chosen_by_name_must_look_like_audio() {
+        let d = tmp();
+        let write = |name: &str, bytes: &[u8]| {
+            std::fs::write(d.join(name), bytes).unwrap();
+            d.join(name)
+        };
+        // An audio name is enough; the analysis checks the content later.
+        assert!(looks_like_audio(&write("a.flac", b"x")));
+        assert!(looks_like_audio(&write("b.DSF", b"x")));
+        // A misnamed file is recognized by its content.
+        let mut wav = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        wav.resize(64, 0);
+        assert!(looks_like_audio(&write("c.bin", &wav)));
+        assert!(looks_like_audio(&write("d", b"fLaC\0\0\0\x22")));
+        // Things that sit next to music are not.
+        assert!(!looks_like_audio(&write("cover.jpg", b"\xFF\xD8\xFF\xE0\0\x10JFIF")));
+        assert!(!looks_like_audio(&write("notes.txt", b"tracklist")));
+        assert!(!looks_like_audio(&write("set.m3u8", b"#EXTM3U")));
+        assert!(!looks_like_audio(&write("._a.flac", b"\0\x05\x16\x07")));
+        assert!(!looks_like_audio(&write(".DS_Store", b"\0\0\0\x01Bud1")));
     }
 
     #[cfg(unix)]

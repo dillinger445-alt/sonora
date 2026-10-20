@@ -1048,7 +1048,7 @@ impl Syncer {
         let me = Arc::clone(self);
         let spawned = std::thread::Builder::new().name("sonora-usb".into()).spawn(move || {
             let report = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&plan, &events, &tools, &me.cancel, &app_version))).unwrap_or_else(|_| {
-                obj! { "error" => "Sending stopped because of an internal error. Details are in the log.", "root" => plan.root.to_string_lossy().to_string() }
+                failed_report(&plan.root, "Sending stopped because of an internal error. Details are in the log.".into())
             });
             if let Ok(mut l) = me.last.lock() {
                 *l = Some(report.clone());
@@ -1167,7 +1167,7 @@ fn run(plan: &SyncPlan, events: &EventBus, tools: &ToolPaths, cancel: &AtomicBoo
         }
     };
     if let Err(e) = std::fs::create_dir_all(root.join(SYNC_DIR)) {
-        return obj! { "error" => format!("{} cannot be written to: {e}", root.display()), "root" => root.to_string_lossy().to_string() };
+        return failed_report(root, format!("{} cannot be written to: {e}", root.display()));
     }
     progress(0, 0.0, "", "preparing", true);
 
@@ -1416,6 +1416,22 @@ fn run(plan: &SyncPlan, events: &EventBus, tools: &ToolPaths, cancel: &AtomicBoo
         "warnings" => warnings,
         "cancelled" => cancelled,
         "elapsedMs" => started.elapsed().as_millis() as i64,
+    }
+}
+
+/// The report of a send that stopped before writing anything: the same
+/// fields as a finished one, with `error`.
+fn failed_report(root: &Path, message: String) -> Value {
+    obj! {
+        "root" => root.to_string_lossy().to_string(),
+        "folder" => root.join(SYNC_DIR).to_string_lossy().to_string(),
+        "playlists" => 0, "written" => 0, "renamed" => 0, "kept" => 0, "removed" => 0, "bytes" => 0,
+        "failed" => Value::Array(Vec::new()),
+        "m3u" => 0, "crates" => 0, "rekordboxXml" => Value::Null,
+        "warnings" => Value::Array(Vec::new()),
+        "cancelled" => false,
+        "elapsedMs" => 0,
+        "error" => message,
     }
 }
 

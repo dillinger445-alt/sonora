@@ -36,6 +36,7 @@ import type {
   Sort,
   TrackDetail,
   TrackRow,
+  TrashResult,
   UsbOptions,
   UsbPlan,
   UsbReport,
@@ -94,7 +95,10 @@ export class Client {
   rescan = (ids: number[]) => this.call<QueueResult>('tracks.rescan', { ids });
   retryFailed = (ids?: number[]) => this.call<QueueResult>('tracks.retryFailed', ids ? { ids } : {});
   analyzePending = () => this.call<QueueResult>('tracks.analyzePending');
-  remove = (ids: number[]) => this.call<{ removed: number }>('tracks.remove', { ids });
+  /** Removes tracks from the library (never the files); tracks being analyzed right now stay (`busy`). */
+  remove = (ids: number[]) => this.call<{ removed: number; busy: number }>('tracks.remove', { ids });
+  /** Moves the files to the system's Trash, then removes their tracks. */
+  trash = (ids: number[]) => this.call<TrashResult>('tracks.trash', { ids });
   revealTrack = (id: number) => this.call<{ ok: boolean }>('tracks.reveal', { id });
   editDj = (ids: number[], edit: DjEdit) => this.call<{ updated: number }>('tracks.editDj', { ids, ...edit });
   analyzeDj = () => this.call<QueueResult>('tracks.analyzeDj');
@@ -126,6 +130,8 @@ export class Client {
   organize = (by: OrganizeBy, opts: { smart?: boolean; trackIds?: number[]; keyNotation?: KeyNotation } = {}) =>
     this.call<OrganizeResult>('playlists.organize', { by, ...opts });
   playlistsContaining = (trackId: number) => this.call<{ ids: number[] }>('playlists.containing', { trackId });
+  /** Playlists holding any of these tracks. */
+  playlistsContainingAny = (trackIds: number[]) => this.call<{ ids: number[] }>('playlists.containing', { trackIds });
 
   // USB
   drives = () => this.call<{ drives: Drive[] }>('usb.drives');
@@ -145,6 +151,8 @@ export class Client {
   folders = () => this.call<Folder[]>('folders.list');
   rescanFolders = (ids?: number[]) => this.call<{ accepted: boolean }>('folders.rescan', ids ? { ids } : {});
   removeFolder = (id: number, removeTracks: boolean) => this.call<{ removedTracks: number }>('folders.remove', { id, removeTracks });
+  /** Lets rescans add the folder's files that were removed from the library, and rescans it. */
+  bringBack = (id: number) => this.call<{ count: number }>('folders.bringBack', { id });
 
   // Scans
   scanStatus = () => this.call<ScanStatus>('scan.status');
@@ -167,5 +175,6 @@ export class Client {
     this.call<{ path?: string; csv?: string; rows: number }>('export.csv', path ? { ...target, path } : target);
   cacheStats = () => this.call<CacheStats>('cache.stats');
   clearVisuals = () => this.call<{ cleared: number }>('cache.clearVisuals');
-  backup = (path: string) => this.call<{ path: string }>('db.backup', { path });
+  /** `replace`: the path came from a save dialog that already asked about replacing a file there. */
+  backup = (path: string, replace = false) => this.call<{ path: string }>('db.backup', { path, replace });
 }

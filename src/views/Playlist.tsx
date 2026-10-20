@@ -25,12 +25,14 @@ import {
 } from 'react-icons/lu';
 import type { KeyNotation, PlaylistNode, TrackRow } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
+import { ContextMenu, type ContextMenuRequest } from '../components/ContextMenu.tsx';
 import { Checkbox } from '../components/Controls.tsx';
 import { BpmText, KeyBadge } from '../components/DjMarks.tsx';
 import { EmptyState, ErrorState, ViewHeader } from '../components/Layout.tsx';
 import { ScoreCell, StatusMark } from '../components/Marks.tsx';
-import { Menu, type MenuItem } from '../components/Menu.tsx';
+import { Menu, type MenuAction, type MenuItem, type MenuSeparator } from '../components/Menu.tsx';
 import { SetTimeline } from '../components/SetTimeline.tsx';
+import { focusIsLost } from '../lib/focus.ts';
 import { formatCount, formatDuration, formatSpan, plural } from '../lib/format.ts';
 import { formatBpm, formatKey } from '../lib/keys.ts';
 import { formatChange, MATCH_LABEL, mixStats, transition } from '../lib/mixing.ts';
@@ -44,6 +46,7 @@ import { useTrackActions } from '../state/trackActions.tsx';
 import { useResource } from '../state/useResource.ts';
 import { ArrangeDialog } from './ArrangeDialog.tsx';
 import { Inspector } from './Inspector.tsx';
+import { trackMenuItems } from './trackMenu.ts';
 
 const ROW = 32;
 const OVERSCAN = 10;
@@ -118,9 +121,11 @@ interface TableProps {
   onRemove: (ids: number[]) => void;
   onAddAt: (ids: number[], index: number) => void;
   scrollTo: { id: number; n: number } | null;
+  /** The menu a row opens on right-click or Shift+F10, for `ids` (the selection it is in, or the row). */
+  rowMenu: (ids: number[], row: TrackRow) => (MenuAction | MenuSeparator)[];
 }
 
-function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selection, onSelection, onActive, active, onReorder, onRemove, onAddAt, scrollTo }: TableProps) {
+function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selection, onSelection, onActive, active, onReorder, onRemove, onAddAt, scrollTo, rowMenu }: TableProps) {
   const player = usePlayer();
   const begin = useDragStart();
   const drag = useDragState();
@@ -130,6 +135,8 @@ function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selectio
   const [height, setHeight] = useState(500);
   const [width, setWidth] = useState(1000);
   const anchor = useRef<number | null>(null);
+  const [menu, setMenu] = useState<ContextMenuRequest | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   useLayoutEffect(() => {
     const el = bodyRef.current;
@@ -207,6 +214,20 @@ function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selectio
     scrollIntoView(Math.max(0, Math.min(rows.length - 1, activeIndex + delta)));
   };
 
+  /** A row outside the selection is selected first; one inside a selection of several acts for all of them. */
+  const openRowMenu = (i: number, r: TrackRow, x: number, y: number, keyboard: boolean) => {
+    const ids = selection.has(r.id) && selection.size > 1 ? rows.filter((x) => selection.has(x.id)).map((x) => x.id) : [r.id];
+    if (ids.length === 1) select(i, { shiftKey: false, metaKey: false, ctrlKey: false });
+    setMenu({
+      x,
+      y,
+      keyboard,
+      label: ids.length === 1 ? `Actions for ${r.displayTitle}` : `Actions for ${plural(ids.length, 'track')}`,
+      items: rowMenu(ids, r),
+      restoreFocus: gridRef.current,
+    });
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     const mod = e.metaKey || e.ctrlKey;
@@ -281,6 +302,15 @@ function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selectio
           onRemove(selection.size ? [...selection] : active ? [active.id] : []);
         }
         break;
+      case 'ContextMenu':
+      case 'F10': {
+        // The Menu key, or Shift+F10: the active row's menu, under the row.
+        if ((e.key === 'F10' && !e.shiftKey) || !active || activeIndex < 0) break;
+        e.preventDefault();
+        const box = document.getElementById(`${gridId}-r${activeIndex}`)?.getBoundingClientRect() ?? gridRef.current?.getBoundingClientRect();
+        if (box) openRowMenu(activeIndex, active, box.left + 48, box.top + Math.min(box.height, ROW), true);
+        break;
+      }
       default:
         break;
     }
@@ -349,6 +379,12 @@ function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selectio
           select(i, e);
         }}
         onDoubleClick={() => (r.status === 'done' ? navigate({ view: 'track', id: r.id }) : undefined)}
+        onContextMenu={(e) => {
+          // Our menu, not the web view's own (Back, Reload).
+          e.preventDefault();
+          gridRef.current?.focus({ preventScroll: true });
+          openRowMenu(i, r, e.clientX, e.clientY, false);
+        }}
         onPointerDown={(e) => startDrag(e, r)}
       >
         <div role="gridcell" className="tcell tcell-check" onClick={(e) => e.stopPropagation()}>
@@ -416,47 +452,50 @@ function PlaylistTable({ gridRef, playlistId, rows, editable, notation, selectio
   const activeElementId = activeIndex >= first && activeIndex <= last ? `${gridId}-r${activeIndex}` : undefined;
 
   return (
-    <div
-      ref={gridRef}
-      className="ttable pt"
-      role="grid"
-      aria-label="Tracks in the playlist"
-      aria-rowcount={rows.length + 1}
-      aria-multiselectable
-      tabIndex={0}
-      aria-activedescendant={activeElementId}
-      onKeyDown={onKeyDown}
-      onFocus={(e) => {
-        if (e.target === e.currentTarget && !active && rows[0] && e.currentTarget.matches(':focus-visible')) onActive(rows[0]);
-      }}
-    >
-      <div className="thead" role="rowgroup">
-        <div className="trow trow-head" role="row" aria-rowindex={1} style={{ gridTemplateColumns: template }}>
-          <div role="columnheader" className="tcell tcell-check">
-            <Checkbox
-              checked={allSelected}
-              indeterminate={selection.size > 0 && !allSelected}
-              aria-label={allSelected ? 'Clear selection' : 'Select all tracks'}
-              disabled={!rows.length}
-              onChange={() => onSelection(allSelected || selection.size ? new Set() : new Set(rows.map((r) => r.id)))}
-            />
-          </div>
-          {cols.map((c) => (
-            <div key={c.id} role="columnheader" className={`tcell th ${c.end ? 'is-end' : ''}`}>
-              <span className="th-static" data-tip={c.id === 'mix' ? 'How this track mixes in from the one before: the keys on the Camelot wheel and the tempo change' : undefined}>
-                {c.label}
-              </span>
+    <>
+      <div
+        ref={gridRef}
+        className="ttable pt"
+        role="grid"
+        aria-label="Tracks in the playlist"
+        aria-rowcount={rows.length + 1}
+        aria-multiselectable
+        tabIndex={0}
+        aria-activedescendant={activeElementId}
+        onKeyDown={onKeyDown}
+        onFocus={(e) => {
+          if (e.target === e.currentTarget && !active && rows[0] && e.currentTarget.matches(':focus-visible')) onActive(rows[0]);
+        }}
+      >
+        <div className="thead" role="rowgroup">
+          <div className="trow trow-head" role="row" aria-rowindex={1} style={{ gridTemplateColumns: template }}>
+            <div role="columnheader" className="tcell tcell-check">
+              <Checkbox
+                checked={allSelected}
+                indeterminate={selection.size > 0 && !allSelected}
+                aria-label={allSelected ? 'Clear selection' : 'Select all tracks'}
+                disabled={!rows.length}
+                onChange={() => onSelection(allSelected || selection.size ? new Set() : new Set(rows.map((r) => r.id)))}
+              />
             </div>
-          ))}
+            {cols.map((c) => (
+              <div key={c.id} role="columnheader" className={`tcell th ${c.end ? 'is-end' : ''}`}>
+                <span className="th-static" data-tip={c.id === 'mix' ? 'How this track mixes in from the one before: the keys on the Camelot wheel and the tempo change' : undefined}>
+                  {c.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div ref={bodyRef} className="tbody" role="rowgroup" data-drop={dropId} data-autoscroll onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
+          <div className="tbody-inner" style={{ height: Math.max(rows.length * ROW, 1) }}>
+            {items}
+            {hint && hint.index != null ? <div className="pt-insert" style={{ top: hint.index * ROW - 1 }} aria-hidden /> : null}
+          </div>
         </div>
       </div>
-      <div ref={bodyRef} className="tbody" role="rowgroup" data-drop={dropId} data-autoscroll onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
-        <div className="tbody-inner" style={{ height: Math.max(rows.length * ROW, 1) }}>
-          {items}
-          {hint && hint.index != null ? <div className="pt-insert" style={{ top: hint.index * ROW - 1 }} aria-hidden /> : null}
-        </div>
-      </div>
-    </div>
+      <ContextMenu request={menu} onClose={closeMenu} />
+    </>
   );
 }
 
@@ -527,17 +566,18 @@ export function PlaylistView({ id }: { id: number }) {
 }
 
 function TracksView({ node }: { node: PlaylistNode }) {
-  const { client, settings } = useCore();
+  const { client, settings, bridge } = useCore();
   const pl = usePlaylists();
   const toast = useToast();
   const actions = useTrackActions();
+  const player = usePlayer();
   const editable = node.kind === 'playlist';
   const notation = settings?.keyNotation ?? 'camelot';
   const data = useResource(() => client.playlistTracks(node.id), [node.id], { events: ['playlists.changed', 'library.changed', 'scan.finished'], throttleMs: 500 });
   // The order shown right after a change, until the core's answer arrives.
   const [pending, setPending] = useState<number[] | null>(null);
   const [selection, setSelection] = useState<Set<number>>(new Set());
-  const [active, setActive] = useState<TrackRow | null>(null);
+  const [activeAt, setActive] = useState<TrackRow | null>(null);
   const [arranging, setArranging] = useState(false);
   const [scrollTo, setScrollTo] = useState<{ id: number; n: number } | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -547,8 +587,7 @@ function TracksView({ node }: { node: PlaylistNode }) {
   // panel goes: the keyboard goes back to the tracks.
   const focusGrid = useCallback(() => {
     requestAnimationFrame(() => {
-      const now = document.activeElement;
-      if (now == null || now === document.body) gridRef.current?.focus({ preventScroll: true });
+      if (focusIsLost()) gridRef.current?.focus({ preventScroll: true });
     });
   }, []);
 
@@ -570,6 +609,9 @@ function TracksView({ node }: { node: PlaylistNode }) {
     const out = pending.map((x) => by.get(x)).filter((r): r is TrackRow => r != null);
     return out.length === base.length ? out : base;
   }, [fetched, pending]);
+
+  // The cursor's track as loaded now (after an edit or a new analysis), or none once it leaves the playlist.
+  const active = useMemo(() => (activeAt ? (rows.find((r) => r.id === activeAt.id) ?? null) : null), [activeAt, rows]);
 
   const reorder = useCallback(
     (order: number[]) => {
@@ -594,6 +636,38 @@ function TracksView({ node }: { node: PlaylistNode }) {
       void pl.removeTracks(node.id, ids, before);
     },
     [rows, pl, node.id, focusGrid],
+  );
+
+  /** Removing tracks from the library (or their files to the Trash): the panel and selection go with them. */
+  const removeFromLibrary = useCallback(
+    async (how: 'remove' | 'trash', ids: number[], what?: string) => {
+      const ok = await (how === 'trash' ? actions.trash : actions.remove)(ids, what);
+      if (ok) {
+        setSelection(new Set());
+        setActive(null);
+        focusGrid();
+      }
+    },
+    [actions, focusGrid],
+  );
+
+  const playingId = player.track?.id ?? null;
+  const playingNow = player.status === 'playing' || player.status === 'loading';
+  const togglePlay = player.toggle;
+  const rowMenu = useCallback(
+    (ids: number[], row: TrackRow) =>
+      trackMenuItems({
+        ids,
+        row,
+        actions,
+        platform: bridge.platform,
+        playing: playingId === row.id && playingNow,
+        onPlay: () => togglePlay(row),
+        onRemove: (x, what) => void removeFromLibrary('remove', x, what),
+        onTrash: (x, what) => void removeFromLibrary('trash', x, what),
+        takeOut: editable ? { name: node.name, run: remove } : undefined,
+      }),
+    [actions, bridge.platform, playingId, playingNow, togglePlay, removeFromLibrary, editable, node.name, remove],
   );
 
   const stats = useMemo(() => mixStats(rows), [rows]);
@@ -666,6 +740,7 @@ function TracksView({ node }: { node: PlaylistNode }) {
             onRemove={remove}
             onAddAt={(ids, index) => void pl.addTracks(node.id, ids, index)}
             scrollTo={scrollTo}
+            rowMenu={rowMenu}
           />
         </div>
         {showInspector ? (
@@ -674,14 +749,8 @@ function TracksView({ node }: { node: PlaylistNode }) {
             selectionCount={selection.size}
             selectedIds={[...selection]}
             actions={actions}
-            onRemove={async (ids) => {
-              const ok = await actions.remove(ids);
-              if (ok) {
-                setSelection(new Set());
-                setActive(null);
-                focusGrid();
-              }
-            }}
+            onRemove={(ids, what) => removeFromLibrary('remove', ids, what)}
+            onTrash={(ids, what) => removeFromLibrary('trash', ids, what)}
             onClearSelection={() => setSelection(new Set())}
             playlist={editable ? { id: node.id, name: node.name, remove } : undefined}
           />

@@ -23,6 +23,8 @@ export interface CoreContextValue {
   /** Set when the core cannot be reached at all. */
   fatal: string | null;
   refreshOverview: () => void;
+  /** Asks the core for the scan status again (after a control found the scan in another state). */
+  refreshScan: () => void;
   refreshInfo: () => Promise<void>;
   saveSettings: (values: Partial<Settings>) => Promise<Settings>;
   retry: () => void;
@@ -102,6 +104,10 @@ export function CoreProvider({ bridge, children }: { bridge: Bridge; children: R
 
   const refreshInfo = useCallback(async () => {
     setInfo(await client.info());
+  }, [client]);
+
+  const refreshScan = useCallback(() => {
+    client.scanStatus().then(setScan, (e: unknown) => console.warn('scan status failed', e));
   }, [client]);
 
   // Initial load, and again after "Try again".
@@ -208,11 +214,12 @@ export function CoreProvider({ bridge, children }: { bridge: Bridge; children: R
       duplicateGroups,
       fatal,
       refreshOverview: loadOverview,
+      refreshScan,
       refreshInfo,
       saveSettings,
       retry: () => setAttempt((a) => a + 1),
     }),
-    [bridge, client, events, info, settings, lastIndexReport, overview, duplicateGroups, fatal, loadOverview, refreshInfo, saveSettings],
+    [bridge, client, events, info, settings, lastIndexReport, overview, duplicateGroups, fatal, loadOverview, refreshScan, refreshInfo, saveSettings],
   );
   const scanState = useMemo<ScanState>(() => ({ scan, lastFinished }), [scan, lastFinished]);
 

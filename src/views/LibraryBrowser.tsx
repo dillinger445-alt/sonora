@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LuAudioLines, LuChevronDown, LuDownload, LuListFilter, LuPanelRightClose, LuPanelRightOpen, LuPencil, LuRefreshCw, LuTrash2, LuUsb, LuX } from 'react-icons/lu';
+import { LuAudioLines, LuChevronDown, LuDownload, LuListFilter, LuListX, LuPanelRightClose, LuPanelRightOpen, LuPencil, LuRefreshCw, LuTrash2, LuUsb, LuX } from 'react-icons/lu';
 import type { LibraryFilter, ScoreKind, Sort, SortKey, TrackRow } from '../api/types.ts';
 import { AddToPlaylist } from '../components/AddToPlaylist.tsx';
 import { Button, IconButton } from '../components/Button.tsx';
@@ -25,6 +25,7 @@ import { describeQueued, useTrackActions } from '../state/trackActions.tsx';
 import { useToast } from '../state/toasts.tsx';
 import { useResource } from '../state/useResource.ts';
 import { Inspector } from './Inspector.tsx';
+import { trackMenuItems } from './trackMenu.ts';
 
 const SCORE_RANGES: { id: string; label: string; min?: number; max?: number }[] = [
   { id: 'excellent', label: 'Excellent (90–100)', min: 90 },
@@ -184,6 +185,35 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
       tableRef.current?.focus();
     },
     [actions],
+  );
+
+  const trashTracks = useCallback(
+    async (ids: number[], what?: string) => {
+      const ok = await actions.trash(ids, what);
+      if (!ok) return;
+      setSelection(new Set());
+      tableRef.current?.removed(ids);
+      tableRef.current?.focus();
+    },
+    [actions],
+  );
+
+  const playingId = player.track?.id ?? null;
+  const playingNow = player.status === 'playing' || player.status === 'loading';
+  const togglePlay = player.toggle;
+  const rowMenu = useCallback(
+    (ids: number[], row: TrackRow) =>
+      trackMenuItems({
+        ids,
+        row,
+        actions,
+        platform: bridge.platform,
+        playing: playingId === row.id && playingNow,
+        onPlay: () => togglePlay(row),
+        onRemove: (x, what) => void removeTracks(x, what),
+        onTrash: (x, what) => void trashTracks(x, what),
+      }),
+    [actions, bridge.platform, playingId, playingNow, togglePlay, removeTracks, trashTracks],
   );
 
   // ⌘/Ctrl+F focuses search.
@@ -385,6 +415,8 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
             onActive={setActive}
             onOpen={(r) => (r.status === 'done' ? navigate({ view: 'track', id: r.id }) : setActive(r))}
             onDelete={(ids, what) => void removeTracks(ids, what)}
+            onTrash={(ids, what) => void trashTracks(ids, what)}
+            rowMenu={rowMenu}
             handle={tableRef}
             onTotal={setTotal}
             empty={
@@ -414,8 +446,11 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
               <Button size="sm" icon={LuRefreshCw} onClick={() => void actions.reanalyze(selectedIds)}>
                 Re-analyze
               </Button>
-              <Button size="sm" icon={LuTrash2} variant="ghost" className="is-danger-text" onClick={() => void removeTracks(selectedIds)}>
+              <Button size="sm" icon={LuListX} variant="ghost" className="is-danger-text" onClick={() => void removeTracks(selectedIds)}>
                 Remove from library
+              </Button>
+              <Button size="sm" icon={LuTrash2} variant="ghost" className="is-danger-text" onClick={() => void trashTracks(selectedIds)}>
+                Move to {actions.trashName}…
               </Button>
               <Button size="sm" variant="ghost" onClick={clearSelection}>
                 Clear selection
@@ -424,7 +459,15 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
           ) : null}
         </div>
         {showInspector ? (
-          <Inspector row={active} selectionCount={selection.size} selectedIds={selectedIds} actions={actions} onRemove={removeTracks} onClearSelection={clearSelection} />
+          <Inspector
+            row={active}
+            selectionCount={selection.size}
+            selectedIds={selectedIds}
+            actions={actions}
+            onRemove={removeTracks}
+            onTrash={trashTracks}
+            onClearSelection={clearSelection}
+          />
         ) : null}
       </div>
       {actions.dialogs}

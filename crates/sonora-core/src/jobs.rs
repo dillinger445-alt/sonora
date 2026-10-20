@@ -54,6 +54,36 @@ impl Phase {
     }
 }
 
+/// What removing tracks from the library did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Removed {
+    pub removed: u64,
+    /// Tracks left in place because they are being analysed right now.
+    pub busy: usize,
+}
+
+/// What moving tracks to the Trash did.
+#[derive(Clone, Debug, Default)]
+pub struct Trashed {
+    /// Files moved to the Trash.
+    pub trashed: u64,
+    /// Tracks removed from the library: those whose files went, and those
+    /// whose files were missing already.
+    pub removed: u64,
+    /// Tracks whose files stayed: (id, title, reason).
+    pub failed: Vec<(i64, String, String)>,
+    /// Tracks left alone because they are being analysed right now.
+    pub busy: usize,
+}
+
+/// The ids not being analysed right now, and how many are.
+fn split_busy(st: &RunState, ids: &[i64]) -> (Vec<i64>, usize) {
+    let analysing: std::collections::HashSet<i64> = st.slots.iter().flatten().map(|s| s.track_id).collect();
+    let free: Vec<i64> = ids.iter().copied().filter(|id| !analysing.contains(id)).collect();
+    let busy = ids.len() - free.len();
+    (free, busy)
+}
+
 #[derive(Clone, Debug)]
 struct Slot {
     track_id: i64,
@@ -251,14 +281,19 @@ impl ScanManager {
                 // straight from "indexing" to "running" without an idle gap.
                 match &result {
                     Ok(report) => {
-                        shared.events.emit("library.indexed", &report_json(report, cancelled));
-                        shared.events.emit("library.changed", &obj! { "reason" => "indexed" });
-                        if !cancelled {
+                        // Queued before the report goes out, so the report can say
+                        // when the files only wait (a cancelled scan was still stopping).
+                        let refused = !cancelled && {
                             let q = enqueue(&shared, &kind, &report.queue, &report.roots, (report.unchanged + report.relinked) as i64);
                             if q.refused {
                                 crate::logging::log("warn", "jobs", "indexed files were not queued because a cancelled scan was still stopping; they wait for analysis");
                             }
-                        }
+                            q.refused
+                        };
+                        let mut v = report_json(report, cancelled);
+                        v.set("waiting", refused);
+                        shared.events.emit("library.indexed", &v);
+                        shared.events.emit("library.changed", &obj! { "reason" => "indexed" });
                     }
                     Err(e) => {
                         log_error(&format!("indexing failed: {e}"));
@@ -287,50 +322,122 @@ impl ScanManager {
     }
 
     /// Removes a library folder from the library, with its tracks when
-    /// `with_tracks`. Removing tracks is refused (`None`) while indexing or
-    /// analysis runs, checked under the state lock so no session can start
-    /// meanwhile. Files on disk are never touched.
+    /// `with_tracks` (taken out of a running scan's queue too). Removing the
+    /// tracks is refused (`None`) while folders are being indexed or one of
+    /// its tracks is being analysed right now, checked under the state lock
+    /// so neither can start meanwhile. Files on disk are never touched.
     pub fn remove_folder(&self, id: i64, with_tracks: bool) -> Result<Option<u64>, StoreError> {
-        let st = lock(&self.shared.state);
-        if with_tracks && st.phase != Phase::Idle {
-            return Ok(None);
+        let mut st = lock(&self.shared.state);
+        let mut n = 0;
+        if with_tracks {
+            if st.phase == Phase::Indexing || st.pending_index_jobs > 0 {
+                return Ok(None);
+            }
+            let ids = self.shared.db.read().query("SELECT id FROM tracks WHERE folder_id = ?", params![id], |r| r.i64(0))?;
+            let (free, busy) = split_busy(&st, &ids);
+            if busy > 0 {
+                return Ok(None);
+            }
+            // The folder goes, so there is nothing for its rescans to leave out.
+            n = self.remove_locked(&mut st, &free, false)?;
         }
-        let n = library::remove_folder(&self.shared.db.write(), id, with_tracks)?;
+        library::remove_folder(&self.shared.db.write(), id, false)?;
         drop(st);
         Ok(Some(n))
     }
 
     /// Removes tracks from the library (index entries only; files on disk
-    /// are never touched). Queued items of removed tracks leave the running
-    /// session's total, so its progress still ends at 100 %. Returns `None`,
-    /// removing nothing, when one of the tracks is being analysed right now.
-    pub fn remove_tracks(&self, ids: &[i64]) -> Result<Option<u64>, StoreError> {
+    /// are never touched), and rescans of their folders leave the files out
+    /// from then on. Queued items of removed tracks leave the running
+    /// session's total, so its progress still ends at 100 %. Tracks being
+    /// analysed right now stay; the result counts them as `busy`.
+    pub fn remove_tracks(&self, ids: &[i64]) -> Result<Removed, StoreError> {
         // Holding the state lock keeps workers from claiming items meanwhile.
         let mut st = lock(&self.shared.state);
-        if st.slots.iter().flatten().any(|s| ids.contains(&s.track_id)) {
-            return Ok(None);
+        let (free, busy) = split_busy(&st, ids);
+        let removed = self.remove_locked(&mut st, &free, true)?;
+        Ok(Removed { removed, busy })
+    }
+
+    /// Moves the tracks' files to the system's Trash, then removes from the
+    /// library the tracks whose files went there (or were missing already).
+    /// A file that cannot go to the Trash stays where it is, and its track
+    /// stays in the library; so do tracks being analysed right now (`busy`).
+    pub fn trash_tracks(&self, ids: &[i64]) -> Result<Trashed, StoreError> {
+        // Under the state lock: leave out tracks being analysed, and take the
+        // others out of the scan's queue so no worker starts on a file that
+        // is about to go.
+        let (rows, busy) = {
+            let mut st = lock(&self.shared.state);
+            let (free, busy) = split_busy(&st, ids);
+            self.dequeue_locked(&mut st, &free)?;
+            (library::get_tracks(&self.shared.db.read(), &free)?, busy)
+        };
+        // Moving can take a while (a USB stick, a network share): without the
+        // lock, so analysis and status calls carry on meanwhile.
+        let mut out = Trashed { busy, ..Trashed::default() };
+        let mut gone = Vec::new();
+        for r in &rows {
+            let p = Path::new(&r.path);
+            if std::fs::symlink_metadata(p).is_err() {
+                gone.push(r.id);
+                continue;
+            }
+            match crate::trash::move_to_trash(p) {
+                Ok(()) => {
+                    out.trashed += 1;
+                    gone.push(r.id);
+                }
+                Err(e) => out.failed.push((r.id, r.display_title(), e)),
+            }
+        }
+        let mut st = lock(&self.shared.state);
+        // A track queued again and started meanwhile keeps its row until its
+        // analysis ends (it will find the file gone); say so.
+        let (free, late) = split_busy(&st, &gone);
+        if late > 0 {
+            for r in rows.iter().filter(|r| gone.contains(&r.id) && !free.contains(&r.id)) {
+                out.failed.push((r.id, r.display_title(), "its file is in the Trash, but the track was being analyzed: remove it from the library once that ends".into()));
+            }
+        }
+        // The files are in the Trash: one put back is welcome again.
+        out.removed = self.remove_locked(&mut st, &free, false)?;
+        Ok(out)
+    }
+
+    /// Takes tracks out of the running scan's queue (not ones being
+    /// analysed); returns how many were waiting in it.
+    fn dequeue_locked(&self, st: &mut RunState, ids: &[i64]) -> Result<i64, StoreError> {
+        let Some(scan_id) = st.scan_id else { return Ok(0) };
+        if ids.is_empty() {
+            return Ok(0);
         }
         let c = self.shared.db.write();
         let mut dequeued = 0i64;
-        if let Some(scan_id) = st.scan_id {
-            for chunk in ids.chunks(500) {
-                let marks = vec!["?"; chunk.len()].join(",");
-                let mut p = vec![SqlValue::Int(scan_id)];
-                p.extend(chunk.iter().map(|&i| SqlValue::Int(i)));
-                let sql = format!("SELECT COUNT(*) FROM scan_items WHERE scan_id = ? AND outcome = 'queued' AND track_id IN ({marks})");
-                dequeued += c.query_row(&sql, &library::as_params(&p), |r| r.i64(0))?.unwrap_or(0);
-            }
+        for chunk in ids.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut p = vec![SqlValue::Int(scan_id)];
+            p.extend(chunk.iter().map(|&i| SqlValue::Int(i)));
+            let sql = format!("DELETE FROM scan_items WHERE scan_id = ? AND outcome = 'queued' AND track_id IN ({marks})");
+            dequeued += c.execute(&sql, &library::as_params(&p))? as i64;
         }
-        let n = library::remove_tracks(&c, ids)?;
-        if let (Some(scan_id), true) = (st.scan_id, dequeued > 0) {
+        if dequeued > 0 {
             c.execute("UPDATE scans SET total = MAX(0, total - ?) WHERE id = ?", params![dequeued, scan_id])?;
             st.total = (st.total - dequeued).max(0);
         }
         drop(c);
         if dequeued > 0 {
-            emit_progress(&self.shared, &mut st, true);
+            emit_progress(&self.shared, st, true);
         }
-        Ok(Some(n))
+        Ok(dequeued)
+    }
+
+    fn remove_locked(&self, st: &mut RunState, ids: &[i64], remember: bool) -> Result<u64, StoreError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        self.dequeue_locked(st, ids)?;
+        library::remove_tracks(&self.shared.db.write(), ids, remember)
     }
 
     pub fn pause(&self) -> bool {

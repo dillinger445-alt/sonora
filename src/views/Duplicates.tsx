@@ -5,7 +5,7 @@
  */
 
 import { Fragment, useId, useMemo, useState } from 'react';
-import { LuCopy, LuExternalLink, LuFingerprint, LuFolderSearch, LuPause, LuPlay, LuTrash2 } from 'react-icons/lu';
+import { LuCopy, LuExternalLink, LuFingerprint, LuFolderSearch, LuListX, LuPause, LuPlay, LuTrash2 } from 'react-icons/lu';
 import type { DuplicateGroup, DuplicateKind, DuplicateMember } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
 import { ProgressBar, TabList, tabId } from '../components/Controls.tsx';
@@ -203,7 +203,15 @@ function GroupBlock({ g, actions }: { g: DuplicateGroup; actions: ReturnType<typ
                 />
                 <IconButton size="sm" label="Open analysis" icon={LuExternalLink} onClick={() => navigate({ view: 'track', id: m.id })} disabled={m.status !== 'done'} />
                 <IconButton size="sm" label={actions.revealText} icon={LuFolderSearch} onClick={() => void actions.reveal(m.path)} disabled={m.missing} />
-                <IconButton size="sm" label="Remove from library (the file stays on disk)" icon={LuTrash2} tone="danger" onClick={() => void actions.remove([m.id], `“${m.displayTitle}”`).then((ok) => ok && focusMain())} />
+                <IconButton size="sm" label="Remove from library (the file stays on disk)" icon={LuListX} tone="danger" onClick={() => void actions.remove([m.id], `“${m.displayTitle}”`).then((ok) => ok && focusMain())} />
+                <IconButton
+                  size="sm"
+                  label={`Move this copy's file to the ${actions.trashName}`}
+                  icon={LuTrash2}
+                  tone="danger"
+                  disabled={m.missing}
+                  onClick={() => void actions.trash([m.id], `“${m.displayTitle}” (${m.path})`).then((ok) => ok && focusMain())}
+                />
               </td>
             </tr>
           ))}
@@ -223,8 +231,13 @@ export function DuplicatesView() {
   const data = useResource(() => client.duplicates(), [], { events: ['duplicates.updated', 'library.changed', 'scan.finished'], throttleMs: 2000 });
 
   useCoreEvent(['duplicates.progress', 'duplicates.updated'], (name, payload) => {
-    if (name === 'duplicates.progress') setProgress((payload as { progress: number }).progress);
-    else setProgress(null);
+    if (name === 'duplicates.progress') {
+      setProgress((payload as { progress: number }).progress);
+      return;
+    }
+    setProgress(null);
+    const error = (payload as { error?: string } | null)?.error;
+    if (error) toast({ tone: 'error', title: 'The comparison did not finish', body: error });
   });
 
   const d = data.data;

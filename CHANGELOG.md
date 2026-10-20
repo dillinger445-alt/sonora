@@ -4,6 +4,70 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.2.1
+
+### New
+
+- **Move to Trash**: for files you no longer want. In the details panel,
+  the selection bar and a track's page (or **⌘⌫** on a Mac), it moves the
+  audio file to the Trash (the Recycle Bin on Windows) and takes its track
+  out of the library. It asks first, and you can put the file back from the
+  Trash.
+- **Bring back** in Folders returns the tracks you removed from a folder.
+- **A menu for every track**: right-click a track in the library or in a
+  playlist (or press Shift+F10) to play it, open its analysis, show it in
+  Finder or File Explorer, edit it, take it out of the playlist, remove it
+  from the library or move its file to the Trash. With several tracks
+  selected, the menu acts on all of them.
+- On a track's page, the delete key removes that track (after asking).
+
+### Fixed
+
+- On a Mac, the delete key removes tracks and nothing else. Outside a text
+  field, the system's web engine could treat it as Back and change the
+  screen instead.
+- **Removing tracks from the library now lasts.** Rescanning their folder
+  used to add them again; now they stay out until you add the files again
+  or choose Bring back.
+- Removing tracks while some of them are being analyzed removes the others
+  and tells you which stayed, instead of doing nothing.
+- A failed Send to USB no longer leaves an empty window. If a screen runs
+  into a problem, it says so and offers to try again, and the rest of the
+  window keeps working.
+- Pause, Resume and Cancel in the Import queue, and stopping an export, a
+  USB send or a Discogs lookup, now say when they could not act instead of
+  appearing to do nothing.
+- **Analyze waiting** and **Retry failed** count only files that are still
+  on disk.
+- Cover images, notes and the `._` files macOS leaves next to music are no
+  longer added as tracks when dropped on the window along with music.
+- Files added while a cancelled scan is still stopping now wait in the
+  queue, and the message says so, instead of announcing an analysis that
+  does not start.
+- Playback stops when the track playing is removed from the library.
+- The details panel of a playlist shows a track's tempo, key and genre
+  right after you edit them.
+- A smart playlist saved from the library shows its real order in **Edit
+  rules**.
+- **Convert to a playlist** and **Reset to detected** ask before they drop
+  rules or corrections.
+- A Discogs token that Discogs refuses is shown as not working, instead of
+  saved.
+- Backing up the library opens a save window for a library file rather than
+  for a CSV file, and can replace an earlier backup you choose there.
+- On a Mac, Enter saves the Edit BPM, key and genre window and the smart
+  playlist rules again, and after a button in a playlist's details panel
+  removes a track, the arrow keys keep moving through the tracks.
+- Right-clicking no longer shows the window's own Back and Reload menu,
+  which could change the screen or reset the window.
+- On Windows, Move to Recycle Bin leaves files on USB sticks, memory cards
+  and network drives where they are and says so: those drives have no
+  Recycle Bin, and Windows would delete the files for good.
+- The update window warns when installing would stop a USB send.
+- Comparing similar recordings no longer fails when tracks are removed
+  during the comparison.
+- Tempo and key scans have a name in Analysis history.
+
 ## 0.2.0
 
 ### New

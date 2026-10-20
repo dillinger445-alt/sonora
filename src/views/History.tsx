@@ -26,6 +26,8 @@ export function kindLabel(kind: string): string {
       return 'Waiting files';
     case 'resume':
       return 'Resumed after restart';
+    case 'dj':
+      return 'Tempo and key analysis';
     default:
       return kind;
   }

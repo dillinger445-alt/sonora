@@ -198,10 +198,27 @@ export interface ImportReport {
   folders: number[];
   errors: string[];
   cancelled: boolean;
+  /** Files left out because their tracks were removed from the library. */
+  skippedRemoved?: number;
+  /** Files chosen by name that are not audio (a cover image, a text file), left out. */
+  notAudio?: number;
+  /** The files to analyze were not queued (a cancelled scan was still stopping): they wait. */
+  waiting?: boolean;
 }
 
 export interface Overview {
-  tracks: { total: number; analyzed: number; pending: number; analyzing: number; failed: number; missing: number };
+  tracks: {
+    total: number;
+    analyzed: number;
+    pending: number;
+    analyzing: number;
+    failed: number;
+    missing: number;
+    /** Waiting tracks whose files are on disk: what "Analyze waiting" starts. */
+    pendingPresent: number;
+    /** Failed tracks whose files are on disk: what "Retry failed" retries. */
+    failedPresent: number;
+  };
   folders: number;
   averages: Record<ScoreKind, number | null>;
   totalDuration: number | null;
@@ -300,6 +317,8 @@ export interface Folder {
   failed: number;
   avgOverall: number | null;
   bytes: number;
+  /** Files in it removed from the library, which rescans leave out. */
+  removed: number;
 }
 
 export interface Settings {
@@ -817,7 +836,8 @@ export interface CoreEvents {
   'library.indexed': ImportReport | { error: string };
   'library.changed': { reason: string; count?: number };
   'duplicates.progress': { progress: number };
-  'duplicates.updated': Record<string, never>;
+  /** `error` when the comparison could not be saved or failed. */
+  'duplicates.updated': { error?: string };
   'djexport.progress': ExportProgress;
   'djexport.finished': ExportReport;
   'discogs.progress': { done: number; total: number; found: number; current: string };
@@ -828,3 +848,17 @@ export interface CoreEvents {
 }
 
 export type CoreEventName = keyof CoreEvents;
+
+/** What moving tracks' files to the Trash did (`tracks.trash`). */
+export interface TrashResult {
+  /** Files moved to the Trash. */
+  trashed: number;
+  /** Tracks removed from the library (including those whose files were already gone). */
+  removed: number;
+  /** Tracks whose files stayed where they are, and why. */
+  failed: { id: number; title: string; error: string }[];
+  /** Tracks left alone because they are being analyzed right now. */
+  busy: number;
+  /** "Trash" or "Recycle Bin". */
+  trash: string;
+}

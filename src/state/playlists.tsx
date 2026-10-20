@@ -289,6 +289,21 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
 
   const freeze = useCallback(
     async (id: number) => {
+      const n = byId.get(id);
+      if (!n) return;
+      // The rules are dropped for good: ask first.
+      const { confirmed } = await confirm({
+        title: `Convert “${n.name}” to a playlist?`,
+        body: (
+          <p>
+            It keeps the tracks that match now, in their current order. New tracks no longer join it by themselves, and its rules are not kept. To keep the rules as well,
+            duplicate it first.
+          </p>
+        ),
+        confirmLabel: 'Convert to a playlist',
+        tone: 'primary',
+      });
+      if (!confirmed) return;
       try {
         const r = await client.freezePlaylist(id);
         reload();
@@ -297,7 +312,7 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
         fail('Could not convert', e);
       }
     },
-    [client, reload, toast, fail],
+    [byId, confirm, client, reload, toast, fail],
   );
 
   const pathOf = useCallback(

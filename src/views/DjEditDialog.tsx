@@ -4,7 +4,7 @@
  * (a DJ export writes the values into the exported copies).
  */
 
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { TrackRow } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { Dialog } from '../components/Dialog.tsx';
@@ -39,6 +39,20 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
   const [keyText, setKeyText] = useState('');
   const [genre, setGenre] = useState('');
   const [busy, setBusy] = useState(false);
+  /** Reset asks once more in the footer: it drops every edit at once. */
+  const [askReset, setAskReset] = useState(false);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const resetRef = useRef<HTMLButtonElement>(null);
+  // The question takes the keyboard (the button pressed is gone), and gives it back after "Keep them".
+  const askedOnce = useRef(false);
+  useEffect(() => {
+    if (askReset) {
+      askedOnce.current = true;
+      keepRef.current?.focus();
+    } else if (askedOnce.current) {
+      resetRef.current?.focus();
+    }
+  }, [askReset]);
   const [genres, setGenres] = useState<string[]>([]);
   const listId = useId();
 
@@ -51,6 +65,8 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
     setKeyText(row?.djKey != null ? formatKey(row.djKey, notation) : '');
     setGenre(row?.djGenre ?? '');
     setBusy(false);
+    askedOnce.current = false;
+    setAskReset(false);
     client.facets().then(
       (f) => setGenres(f.genres.map((g) => g.id)),
       () => setGenres([]),
@@ -109,17 +125,38 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
       onClose={onClose}
       width={600}
       footer={
-        <>
-          <Button variant="ghost" className="dj-reset" disabled={busy} onClick={() => void save(true)} data-tip="Removes your edits and Discogs genres: detected values and tags apply again">
-            Reset to detected
-          </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled={!changed || invalid} busy={busy} onClick={() => void save()}>
-            Save
-          </Button>
-        </>
+        askReset ? (
+          <>
+            <p className="dj-reset dj-reset-ask" role="status">
+              Remove your edits and Discogs genres{many ? ` for ${plural(target.ids.length, 'track')}` : ''}? Detected values and tags apply again.
+            </p>
+            <Button ref={keepRef} variant="ghost" disabled={busy} onClick={() => setAskReset(false)}>
+              Keep them
+            </Button>
+            <Button variant="danger" busy={busy} onClick={() => void save(true)}>
+              Reset to detected
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              ref={resetRef}
+              variant="ghost"
+              className="dj-reset"
+              disabled={busy}
+              onClick={() => setAskReset(true)}
+              data-tip="Removes your edits and Discogs genres: detected values and tags apply again"
+            >
+              Reset to detected…
+            </Button>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={!changed || invalid} busy={busy} onClick={() => void save()}>
+              Save
+            </Button>
+          </>
+        )
       }
     >
       <form
@@ -218,8 +255,9 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
             onToggle={(k) => setKeyText(key === k ? '' : formatKey(k, notation))}
           />
         </div>
-        {/* Enter in a field saves. */}
-        <button type="submit" hidden aria-hidden tabIndex={-1} />
+        {/* Enter in a field saves. Rendered (only out of sight): WebKit, the
+            macOS app's engine, submits on Enter only through a rendered button. */}
+        <button type="submit" className="visually-hidden" aria-hidden tabIndex={-1} disabled={!changed || invalid || busy} />
       </form>
     </Dialog>
   );

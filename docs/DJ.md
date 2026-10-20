@@ -156,8 +156,8 @@ dialog for tempo, key and genre:
 
 Corrections are stored in SONORA's library database. **Your audio files are
 never changed**; exports write the corrected values into the copies they
-make. **Reset to detected** removes the corrections (and Discogs genres) of
-the selected tracks.
+make. **Reset to detected…** removes the corrections (and Discogs genres) of
+the selected tracks, after asking once more.
 
 ## Filtering and sorting
 

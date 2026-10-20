@@ -153,7 +153,13 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
   if (!target) return <Dialog open={false} title="" onClose={onClose}>{null}</Dialog>;
 
   const chooseFolder = async () => {
-    const f = await bridge.pickFolder('Choose where to export');
+    let f: string | null = null;
+    try {
+      f = await bridge.pickFolder('Choose where to export');
+    } catch (e) {
+      toast({ tone: 'error', title: 'Could not open the folder dialog', body: e instanceof Error ? e.message : String(e) });
+      return;
+    }
     if (f) {
       setFolder(f);
       writePref('djexport.folder', f);

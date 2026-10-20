@@ -138,9 +138,12 @@ pub fn store_matches(c: &Connection, matches: &[Match]) -> Result<(), StoreError
         tx.execute("DELETE FROM fp_matches", params![])?;
         for m in matches {
             let (a, b) = if m.a < m.b { (m.a, m.b) } else { (m.b, m.a) };
+            // A track removed while the comparison ran is skipped, not a
+            // reason to throw the whole comparison away.
             tx.execute(
-                "INSERT OR REPLACE INTO fp_matches (a, b, kind, ber, offset_secs, matched_secs) VALUES (?, ?, ?, ?, ?, ?)",
-                params![a, b, m.kind, m.cmp.ber, m.cmp.offset_secs(), m.cmp.matched_secs()],
+                "INSERT OR REPLACE INTO fp_matches (a, b, kind, ber, offset_secs, matched_secs) \
+                 SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?) AND EXISTS (SELECT 1 FROM tracks WHERE id = ?)",
+                params![a, b, m.kind, m.cmp.ber, m.cmp.offset_secs(), m.cmp.matched_secs(), a, b],
             )?;
         }
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('duplicates_scanned_at', ?)", params![now_ms().to_string()])?;

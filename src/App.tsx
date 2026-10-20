@@ -2,11 +2,13 @@ import { useEffect } from 'react';
 import { LuServerOff } from 'react-icons/lu';
 import type { Bridge } from './api/bridge.ts';
 import { Button } from './components/Button.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { PlayerBar } from './components/PlayerBar.tsx';
 import { NAV_ORDER, Sidebar } from './components/Sidebar.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { TooltipLayer } from './components/TooltipLayer.tsx';
-import { navigate, useRoute, type Route } from './lib/router.ts';
+import { isTextEntry } from './lib/focus.ts';
+import { formatRoute, navigate, useRoute, type Route } from './lib/router.ts';
 import { CoreProvider, useCore } from './state/core.tsx';
 import { ImportProvider, useImports } from './state/imports.tsx';
 import { DndProvider } from './state/dnd.tsx';
@@ -85,6 +87,9 @@ function Shell() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod || e.altKey) return;
+      // Not while a dialog is open: leaving the screen would close it and
+      // lose what was being set up there.
+      if (document.querySelector('dialog[open]')) return;
       const n = Number(e.key);
       if (Number.isInteger(n) && n >= 1 && n <= 7 && !e.shiftKey) {
         const r = NAV_ORDER[n - 1];
@@ -104,6 +109,34 @@ function Shell() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [imports]);
+
+  // WebKit (the macOS app) goes back to the previous screen on Backspace,
+  // as browsers once did, unless something uses the key. Outside text
+  // fields it belongs to SONORA's own shortcuts (Delete removes tracks).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Backspace' && !isTextEntry(e.target)) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // The desktop web view's own right-click menu offers Back and Reload,
+  // which change the screen or reset the window: it shows only where it
+  // helps, in text fields and on selected text (Copy). Track rows open
+  // SONORA's own menu.
+  const desktop = bridge.kind === 'tauri';
+  useEffect(() => {
+    if (!desktop) return;
+    const onMenu = (e: MouseEvent) => {
+      if (e.defaultPrevented || isTextEntry(e.target)) return;
+      const selected = window.getSelection();
+      if (selected && !selected.isCollapsed && selected.toString().trim()) return;
+      e.preventDefault();
+    };
+    window.addEventListener('contextmenu', onMenu);
+    return () => window.removeEventListener('contextmenu', onMenu);
+  }, [desktop]);
 
   // P plays or pauses the loaded track, unless the focused element uses the
   // key itself (typing, or the track table playing its active row).
@@ -168,7 +201,8 @@ function Shell() {
       </button>
       <Sidebar active={route.view} />
       <main className="workspace" id="main" tabIndex={-1}>
-        {renderView(route)}
+        {/* A new screen starts afresh after an error in another one. */}
+        <ErrorBoundary resetKey={formatRoute(route)}>{renderView(route)}</ErrorBoundary>
       </main>
       <PlayerBar />
       <StatusBar />

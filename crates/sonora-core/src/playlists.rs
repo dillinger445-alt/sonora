@@ -530,6 +530,17 @@ pub fn containing(c: &Connection, track: i64) -> R<Vec<i64>> {
     Ok(c.query("SELECT playlist_id FROM playlist_tracks WHERE track_id = ? ORDER BY playlist_id", params![track], |r| r.i64(0))?)
 }
 
+/// Playlists (not smart ones) that hold any of `tracks`, each once.
+pub fn containing_any(c: &Connection, tracks: &[i64]) -> R<Vec<i64>> {
+    let mut out = std::collections::BTreeSet::new();
+    for chunk in tracks.chunks(500) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let p: Vec<SqlValue> = chunk.iter().map(|&i| SqlValue::Int(i)).collect();
+        out.extend(c.query(&format!("SELECT DISTINCT playlist_id FROM playlist_tracks WHERE track_id IN ({marks})"), &as_params(&p), |r| r.i64(0))?);
+    }
+    Ok(out.into_iter().collect())
+}
+
 // ----------------------------------------------------------------- tree
 
 /// Every node with its track count and total duration. Folders count the

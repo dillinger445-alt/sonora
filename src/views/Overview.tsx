@@ -222,9 +222,9 @@ export function OverviewView() {
         }
         actions={
           <>
-            {o.tracks.pending > 0 && !busy ? (
+            {o.tracks.pendingPresent > 0 && !busy ? (
               <Button icon={LuPlay} onClick={() => void analyzePending()}>
-                Analyze {formatCount(o.tracks.pending)} waiting
+                Analyze {formatCount(o.tracks.pendingPresent)} waiting
               </Button>
             ) : null}
             <Button icon={LuRefreshCw} onClick={() => imports.rescanFolders()} disabled={o.folders === 0}>

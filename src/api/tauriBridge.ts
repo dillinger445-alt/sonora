@@ -16,7 +16,7 @@ import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { CoreError } from './bridge.ts';
-import type { Bridge, DropHandlers, Platform, UpdateInfo, Updater, UpdateStep } from './bridge.ts';
+import type { Bridge, DropHandlers, Platform, SaveKind, UpdateInfo, Updater, UpdateStep } from './bridge.ts';
 import type { PreparedPlayback } from './types.ts';
 
 const EVENT_CHANNEL = 'sonora://event';
@@ -155,13 +155,13 @@ export function createTauriBridge(): Bridge {
       );
     },
 
-    pickSavePath(defaultName: string): Promise<string | null> {
+    pickSavePath(defaultName: string, kind: SaveKind = 'csv'): Promise<string | null> {
       return native('dialog_failed', () =>
-        save({
-          title: 'Export CSV',
-          defaultPath: defaultName,
-          filters: [{ name: 'CSV', extensions: ['csv'] }],
-        }),
+        save(
+          kind === 'backup'
+            ? { title: 'Back up the library', defaultPath: defaultName, filters: [{ name: 'SONORA library', extensions: ['db'] }] }
+            : { title: 'Export CSV', defaultPath: defaultName, filters: [{ name: 'CSV', extensions: ['csv'] }] },
+        ),
       );
     },
 

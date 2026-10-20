@@ -37,6 +37,8 @@ if (!existsSync(join(MUSIC, 'manifest.json'))) {
 }
 rmSync(LIBRARY, { recursive: true, force: true });
 
-const bridge = spawn(exe('sonora-devserver'), ['--port', port, '--static', join(ROOT, 'dist'), '--data', LIBRARY], { cwd: ROOT, stdio: 'inherit' });
+// "Move to Trash" uses the freedesktop trash on Linux: keep it inside e2e/.data.
+const env = { ...process.env, XDG_DATA_HOME: join(DATA, 'xdg') };
+const bridge = spawn(exe('sonora-devserver'), ['--port', port, '--static', join(ROOT, 'dist'), '--data', LIBRARY], { cwd: ROOT, stdio: 'inherit', env });
 bridge.on('exit', (code) => process.exit(code ?? 0));
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => bridge.kill(sig));

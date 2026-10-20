@@ -179,12 +179,100 @@ fn rescan_skips_unchanged_reanalyzes_changed_relinks_moved_and_flags_missing() {
 
     // Removing an index entry never touches the file system.
     let id = renamed.get("id").and_then(Value::as_i64).unwrap();
-    call(&app, "tracks.remove", &format!(r#"{{"ids": [{id}]}}"#));
+    let r = call(&app, "tracks.remove", &format!(r#"{{"ids": [{id}]}}"#));
+    assert_eq!((r.get("removed").and_then(Value::as_i64), r.get("busy").and_then(Value::as_i64)), (Some(1), Some(0)));
     assert!(e.music.join("b renamed.wav").exists());
     assert_eq!(rows(&app, "null").len(), 2);
 
+    // A removed track stays removed when its folder is rescanned...
+    call(&app, "folders.rescan", "{}");
+    wait_idle(&app);
+    assert_eq!(rows(&app, "null").len(), 2, "a rescan does not bring a removed track back");
+    let folders = call(&app, "folders.list", "");
+    let folder = &folders.as_array().unwrap()[0];
+    assert_eq!(folder.get("removed").and_then(Value::as_i64), Some(1));
+    // ...until it is brought back, which rescans the folder.
+    let back = call(&app, "folders.bringBack", &format!(r#"{{"id": {}}}"#, folder.get("id").and_then(Value::as_i64).unwrap()));
+    assert_eq!(back.get("count").and_then(Value::as_i64), Some(1));
+    wait_idle(&app);
+    let again = rows(&app, "null");
+    assert_eq!(again.len(), 3);
+    // Or imported again by itself.
+    let id = again.iter().find(|r| s(r, "fileName") == "b renamed.wav").and_then(|r| r.get("id").and_then(Value::as_i64)).unwrap();
+    call(&app, "tracks.remove", &format!(r#"{{"ids": [{id}]}}"#));
+    call(&app, "folders.rescan", "{}");
+    wait_idle(&app);
+    assert_eq!(rows(&app, "null").len(), 2);
+    import(&app, &e.music.join("b renamed.wav"));
+    assert_eq!(rows(&app, "null").len(), 3);
+    assert_eq!(call(&app, "folders.list", "").as_array().unwrap()[0].get("removed").and_then(Value::as_i64), Some(0));
+    let id = rows(&app, "null").iter().find(|r| s(r, "fileName") == "b renamed.wav").and_then(|r| r.get("id").and_then(Value::as_i64)).unwrap();
+    call(&app, "tracks.remove", &format!(r#"{{"ids": [{id}]}}"#));
+    assert_eq!(rows(&app, "null").len(), 2);
+
+    // Files dropped by name that are not audio stay out, and are counted.
+    std::fs::write(e.music.join("cover.jpg"), b"\xFF\xD8\xFF\xE0\0\x10JFIF").unwrap();
+    std::fs::write(e.music.join("._a.wav"), b"\0\x05\x16\x07").unwrap();
+    let reports: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = reports.clone();
+    let sub = app.subscribe(Box::new(move |name, payload| {
+        if name == "library.indexed" {
+            sink.lock().unwrap().push(payload.to_string());
+        }
+    }));
+    call(
+        &app,
+        "library.import",
+        &sonora_json::obj! { "paths" => vec![e.music.join("cover.jpg").to_string_lossy().to_string(), e.music.join("._a.wav").to_string_lossy().to_string()] }.to_string_compact(),
+    );
+    wait_idle(&app);
+    app.unsubscribe(sub);
+    assert_eq!(rows(&app, "null").len(), 2, "no track for a cover image or a macOS metadata file");
+    let report = sonora_json::parse(reports.lock().unwrap().last().expect("an index report")).unwrap();
+    assert_eq!((int(&report, "notAudio"), int(&report, "added"), int(&report, "queued")), (2, 0, 0));
+
     // Missing filter.
     assert_eq!(rows(&app, r#"{"statuses": ["missing"]}"#).len(), 1);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn trashing_moves_files_and_takes_their_tracks_out() {
+    let e = env("trash");
+    // Elsewhere than macOS and Windows, the freedesktop trash: kept in this
+    // test's folder. (The system Trash and Recycle Bin are used as they are.)
+    #[cfg(not(any(target_os = "macos", windows)))]
+    std::env::set_var("XDG_DATA_HOME", e.root.join("xdg"));
+    let (a, b, c) = (e.music.join("a.wav"), e.music.join("b.wav"), e.music.join("c.wav"));
+    write(&a, 41, 8.0);
+    write(&b, 42, 8.0);
+    write(&c, 43, 8.0);
+    let app = open(&e);
+    import(&app, &e.music);
+    let all = rows(&app, "null");
+    assert_eq!(all.len(), 3);
+    let id = |name: &str| all.iter().find(|r| s(r, "fileName") == name).and_then(|r| r.get("id").and_then(Value::as_i64)).unwrap();
+
+    // One file goes to the Trash; one already gone just leaves the library.
+    std::fs::remove_file(&c).unwrap();
+    let r = call(&app, "tracks.trash", &format!(r#"{{"ids": [{}, {}]}}"#, id("a.wav"), id("c.wav")));
+    assert_eq!((int(&r, "trashed"), int(&r, "removed"), int(&r, "busy")), (1, 2, 0), "{}", r.to_string_compact());
+    assert_eq!(r.get("failed").and_then(Value::as_array).map(Vec::len), Some(0));
+    assert!(!a.exists(), "the file left its folder");
+    assert!(b.exists(), "other files stay");
+    assert_eq!(rows(&app, "null").len(), 1);
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let kept = e.root.join("xdg/Trash/files/a.wav");
+        assert!(kept.exists(), "the file is in the trash");
+        // Put back from the Trash, a rescan finds it again: trashing does not
+        // keep it out of the library the way removing does.
+        std::fs::rename(&kept, &a).unwrap();
+        call(&app, "folders.rescan", "{}");
+        wait_idle(&app);
+        assert_eq!(rows(&app, "null").len(), 2);
+    }
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }
@@ -520,9 +608,10 @@ fn requeued_and_removed_tracks_keep_the_scan_counts_right() {
     assert_eq!(s(&st, "state"), "idle");
     assert!(st.get("id").is_none_or(Value::is_null), "{}", st.to_string_compact());
     assert_eq!(call(&app, "scan.history", r#"{"limit": 10}"#).as_array().unwrap().len(), 1, "no empty session recorded");
-    // A mix of present and removed tracks queues the present ones.
+    // A mix of present and removed tracks queues the present ones; a
+    // removed track is not a missing file.
     let q = call(&app, "tracks.rescan", &format!(r#"{{"ids": [{}, {}]}}"#, id(&finished[0]), id(&waiting[1])));
-    assert_eq!((int(&q, "queued"), int(&q, "missing")), (1, 1));
+    assert_eq!((int(&q, "queued"), int(&q, "missing")), (1, 0));
     wait_idle(&app);
     assert_eq!(s(&call(&app, "scan.history", r#"{"limit": 1}"#).as_array().unwrap()[0], "state"), "completed");
     app.shutdown();

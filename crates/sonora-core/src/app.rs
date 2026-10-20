@@ -241,17 +241,20 @@ impl App {
                     events.emit("duplicates.progress", &obj! { "progress" => sonora_json::num(f, 3) });
                 }
             });
-            match result {
-                Ok(matches) if !app.dup_cancel.load(Ordering::Relaxed) => {
-                    if let Err(e) = duplicates::store_matches(&app.db.write(), &matches) {
-                        logging::log("error", "duplicates", &e.to_string());
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => logging::log("error", "duplicates", &e.to_string()),
+            let error = match result {
+                Ok(matches) if !app.dup_cancel.load(Ordering::Relaxed) => duplicates::store_matches(&app.db.write(), &matches).err().map(|e| e.to_string()),
+                Ok(_) => None,
+                Err(e) => Some(e.to_string()),
+            };
+            if let Some(e) = &error {
+                logging::log("error", "duplicates", e);
             }
             app.dup_running.store(false, Ordering::SeqCst);
-            app.events.emit("duplicates.updated", &obj! {});
+            // The view says when the comparison did not complete.
+            app.events.emit("duplicates.updated", &match error {
+                Some(e) => obj! { "error" => e },
+                None => obj! {},
+            });
         });
         if spawned.is_err() {
             self.dup_running.store(false, Ordering::SeqCst);

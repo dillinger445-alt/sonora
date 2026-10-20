@@ -13,7 +13,7 @@ use sqlite::{Connection, DbError};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -187,6 +187,15 @@ CREATE INDEX idx_playlist_tracks_order ON playlist_tracks(playlist_id, position)
 CREATE INDEX idx_playlist_tracks_track ON playlist_tracks(track_id);
 "#;
 
+/// Files removed from the library: rescans of their folders leave them out
+/// until the user imports the file again or brings them back.
+const MIGRATION_4: &str = r#"
+CREATE TABLE removed_files (
+    path TEXT PRIMARY KEY,
+    removed_at INTEGER NOT NULL
+);
+"#;
+
 #[derive(Debug)]
 pub enum StoreError {
     Db(DbError),
@@ -260,21 +269,54 @@ impl Db {
         std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0) + std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0)
     }
 
-    /// Writes a consistent copy of the database to `dest`.
-    pub fn backup_to(&self, dest: &Path) -> Result<(), StoreError> {
-        if dest.exists() {
-            return Err(StoreError::Other(format!("{} already exists", dest.display())));
-        }
-        let w = self.write();
-        let target = dest.to_string_lossy().to_string();
-        match w.execute("VACUUM INTO ?", params![target]) {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                // Older SQLite without VACUUM INTO: checkpoint and copy.
-                w.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
-                std::fs::copy(&self.path, dest).map(|_| ()).map_err(|e| StoreError::Io(e.to_string()))
+    /// Writes a consistent copy of the database to `dest`. A file already
+    /// there is replaced only with `replace` (the person confirmed it in a
+    /// save dialog), and never when it is the library itself.
+    pub fn backup_to(&self, dest: &Path, replace: bool) -> Result<(), StoreError> {
+        if std::fs::symlink_metadata(dest).is_ok() {
+            if !replace {
+                return Err(StoreError::Other(format!("{} already exists", dest.display())));
+            }
+            if !dest.is_file() {
+                return Err(StoreError::Other(format!("{} is not a file", dest.display())));
+            }
+            let target = dest.canonicalize().map_err(|e| StoreError::Io(e.to_string()))?;
+            let live = ["", "-wal", "-shm", "-journal"].iter().any(|suffix| {
+                let mut p = self.path.clone().into_os_string();
+                p.push(suffix);
+                PathBuf::from(p).canonicalize().is_ok_and(|p| p == target)
+            });
+            if live {
+                return Err(StoreError::Other("that is SONORA's library itself: choose another name for the backup".into()));
             }
         }
+        // Into a new file next to it first: a failed backup leaves an earlier
+        // one there as it was.
+        let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "backup".into());
+        let tmp = (1..1000)
+            .map(|n| dest.with_file_name(format!(".{name}.{n}.sonora-partial")))
+            .find(|p| std::fs::symlink_metadata(p).is_err())
+            .ok_or_else(|| StoreError::Other(format!("no room for a temporary file next to {}", dest.display())))?;
+        let written = {
+            let w = self.write();
+            match w.execute("VACUUM INTO ?", params![tmp.to_string_lossy().to_string()]) {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    // Older SQLite without VACUUM INTO: checkpoint and copy.
+                    w.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(StoreError::from).and_then(|_| {
+                        std::fs::copy(&self.path, &tmp).map(|_| ()).map_err(|e| StoreError::Io(e.to_string()))
+                    })
+                }
+            }
+        };
+        // Replaces an existing backup on every system (MoveFileEx with
+        // REPLACE_EXISTING on Windows).
+        let result = written.and_then(|_| std::fs::rename(&tmp, dest).map_err(|e| StoreError::Io(e.to_string())));
+        if result.is_err() {
+            // Only the temporary file this call made.
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
     }
 }
 
@@ -308,6 +350,13 @@ fn migrate(c: &Connection) -> Result<(), DbError> {
             Ok::<(), DbError>(())
         })?;
     }
+    if version < 4 {
+        c.transaction(|tx| {
+            tx.execute_batch(MIGRATION_4)?;
+            tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["4"])?;
+            Ok::<(), DbError>(())
+        })?;
+    }
     Ok(())
 }
 
@@ -335,8 +384,21 @@ mod tests {
         let mode = db.read().query_row("PRAGMA journal_mode", params![], |r| r.text(0)).unwrap();
         assert_eq!(mode.as_deref(), Some("wal"));
         let backup = dir.join("backup.db");
-        db.backup_to(&backup).unwrap();
+        db.backup_to(&backup, false).unwrap();
         assert!(backup.exists());
-        assert!(db.backup_to(&backup).is_err());
+        // An existing file is replaced only when the person said so...
+        assert!(db.backup_to(&backup, false).is_err());
+        db.write().execute("INSERT INTO settings (key, value) VALUES ('b', '2')", params![]).unwrap();
+        db.backup_to(&backup, true).unwrap();
+        let copy = Db::open(&backup).unwrap();
+        let v = copy.read().query_row("SELECT value FROM settings WHERE key='b'", params![], |r| r.text(0)).unwrap();
+        assert_eq!(v.as_deref(), Some("2"));
+        drop(copy);
+        // ...and never when it is the library itself.
+        assert!(db.backup_to(&p, true).is_err());
+        assert!(db.read().query_row("SELECT value FROM settings WHERE key='a'", params![], |r| r.text(0)).unwrap().is_some());
+        // No temporary files are left next to the backup.
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.ends_with(".sonora-partial")), "{names:?}");
     }
 }

@@ -167,10 +167,15 @@ export function SettingsView() {
   const save = (values: Partial<Settings>) =>
     saveSettings(values).catch((e: unknown) => toast({ tone: 'error', title: 'Could not save the setting', body: e instanceof Error ? e.message : String(e) }));
 
-  const backup = async (path: string) => {
+  const backup = async (path: string, replace = false) => {
     try {
-      const r = await client.backup(path);
-      toast({ tone: 'success', title: 'Library backed up', body: r.path, action: { label: revealLabel(bridge.platform), run: () => void bridge.reveal(r.path) } });
+      const r = await client.backup(path, replace);
+      toast({
+        tone: 'success',
+        title: 'Library backed up',
+        body: r.path,
+        action: { label: revealLabel(bridge.platform), run: () => void bridge.reveal(r.path).catch((e: unknown) => toast({ tone: 'error', title: 'Could not show the file', body: e instanceof Error ? e.message : String(e) })) },
+      });
     } catch (e) {
       toast({ tone: 'error', title: 'Backup failed', body: e instanceof Error ? e.message : String(e) });
     }
@@ -180,8 +185,15 @@ export function SettingsView() {
     if (bridge.native) {
       const d = new Date();
       const p = (n: number) => String(n).padStart(2, '0');
-      const path = await bridge.pickSavePath(`sonora-library-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.db`);
-      if (path) await backup(path);
+      let path: string | null = null;
+      try {
+        path = await bridge.pickSavePath(`sonora-library-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.db`, 'backup');
+      } catch (e) {
+        toast({ tone: 'error', title: 'Could not open the save dialog', body: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      // The save dialog asked before choosing an existing file.
+      if (path) await backup(path, true);
     } else if (isAbsolutePath(backupPath.trim())) {
       await backup(backupPath.trim());
     } else {
@@ -215,6 +227,8 @@ export function SettingsView() {
     try {
       await client.refreshTools();
       await refreshInfo();
+    } catch (e) {
+      toast({ tone: 'error', title: 'Could not check for FFmpeg', body: e instanceof Error ? e.message : String(e) });
     } finally {
       setChecking(false);
     }

@@ -1,12 +1,13 @@
 /** Full analysis of one track. */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   LuArrowLeft,
   LuChevronDown,
   LuChevronRight,
   LuDownload,
   LuFolderSearch,
+  LuListX,
   LuLoaderCircle,
   LuPause,
   LuPlay,
@@ -40,7 +41,7 @@ import {
 } from '../lib/format.ts';
 import { navigate } from '../lib/router.ts';
 import { EVIDENCE, EVIDENCE_ORDER, SCORE_HINT, SCORE_KINDS, SCORE_LABEL, SEVERITY } from '../lib/scores.ts';
-import { focusMain } from '../lib/focus.ts';
+import { focusMain, isTextEntry } from '../lib/focus.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
 import { usePlayer } from '../state/player.tsx';
 import { useTrackActions } from '../state/trackActions.tsx';
@@ -425,22 +426,48 @@ export function TrackView({ id }: { id: number }) {
   const row = d?.track ?? null;
   const canPlay = !!d?.fileExists;
 
+  // Removing this track (or moving its file to the Trash) goes back to the library.
+  const { remove, trash } = actions;
+  const removeThis = useCallback(
+    (how: 'remove' | 'trash') => {
+      if (!row) return;
+      void (how === 'trash' ? trash : remove)([row.id], `“${row.displayTitle}”`).then((ok) => {
+        if (!ok) return;
+        navigate({ view: 'library' }, true);
+        focusMain();
+      });
+    },
+    [row, remove, trash],
+  );
+
   // P plays or pauses this track (before the window-wide shortcut, which
-  // would otherwise toggle whatever track is loaded).
+  // would otherwise toggle whatever track is loaded). Delete removes it from
+  // the library, and ⌘⌫ moves its file to the Trash, as in the library.
   const toggle = player.toggle;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== 'p' && e.key !== 'P') || !row || !canPlay) return;
+      if (!row || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (isTextEntry(el) || el?.tagName === 'SELECT') return;
       // Not while a dialog is open.
       if (document.querySelector('dialog[open]')) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !e.shiftKey) {
+        // Only for this page: Delete in the sidebar deletes a playlist.
+        const main = document.getElementById('main');
+        if (el && el !== document.body && !main?.contains(el)) return;
+        e.preventDefault();
+        if (e.metaKey && e.key === 'Backspace') {
+          if (canPlay) removeThis('trash');
+        } else if (!e.metaKey) removeThis('remove');
+        return;
+      }
+      if (e.metaKey || (e.key !== 'p' && e.key !== 'P') || !canPlay) return;
       e.preventDefault();
       toggle(row);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [row, canPlay, toggle]);
+  }, [row, canPlay, toggle, removeThis]);
 
   // The core's cutoff (set only for a steep edge), shared with the library's Cutoff column.
   const cutoffHz = d?.track.cutoffHz ?? null;
@@ -466,6 +493,8 @@ export function TrackView({ id }: { id: number }) {
       <div className="view view-scroll">
         <ViewHeader back={back} title="Track not found" />
         <ErrorState title="This track could not be loaded" error={detail.error} onRetry={detail.reload} />
+        {/* A dialog opened from this view stays open (and can answer) when the track goes away. */}
+        {actions.dialogs}
       </div>
     );
   }
@@ -473,6 +502,7 @@ export function TrackView({ id }: { id: number }) {
     return (
       <div className="view">
         <ViewHeader back={back} title=" " />
+        {actions.dialogs}
       </div>
     );
   }
@@ -524,18 +554,8 @@ export function TrackView({ id }: { id: number }) {
               Re-analyze
             </Button>
             <IconButton label="Export this track as CSV" icon={LuDownload} onClick={() => void actions.exportCsv({ ids: [t.id] }, 1)} />
-            <IconButton
-              label="Remove from library"
-              icon={LuTrash2}
-              tone="danger"
-              onClick={() =>
-                void actions.remove([t.id], `“${t.displayTitle}”`).then((ok) => {
-                  if (!ok) return;
-                  navigate({ view: 'library' }, true);
-                  focusMain();
-                })
-              }
-            />
+            <IconButton label="Remove from library (the file stays on disk)" icon={LuListX} tone="danger" onClick={() => removeThis('remove')} />
+            <IconButton label={`Move the file to the ${actions.trashName}`} icon={LuTrash2} tone="danger" disabled={!d.fileExists} onClick={() => removeThis('trash')} />
           </>
         }
       />

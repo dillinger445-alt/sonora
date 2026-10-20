@@ -22,6 +22,7 @@ pub mod model;
 pub mod playback;
 pub mod playlists;
 pub mod settings;
+pub mod trash;
 pub mod usb;
 
 pub use api::ApiError;

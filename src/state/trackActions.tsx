@@ -11,6 +11,7 @@ import { DjEditDialog, type DjEditTarget } from '../views/DjEditDialog.tsx';
 import { DjExportDialog, type ExportTarget } from '../views/DjExportDialog.tsx';
 import { useCore } from './core.tsx';
 import { useJobs } from './jobs.tsx';
+import { usePlaylists } from './playlists.tsx';
 import { useToast, type ToastInput } from './toasts.tsx';
 
 export { revealLabel };
@@ -39,6 +40,10 @@ export function describeQueued(r: QueueResult): ToastInput {
 export interface TrackActions {
   reanalyze: (ids: number[]) => Promise<void>;
   remove: (ids: number[], what?: string) => Promise<boolean>;
+  /** Asks, then moves the files to the system's Trash and removes their tracks; true when any went. */
+  trash: (ids: number[], what?: string) => Promise<boolean>;
+  /** "Trash" or, on Windows, "Recycle Bin". */
+  trashName: string;
   exportCsv: (target: { ids: number[] } | { filter: LibraryFilter }, count: number) => Promise<void>;
   reveal: (path: string) => Promise<void>;
   revealText: string;
@@ -74,6 +79,7 @@ export function useTrackActions(): TrackActions {
   const { client, bridge } = useCore();
   const toast = useToast();
   const jobs = useJobs();
+  const playlists = usePlaylists();
   const [confirm, confirmDialog] = useConfirm();
   const [editTarget, setEditTarget] = useState<DjEditTarget | null>(null);
   const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
@@ -90,18 +96,39 @@ export function useTrackActions(): TrackActions {
     [client, toast],
   );
 
+  /** " It is also taken out of “Warm-up”." when the tracks are in playlists. */
+  const inPlaylists = useCallback(
+    async (ids: number[]) => {
+      try {
+        const { ids: lists } = await client.playlistsContainingAny(ids);
+        if (lists.length === 0) return '';
+        const names = lists.map((id) => playlists.byId.get(id)?.name).filter((n): n is string => !!n);
+        const where = names.length === lists.length && names.length <= 2 ? names.map((n) => `“${n}”`).join(' and ') : plural(lists.length, 'playlist');
+        return ` ${ids.length === 1 ? 'It is' : 'They are'} also taken out of ${where}.`;
+      } catch {
+        return '';
+      }
+    },
+    [client, playlists.byId],
+  );
+
   const remove = useCallback(
     async (ids: number[], what?: string) => {
       if (ids.length === 0) return false;
+      const one = ids.length === 1;
       const name = what ?? plural(ids.length, 'track');
+      const lists = await inPlaylists(ids);
       const { confirmed } = await confirm({
-        title: ids.length === 1 ? 'Remove from library?' : `Remove ${plural(ids.length, 'track')} from the library?`,
+        title: one ? 'Remove from library?' : `Remove ${plural(ids.length, 'track')} from the library?`,
         body: (
           <>
             <p>
-              {name} will be removed from SONORA's library together with {ids.length === 1 ? 'its' : 'their'} analysis results.
+              {name} will be removed from SONORA's library, with {one ? 'its' : 'their'} analysis results and any tempo, key and genre corrections.{lists}
             </p>
-            <p className="faint">The audio files stay where they are; nothing on disk is deleted. Importing the files again brings them back.</p>
+            <p className="faint">
+              The audio {one ? 'file stays where it is' : 'files stay where they are'}, and rescans of {one ? 'its' : 'their'} folder leave {one ? 'it' : 'them'} out. Adding the{' '}
+              {one ? 'file' : 'files'} again, or Bring back in Folders, returns {one ? 'it' : 'them'} to the library.
+            </p>
           </>
         ),
         confirmLabel: 'Remove from library',
@@ -109,14 +136,74 @@ export function useTrackActions(): TrackActions {
       if (!confirmed) return false;
       try {
         const r = await client.remove(ids);
-        toast({ tone: 'success', title: `Removed ${plural(r.removed, 'track')} from the library` });
-        return true;
+        if (r.busy > 0) {
+          toast({
+            tone: 'warning',
+            title: `Removed ${plural(r.removed, 'track')} from the library`,
+            body: `${plural(r.busy, 'track')} being analyzed right now ${r.busy === 1 ? 'stays' : 'stay'}: remove ${r.busy === 1 ? 'it' : 'them'} once the analysis is done.`,
+            timeout: 9000,
+          });
+        } else {
+          toast({ tone: 'success', title: `Removed ${plural(r.removed, 'track')} from the library` });
+        }
+        return r.removed > 0;
       } catch (e) {
         toast({ tone: 'error', title: 'Could not remove', body: e instanceof Error ? e.message : String(e) });
         return false;
       }
     },
-    [client, confirm, toast],
+    [client, confirm, toast, inPlaylists],
+  );
+
+  const trashName = bridge.platform === 'windows' ? 'Recycle Bin' : 'Trash';
+  const trash = useCallback(
+    async (ids: number[], what?: string) => {
+      if (ids.length === 0) return false;
+      const one = ids.length === 1;
+      const lists = await inPlaylists(ids);
+      const { confirmed } = await confirm({
+        title: one ? `Move the file to the ${trashName}?` : `Move ${plural(ids.length, 'file')} to the ${trashName}?`,
+        body: (
+          <>
+            <p>
+              {what ?? (one ? 'The audio file' : `The ${plural(ids.length, 'audio file')}`)} will be moved from {one ? 'its' : 'their'} folder to the {trashName}, and{' '}
+              {one ? 'its track' : 'their tracks'} removed from SONORA's library, with the analysis results.{lists}
+            </p>
+            <p className="faint">
+              You can put {one ? 'it' : 'them'} back from the {trashName} until you empty it.
+            </p>
+          </>
+        ),
+        confirmLabel: `Move to ${trashName}`,
+      });
+      if (!confirmed) return false;
+      try {
+        const r = await client.trash(ids);
+        const gone = r.removed - r.trashed;
+        const missing = gone > 0 ? `${plural(gone, 'track')} whose file${gone === 1 ? ' was' : 's were'} already gone left the library too.` : undefined;
+        const busy = r.busy > 0 ? `${plural(r.busy, 'track')} being analyzed right now ${r.busy === 1 ? 'was' : 'were'} left alone.` : undefined;
+        if (r.failed.length === 0) {
+          toast({
+            tone: busy ? 'warning' : 'success',
+            title: r.trashed ? `Moved ${plural(r.trashed, 'file')} to the ${trashName}` : `Removed ${plural(r.removed, 'track')} from the library`,
+            body: [r.trashed ? missing : undefined, busy].filter(Boolean).join(' ') || undefined,
+          });
+        } else {
+          const first = r.failed[0];
+          toast({
+            tone: 'warning',
+            title: r.trashed ? `Moved ${formatCount(r.trashed)} of ${plural(ids.length, 'file')} to the ${trashName}` : `Could not move ${one ? 'the file' : 'the files'} to the ${trashName}`,
+            body: `${first ? `${first.title}: ${first.error}` : ''}${r.failed.length > 1 ? ` (and ${plural(r.failed.length - 1, 'more')})` : ''}. ${r.failed.length === 1 ? 'It stays' : 'They stay'} in the library.`,
+            timeout: 12000,
+          });
+        }
+        return r.removed > 0;
+      } catch (e) {
+        toast({ tone: 'error', title: `Could not move to the ${trashName}`, body: e instanceof Error ? e.message : String(e) });
+        return false;
+      }
+    },
+    [client, confirm, toast, trashName, inPlaylists],
   );
 
   const exportCsv = useCallback(
@@ -130,7 +217,12 @@ export function useTrackActions(): TrackActions {
             tone: 'success',
             title: `Exported ${plural(r.rows, 'track')}`,
             body: r.path,
-            action: r.path ? { label: revealLabel(bridge.platform), run: () => void bridge.reveal(r.path as string) } : undefined,
+            action: r.path
+              ? {
+                  label: revealLabel(bridge.platform),
+                  run: () => void bridge.reveal(r.path as string).catch((e: unknown) => toast({ tone: 'error', title: 'Could not show the file', body: e instanceof Error ? e.message : String(e) })),
+                }
+              : undefined,
           });
         } else {
           const r = await client.exportCsv(target);
@@ -225,5 +317,5 @@ export function useTrackActions(): TrackActions {
     </>
   );
 
-  return { reanalyze, remove, exportCsv, reveal, revealText: revealLabel(bridge.platform), editDj, exportDj, lookupGenres, dialogs };
+  return { reanalyze, remove, trash, trashName, exportCsv, reveal, revealText: revealLabel(bridge.platform), editDj, exportDj, lookupGenres, dialogs };
 }

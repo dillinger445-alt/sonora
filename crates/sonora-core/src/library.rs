@@ -25,6 +25,11 @@ pub struct ImportReport {
     pub relinked: u64,
     pub restored: u64,
     pub marked_missing: u64,
+    /// Files in the folders walked that were removed from the library
+    /// earlier, and so were left out.
+    pub skipped_removed: u64,
+    /// Files chosen by name that are not audio (a cover image, a text file).
+    pub not_audio: u64,
     pub folders: Vec<i64>,
     pub roots: Vec<String>,
     pub errors: Vec<String>,
@@ -40,6 +45,8 @@ impl ToJson for ImportReport {
             "relinked" => self.relinked,
             "restored" => self.restored,
             "markedMissing" => self.marked_missing,
+            "skippedRemoved" => self.skipped_removed,
+            "notAudio" => self.not_audio,
             "folders" => self.folders,
             "errors" => self.errors,
         }
@@ -210,6 +217,13 @@ pub fn import_paths(db: &Db, paths: &[PathBuf], opts: &ImportOptions, cancel: &A
             };
             report.folders.push(folder_id);
             report.roots.push(path_str(root));
+            // Files removed from the library stay out until imported again
+            // one by one, or brought back from the Folders view.
+            let removed: HashSet<String> = {
+                let c = db.read();
+                let pattern = format!("{}%", under_pattern(root));
+                c.query("SELECT path FROM removed_files WHERE path LIKE ? ESCAPE '\\'", params![pattern], |r| r.text(0))?.into_iter().collect()
+            };
             let mut seen: HashSet<String> = HashSet::new();
             let mut batch: Vec<Candidate> = Vec::new();
             let flush = |batch: &mut Vec<Candidate>, report: &mut ImportReport| -> Result<(), StoreError> {
@@ -235,7 +249,12 @@ pub fn import_paths(db: &Db, paths: &[PathBuf], opts: &ImportOptions, cancel: &A
                 if walk_err.is_some() {
                     return;
                 }
-                seen.insert(path_str(&cand.path));
+                let p = path_str(&cand.path);
+                if removed.contains(&p) {
+                    report.skipped_removed += 1;
+                    return;
+                }
+                seen.insert(p);
                 batch.push(cand);
                 if batch.len() >= 200 {
                     if let Err(e) = flush(&mut batch, &mut report) {
@@ -254,10 +273,17 @@ pub fn import_paths(db: &Db, paths: &[PathBuf], opts: &ImportOptions, cancel: &A
                 c.execute("UPDATE folders SET last_scan_at = ?, available = 1 WHERE id = ?", params![now_ms(), folder_id])?;
             }
         } else if root.is_file() {
-            // Explicitly chosen files are accepted whatever their extension;
-            // the analysis decides from the content whether they are audio.
+            // A file chosen by name is taken when it looks like audio by its
+            // name or its first bytes; the analysis decides the rest. Files
+            // dropped along with music (covers, notes, `._` files) stay out.
+            if !index::looks_like_audio(root) {
+                report.not_audio += 1;
+                continue;
+            }
             let cand = index::file_candidate(root).map_err(|e| StoreError::Io(e.to_string()))?;
             let c = db.write();
+            // Importing a file brings it back if it was removed before.
+            c.execute("DELETE FROM removed_files WHERE path = ?", params![path_str(root)])?;
             let folder_id = folder_for(&c, root)?;
             match index_candidate(&c, &cand, folder_id, opts) {
                 Ok((o, restored)) => record(&mut report, o, restored),
@@ -785,6 +811,14 @@ pub fn overview(c: &Connection) -> Result<Value, StoreError> {
             |r| (r.i64(0), r.opt_i64(1).unwrap_or(0), r.opt_i64(2).unwrap_or(0), r.opt_i64(3).unwrap_or(0), r.opt_i64(4).unwrap_or(0)),
         )?
         .unwrap_or((0, 0, 0, 0, 0));
+    // What "Analyze waiting" and "Retry failed" can act on: files still on disk.
+    let (pending_present, failed_present) = c
+        .query_row(
+            "SELECT SUM(status = 'pending'), SUM(status = 'failed') FROM tracks WHERE missing_since IS NULL",
+            params![],
+            |r| (r.opt_i64(0).unwrap_or(0), r.opt_i64(1).unwrap_or(0)),
+        )?
+        .unwrap_or((0, 0));
     let missing = c.query_row("SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL", params![], |r| r.i64(0))?.unwrap_or(0);
     let folders = c.query_row("SELECT COUNT(*) FROM folders", params![], |r| r.i64(0))?.unwrap_or(0);
     let (avg_o, avg_d, avg_l, total_secs) = c
@@ -829,7 +863,10 @@ pub fn overview(c: &Connection) -> Result<Value, StoreError> {
         scan_row_json,
     )?;
     Ok(obj! {
-        "tracks" => obj! { "total" => total, "analyzed" => analyzed, "pending" => pending, "analyzing" => analyzing, "failed" => failed, "missing" => missing },
+        "tracks" => obj! {
+            "total" => total, "analyzed" => analyzed, "pending" => pending, "analyzing" => analyzing, "failed" => failed, "missing" => missing,
+            "pendingPresent" => pending_present, "failedPresent" => failed_present,
+        },
         "folders" => folders,
         "averages" => obj! {
             "overall" => avg_o.map(|v| num(v, 1)).unwrap_or(Value::Null),
@@ -874,16 +911,34 @@ pub fn folders(c: &Connection) -> Result<Value, StoreError> {
             }
         },
     )?;
-    Ok(Value::Array(rows))
+    // Files removed from the library that rescans leave out, per folder.
+    let mut out = Vec::with_capacity(rows.len());
+    for mut f in rows {
+        let path = f.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+        let pattern = format!("{}%", under_pattern(Path::new(&path)));
+        let removed = c.query_row("SELECT COUNT(*) FROM removed_files WHERE path LIKE ? ESCAPE '\\'", params![pattern], |r| r.i64(0))?.unwrap_or(0);
+        f.set("removed", removed);
+        out.push(f);
+    }
+    Ok(Value::Array(out))
 }
 
-/// Removes index entries (never touches files on disk).
-pub fn remove_tracks(c: &Connection, ids: &[i64]) -> Result<u64, StoreError> {
+/// Removes index entries (never touches files on disk). With `remember`,
+/// rescans of their folders leave the files out from now on (see
+/// [`bring_back`]); without, a file found there again is a new track (for
+/// files that went to the Trash, say).
+pub fn remove_tracks(c: &Connection, ids: &[i64], remember: bool) -> Result<u64, StoreError> {
     let mut n = 0u64;
+    let now = now_ms();
     c.transaction(|tx| {
         for chunk in ids.chunks(500) {
             let marks = vec!["?"; chunk.len()].join(",");
             let p: Vec<SqlValue> = chunk.iter().map(|&i| SqlValue::Int(i)).collect();
+            if remember {
+                let mut with_time = vec![SqlValue::Int(now)];
+                with_time.extend(p.iter().cloned());
+                tx.execute(&format!("INSERT OR REPLACE INTO removed_files (path, removed_at) SELECT path, ? FROM tracks WHERE id IN ({marks})"), &as_params(&with_time))?;
+            }
             n += tx.execute(&format!("DELETE FROM tracks WHERE id IN ({marks})"), &as_params(&p))? as u64;
         }
         Ok::<(), StoreError>(())
@@ -891,11 +946,25 @@ pub fn remove_tracks(c: &Connection, ids: &[i64]) -> Result<u64, StoreError> {
     Ok(n)
 }
 
+/// Lets rescans of the folder pick up the files removed from the library
+/// earlier; returns how many there were.
+pub fn bring_back(c: &Connection, folder_id: i64) -> Result<u64, StoreError> {
+    let Some(path) = c.query_row("SELECT path FROM folders WHERE id = ?", params![folder_id], |r| r.text(0))? else { return Ok(0) };
+    let pattern = format!("{}%", under_pattern(Path::new(&path)));
+    Ok(c.execute("DELETE FROM removed_files WHERE path LIKE ? ESCAPE '\\'", params![pattern])? as u64)
+}
+
 pub fn remove_folder(c: &Connection, id: i64, remove_tracks_too: bool) -> Result<u64, StoreError> {
     c.transaction(|tx| {
         let mut n = 0;
         if remove_tracks_too {
             n = tx.execute("DELETE FROM tracks WHERE folder_id = ?", params![id])? as u64;
+        }
+        // A folder that is no longer watched has nothing to leave out; adding
+        // it again imports everything in it.
+        if let Some(path) = tx.query_row("SELECT path FROM folders WHERE id = ?", params![id], |r| r.text(0))? {
+            let pattern = format!("{}%", under_pattern(Path::new(&path)));
+            tx.execute("DELETE FROM removed_files WHERE path LIKE ? ESCAPE '\\'", params![pattern])?;
         }
         tx.execute("DELETE FROM folders WHERE id = ?", params![id])?;
         Ok::<u64, StoreError>(n)

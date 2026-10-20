@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { focusIsLost } from '../lib/focus.ts';
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -83,7 +84,7 @@ export function Popover({ trigger, children, label, align = 'start', width = 300
     // Escape also closes it when focus fell back to the page (a control
     // inside was disabled, say).
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented && (document.activeElement === document.body || document.activeElement == null)) {
+      if (e.key === 'Escape' && !e.defaultPrevented && focusIsLost()) {
         e.preventDefault();
         close(true);
       }

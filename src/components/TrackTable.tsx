@@ -33,8 +33,11 @@ import { useCore, useCoreEvent } from '../state/core.tsx';
 import { useDragStart } from '../state/dnd.tsx';
 import { throttle } from '../state/emitter.ts';
 import { usePlayer } from '../state/player.tsx';
+import { useToast } from '../state/toasts.tsx';
+import { ContextMenu, type ContextMenuRequest } from './ContextMenu.tsx';
 import { Checkbox } from './Controls.tsx';
 import { ErrorState } from './Layout.tsx';
+import type { MenuAction, MenuSeparator } from './Menu.tsx';
 import { ASCENDING_FIRST, fitColumns, trackColumns, type Column, type ColumnContext } from './trackColumns.tsx';
 
 const ROW = 32;
@@ -60,6 +63,10 @@ export interface TrackTableProps {
   onOpen: (row: TrackRow) => void;
   /** `label` names a single track for the confirmation. */
   onDelete?: (ids: number[], label?: string) => void;
+  /** ⌘⌫ on macOS, as in Finder: move the files to the Trash (after asking). */
+  onTrash?: (ids: number[], label?: string) => void;
+  /** The menu a row opens on right-click or Shift+F10, for `ids` (the selection it is in, or the row). */
+  rowMenu?: (ids: number[], row: TrackRow) => (MenuAction | MenuSeparator)[];
   onTotal?: (total: number) => void;
   /** Shown when the query has no rows. */
   empty: ReactNode;
@@ -89,6 +96,8 @@ export function TrackTable({
   onActive,
   onOpen,
   onDelete,
+  onTrash,
+  rowMenu,
   onTotal,
   empty,
   label,
@@ -97,6 +106,7 @@ export function TrackTable({
 }: TrackTableProps) {
   const { client, settings } = useCore();
   const player = usePlayer();
+  const toast = useToast();
   const beginDrag = useDragStart();
   const gridId = useId();
   const gridRef = useRef<HTMLDivElement>(null);
@@ -112,6 +122,8 @@ export function TrackTable({
   /** The active track; follows it when rows move. */
   const [activeRow, setActiveRow] = useState<TrackRow | null>(null);
   const anchor = useRef<{ index: number; id: number | null }>({ index: -1, id: null });
+  const [menu, setMenu] = useState<ContextMenuRequest | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   const pending = useRef<PendingMove | null>(null);
 
   const cache = useRef(new Map<number, TrackRow[]>());
@@ -342,7 +354,7 @@ export function TrackTable({
       for (const id of ids) next.add(id);
       onSelection(next);
     } catch (e) {
-      console.error('range selection failed', e);
+      toast({ tone: 'error', title: 'Could not select those tracks', body: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -352,7 +364,7 @@ export function TrackTable({
       (r) => {
         if (query === keyRef.current) onSelection(new Set(r.ids));
       },
-      (e: unknown) => console.error('select all failed', e),
+      (e: unknown) => toast({ tone: 'error', title: 'Could not select every track', body: e instanceof Error ? e.message : String(e) }),
     );
   };
 
@@ -467,6 +479,34 @@ export function TrackTable({
     [softReload, locate, rowAt],
   );
 
+  /**
+   * Opens the row menu at a point. A row outside the selection is selected
+   * first (as in Finder); one inside a selection of several acts for all of them.
+   */
+  const openRowMenu = (i: number, r: TrackRow, x: number, y: number, keyboard: boolean) => {
+    if (!rowMenu) return;
+    const sel = selectionRef.current;
+    let ids: number[];
+    if (sel.has(r.id) && sel.size > 1) {
+      ids = [...sel];
+    } else {
+      ids = [r.id];
+      pending.current = null;
+      setActive(i);
+      setActiveRow(r);
+      anchor.current = { index: i, id: r.id };
+      onSelection(new Set([r.id]));
+    }
+    setMenu({
+      x,
+      y,
+      keyboard,
+      label: ids.length === 1 ? `Actions for ${r.displayTitle}` : `Actions for ${plural(ids.length, 'track')}`,
+      items: rowMenu(ids, r),
+      restoreFocus: gridRef.current,
+    });
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     // Keys pressed on the column headers or row checkboxes keep their own meaning.
     if (e.target !== e.currentTarget) return;
@@ -522,13 +562,16 @@ export function TrackTable({
         break;
       case 'Delete':
       case 'Backspace': {
-        if (!onDelete || !settled) break;
+        // ⌘⌫ moves to the Trash (as in Finder); Delete or ⌫ alone removes
+        // from the library only.
+        const act = e.metaKey && e.key === 'Backspace' ? onTrash : onDelete;
+        if (!act || !settled) break;
         // The same tracks the details panel shows: the selection when it
         // holds several, otherwise the active track.
         e.preventDefault();
-        if (selection.size > 1) onDelete([...selection]);
-        else if (activeRow) onDelete([activeRow.id], `“${activeRow.displayTitle}”`);
-        else if (selection.size === 1) onDelete([...selection]);
+        if (selection.size > 1) act([...selection]);
+        else if (activeRow) act([activeRow.id], `“${activeRow.displayTitle}”`);
+        else if (selection.size === 1) act([...selection]);
         break;
       }
       case 'a':
@@ -545,6 +588,17 @@ export function TrackTable({
           player.toggle(activeRow);
         }
         break;
+      case 'ContextMenu':
+      case 'F10': {
+        // The Menu key, or Shift+F10: the active row's menu, under the row.
+        if (e.key === 'F10' && !e.shiftKey) break;
+        if (!settled || !activeRow || active < 0) break;
+        e.preventDefault();
+        const el = document.getElementById(`${gridId}-r${active}`);
+        const box = el?.getBoundingClientRect() ?? gridRef.current?.getBoundingClientRect();
+        if (box) openRowMenu(active, activeRow, box.left + 48, box.top + Math.min(box.height, ROW), true);
+        break;
+      }
       default:
         break;
     }
@@ -633,6 +687,13 @@ export function TrackTable({
           style={{ top, gridTemplateColumns: template }}
           onClick={(e) => onRowClick(e, i, r)}
           onDoubleClick={() => onOpen(r)}
+          onContextMenu={(e) => {
+            if (!rowMenu) return;
+            // Our menu, not the web view's own (Back, Reload).
+            e.preventDefault();
+            gridRef.current?.focus({ preventScroll: true });
+            openRowMenu(i, r, e.clientX, e.clientY, false);
+          }}
           onPointerDown={(e) => {
             // Rows drag onto playlists in the sidebar: the selection, or this row.
             if ((e.target as HTMLElement).closest('button, input, a')) return;
@@ -656,76 +717,79 @@ export function TrackTable({
   }
 
   return (
-    <div
-      ref={gridRef}
-      className="ttable"
-      role="grid"
-      aria-label={label}
-      aria-rowcount={count + 1}
-      aria-colcount={columns.length + 1}
-      aria-multiselectable
-      tabIndex={0}
-      aria-activedescendant={activeElementId}
-      onKeyDown={onKeyDown}
-      onFocus={onFocus}
-    >
-      <div className="thead" role="rowgroup">
-        <div className="trow trow-head" role="row" aria-rowindex={1} style={{ gridTemplateColumns: template }}>
-          <div role="columnheader" className="tcell tcell-check">
-            <Checkbox
-              checked={allSelected}
-              indeterminate={someSelected}
-              aria-label={allSelected ? 'Clear selection' : 'Select all tracks'}
-              disabled={count === 0}
-              onChange={() => {
-                if (allSelected || someSelected) onSelection(new Set());
-                else selectAll();
-              }}
-            />
+    <>
+      <div
+        ref={gridRef}
+        className="ttable"
+        role="grid"
+        aria-label={label}
+        aria-rowcount={count + 1}
+        aria-colcount={columns.length + 1}
+        aria-multiselectable
+        tabIndex={0}
+        aria-activedescendant={activeElementId}
+        onKeyDown={onKeyDown}
+        onFocus={onFocus}
+      >
+        <div className="thead" role="rowgroup">
+          <div className="trow trow-head" role="row" aria-rowindex={1} style={{ gridTemplateColumns: template }}>
+            <div role="columnheader" className="tcell tcell-check">
+              <Checkbox
+                checked={allSelected}
+                indeterminate={someSelected}
+                aria-label={allSelected ? 'Clear selection' : 'Select all tracks'}
+                disabled={count === 0}
+                onChange={() => {
+                  if (allSelected || someSelected) onSelection(new Set());
+                  else selectAll();
+                }}
+              />
+            </div>
+            {columns.map((c) => {
+              const sorted = c.sortKey && sort.key === c.sortKey;
+              return (
+                <div
+                  key={c.id}
+                  role="columnheader"
+                  aria-sort={sorted ? (sort.desc ? 'descending' : 'ascending') : undefined}
+                  className={`tcell th ${c.align === 'end' ? 'is-end' : ''}`}
+                >
+                  {c.sortKey ? (
+                    <button type="button" className={`th-btn ${sorted ? 'is-sorted' : ''}`} onClick={() => headerClick(c)} data-tip={c.description}>
+                      <span>{c.label}</span>
+                      {sorted ? sort.desc ? <LuArrowDown aria-hidden className="th-arrow" /> : <LuArrowUp aria-hidden className="th-arrow" /> : null}
+                    </button>
+                  ) : (
+                    <span className="th-static">{c.label}</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
-          {columns.map((c) => {
-            const sorted = c.sortKey && sort.key === c.sortKey;
-            return (
-              <div
-                key={c.id}
-                role="columnheader"
-                aria-sort={sorted ? (sort.desc ? 'descending' : 'ascending') : undefined}
-                className={`tcell th ${c.align === 'end' ? 'is-end' : ''}`}
-              >
-                {c.sortKey ? (
-                  <button type="button" className={`th-btn ${sorted ? 'is-sorted' : ''}`} onClick={() => headerClick(c)} data-tip={c.description}>
-                    <span>{c.label}</span>
-                    {sorted ? sort.desc ? <LuArrowDown aria-hidden className="th-arrow" /> : <LuArrowUp aria-hidden className="th-arrow" /> : null}
-                  </button>
-                ) : (
-                  <span className="th-static">{c.label}</span>
-                )}
-              </div>
-            );
-          })}
         </div>
-      </div>
-      <div ref={scrollRef} className="tbody" role="rowgroup" onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
-        {loadError && total == null ? (
-          <div className="ttable-empty">
-            <ErrorState title="The tracks could not be loaded" error={loadError} onRetry={retry} />
-          </div>
-        ) : total === 0 ? (
-          <div className="ttable-empty">{empty}</div>
-        ) : (
-          <div className="tbody-inner" style={{ height: count * ROW }}>
-            {rows}
-          </div>
-        )}
-      </div>
-      {loadError && total != null ? (
-        <div className="ttable-error" role="alert">
-          <span>Some rows could not be loaded: {loadError}</span>
-          <button type="button" className="link" onClick={retry}>
-            Try again
-          </button>
+        <div ref={scrollRef} className="tbody" role="rowgroup" onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
+          {loadError && total == null ? (
+            <div className="ttable-empty">
+              <ErrorState title="The tracks could not be loaded" error={loadError} onRetry={retry} />
+            </div>
+          ) : total === 0 ? (
+            <div className="ttable-empty">{empty}</div>
+          ) : (
+            <div className="tbody-inner" style={{ height: count * ROW }}>
+              {rows}
+            </div>
+          )}
         </div>
-      ) : null}
-    </div>
+        {loadError && total != null ? (
+          <div className="ttable-error" role="alert">
+            <span>Some rows could not be loaded: {loadError}</span>
+            <button type="button" className="link" onClick={retry}>
+              Try again
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <ContextMenu request={menu} onClose={closeMenu} />
+    </>
   );
 }

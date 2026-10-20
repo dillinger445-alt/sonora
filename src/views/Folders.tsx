@@ -7,7 +7,7 @@ import { ScoreCell } from '../components/Marks.tsx';
 import { formatBytes, formatCount, formatRelative, plural } from '../lib/format.ts';
 import { focusMain } from '../lib/focus.ts';
 import { formatRoute } from '../lib/router.ts';
-import { useCore, useScanBusy } from '../state/core.tsx';
+import { useCore } from '../state/core.tsx';
 import { useImports } from '../state/imports.tsx';
 import { useToast } from '../state/toasts.tsx';
 import { revealLabel } from '../state/trackActions.tsx';
@@ -15,7 +15,6 @@ import { useResource } from '../state/useResource.ts';
 
 export function FoldersView() {
   const { client, bridge } = useCore();
-  const busy = useScanBusy();
   const imports = useImports();
   const toast = useToast();
   const [confirm, dialogs] = useConfirm();
@@ -23,24 +22,38 @@ export function FoldersView() {
 
   const remove = async (f: Folder) => {
     const { confirmed, option } = await confirm({
-      title: `Stop watching “${f.name}”?`,
+      title: `Remove “${f.name}” from the library?`,
       body: (
         <>
-          <p>The folder will no longer be part of the library and will not be rescanned.</p>
+          <p>SONORA stops watching the folder: it is no longer rescanned for new and changed files.</p>
           <p className="faint">Nothing on disk is deleted.</p>
         </>
       ),
       confirmLabel: 'Remove folder',
-      option: f.tracks > 0 ? { label: `Also remove its ${plural(f.tracks, 'track')} and their results from the library`, defaultValue: false } : undefined,
+      option: f.tracks > 0 ? { label: `Also remove its ${plural(f.tracks, 'track')}, with their results, from the library`, defaultValue: true } : undefined,
     });
     if (!confirmed) return;
     try {
       const r = await client.removeFolder(f.id, option);
-      toast({ tone: 'success', title: `Removed “${f.name}”`, body: option ? `${plural(r.removedTracks, 'track')} removed from the library.` : 'Its tracks stay in the library.' });
+      toast({
+        tone: 'success',
+        title: `Removed “${f.name}”`,
+        body: option ? `${plural(r.removedTracks, 'track')} removed from the library.` : 'Its tracks stay in the library: find them with Search or the filters.',
+      });
       focusMain();
       folders.reload();
     } catch (e) {
       toast({ tone: 'error', title: 'Could not remove the folder', body: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const bringBack = async (f: Folder) => {
+    try {
+      const r = await client.bringBack(f.id);
+      toast({ tone: 'info', title: `Bringing back ${plural(r.count, 'track')}`, body: `“${f.name}” is being rescanned to add ${r.count === 1 ? 'it' : 'them'} again.` });
+      folders.reload();
+    } catch (e) {
+      toast({ tone: 'error', title: 'Could not bring the tracks back', body: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -52,7 +65,7 @@ export function FoldersView() {
         subtitle="Library folders are scanned recursively. Rescanning picks up new, changed, moved and deleted files without re-analyzing unchanged ones."
         actions={
           <>
-            <Button icon={LuRefreshCw} onClick={() => imports.rescanFolders()} disabled={list.length === 0 || busy}>
+            <Button icon={LuRefreshCw} onClick={() => imports.rescanFolders()} disabled={list.length === 0}>
               Rescan all
             </Button>
             <Button variant="primary" icon={LuFolderPlus} onClick={imports.addFolders}>
@@ -104,6 +117,14 @@ export function FoldersView() {
                   <span className="ellipsis faint selectable" title={f.path}>
                     {f.available ? f.path : `${f.path} (not available: disconnected drive?)`}
                   </span>
+                  {f.removed > 0 ? (
+                    <span className="folder-removed faint">
+                      {plural(f.removed, 'track')} removed from the library {f.removed === 1 ? 'is' : 'are'} left out of rescans.{' '}
+                      <button type="button" className="link" onClick={() => void bringBack(f)} disabled={!f.available}>
+                        Bring back
+                      </button>
+                    </span>
+                  ) : null}
                 </td>
                 <td className="is-end num">{formatCount(f.tracks)}</td>
                 <td className="is-end num muted">{formatCount(f.analyzed)}</td>
@@ -122,7 +143,7 @@ export function FoldersView() {
                 <td className="is-end num muted">{formatBytes(f.bytes)}</td>
                 <td className="faint">{f.lastScanAt ? formatRelative(f.lastScanAt) : 'Never'}</td>
                 <td className="cell-actions">
-                  <IconButton size="sm" label="Rescan this folder" icon={LuRefreshCw} disabled={!f.available || busy} onClick={() => imports.rescanFolders([f.id])} />
+                  <IconButton size="sm" label="Rescan this folder" icon={LuRefreshCw} disabled={!f.available} onClick={() => imports.rescanFolders([f.id])} />
                   <IconButton size="sm" label={revealLabel(bridge.platform)} icon={LuFolderSearch} disabled={!f.available} onClick={() => void bridge.reveal(f.path).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: String(e) }))} />
                   <IconButton size="sm" label="Remove folder from library" icon={LuTrash2} tone="danger" onClick={() => void remove(f)} />
                 </td>

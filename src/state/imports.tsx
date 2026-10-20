@@ -40,6 +40,8 @@ function describeReport(r: ImportReport): string {
   if (r.restored) parts.push(`${r.restored} found again`);
   if (r.markedMissing) parts.push(`${r.markedMissing} missing`);
   if (r.unchanged) parts.push(`${r.unchanged} unchanged`);
+  if (r.skippedRemoved) parts.push(`${r.skippedRemoved} you removed left out`);
+  if (r.notAudio) parts.push(`${plural(r.notAudio, 'file')} that ${r.notAudio === 1 ? 'is' : 'are'} not audio left out`);
   return parts.length ? parts.join(', ') : 'No audio files found';
 }
 
@@ -144,6 +146,25 @@ export function ImportProvider({ children }: { children: ReactNode }) {
     }
     if (p.cancelled) {
       toast({ tone: 'warning', title: 'Indexing cancelled', body: describeReport(p) });
+      return;
+    }
+    const nothingElse = !p.added && !p.changed && !p.relinked && !p.restored && !p.unchanged && !p.queued && !p.errors.length;
+    if (nothingElse && p.notAudio) {
+      toast({
+        tone: 'warning',
+        title: p.notAudio === 1 ? 'That file is not audio' : `Those ${p.notAudio} files are not audio`,
+        body: 'SONORA adds audio files: WAV, AIFF, FLAC, ALAC, MP3, AAC or M4A, Ogg, Opus and similar.',
+      });
+      return;
+    }
+    if (p.waiting && p.queued > 0) {
+      toast({
+        tone: 'info',
+        title: `Indexed: ${plural(p.queued, 'file')} waiting`,
+        body: `${describeReport(p)}. The cancelled scan was still stopping, so analysis did not start. Start it from the Import queue.`,
+        action: { label: 'Import queue', run: () => navigate({ view: 'queue' }) },
+        timeout: 0,
+      });
       return;
     }
     toast({

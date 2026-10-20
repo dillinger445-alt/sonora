@@ -26,6 +26,7 @@ import {
   LuUsb,
 } from 'react-icons/lu';
 import type { PlaylistNode } from '../api/types.ts';
+import { focusIsLost } from '../lib/focus.ts';
 import { formatCount, plural } from '../lib/format.ts';
 import { formatRoute, navigate, useRoute } from '../lib/router.ts';
 import { useDragStart, useDragState, useDropTarget, type DragPayload, type DropHint } from '../state/dnd.tsx';
@@ -196,8 +197,7 @@ export function PlaylistTree() {
     if (n.parentId !== r.parentId || pl.childrenOf(n.parentId).findIndex((x) => x.id === r.id) !== r.index) return;
     refocus.current = null;
     const el = rowRefs.current.get(r.id);
-    const now = document.activeElement;
-    if (el && now !== el && (now == null || now === document.body)) el.focus();
+    if (el && document.activeElement !== el && focusIsLost()) el.focus();
   });
 
   const moveTo = (n: PlaylistNode, parentId: number | null, index: number) => {

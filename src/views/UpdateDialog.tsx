@@ -21,7 +21,12 @@ const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'shor
 function useRunningWork(): string | null {
   const scanBusy = useScanBusy();
   const jobs = useJobs();
-  const work = [scanBusy ? 'the analysis' : null, jobs.exportRunning ? 'the export' : null, jobs.discogsRunning ? 'the Discogs lookup' : null].filter(Boolean);
+  const work = [
+    scanBusy ? 'the analysis' : null,
+    jobs.exportRunning ? 'the export' : null,
+    jobs.usbRunning ? 'sending to the USB drive' : null,
+    jobs.discogsRunning ? 'the Discogs lookup' : null,
+  ].filter(Boolean);
   if (!work.length) return null;
   return work.length === 1 ? (work[0] ?? null) : `${work.slice(0, -1).join(', ')} and ${work[work.length - 1] ?? ''}`;
 }

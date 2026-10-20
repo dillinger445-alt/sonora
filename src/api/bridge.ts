@@ -59,6 +59,9 @@ export interface Updater {
   restart(): Promise<void>;
 }
 
+/** What a save dialog saves: its title and file type follow. */
+export type SaveKind = 'csv' | 'backup';
+
 export interface Bridge {
   readonly kind: 'tauri' | 'http';
   readonly platform: Platform;
@@ -73,7 +76,7 @@ export interface Bridge {
   /** Native folder picker (multiple allowed); `null` if cancelled or unavailable. */
   pickFolders(): Promise<string[] | null>;
   /** Native save dialog for a CSV file; `null` if cancelled or unavailable. */
-  pickSavePath(defaultName: string): Promise<string | null>;
+  pickSavePath(defaultName: string, kind?: SaveKind): Promise<string | null>;
   /** Native picker for one folder (export destination); `null` if cancelled or unavailable. */
   pickFolder(title: string): Promise<string | null>;
   /** Opens a web page in the default browser (Discogs pages only). */

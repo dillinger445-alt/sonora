@@ -12,6 +12,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { CoreError } from '../api/bridge.ts';
 import type { TrackRow } from '../api/types.ts';
 import { readPref, writePref } from '../lib/persist.ts';
 import { useCore, useCoreEvent } from './core.tsx';
@@ -400,10 +401,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             setState((s) =>
               s.track?.id === id ? { ...s, track: { id: t.id, displayTitle: t.displayTitle, artist: t.artist, duration: t.duration, djBpm: t.djBpm, djKey: t.djKey } } : s,
             ),
-          () => undefined,
+          (e: unknown) => {
+            // The track left the library (removed, or its file moved to the Trash): stop playing it.
+            if (e instanceof CoreError && e.code === 'not_found' && stateRef.current.track?.id === id) stop();
+          },
         );
       }, 1000),
-    [client],
+    [client, stop],
   );
   useEffect(() => () => refreshTrack.cancel(), [refreshTrack]);
   useCoreEvent(['library.changed', 'scan.finished'], () => {

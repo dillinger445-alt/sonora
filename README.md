@@ -44,12 +44,16 @@ turns it off. And looking up genres on Discogs, which runs only when you
 start it, sends the artist and title of the tracks you chose (and your
 Discogs token) to Discogs, nothing else. The desktop build's
 content-security policy blocks remote content. Your
-audio files are only ever read, never modified, moved or deleted: tempo,
-key and genre corrections stay in SONORA's library, and exports write new
-files without replacing any. Sending playlists to a USB drive writes copies
-into a `SONORA` folder on the drive and only ever changes files SONORA wrote
-there. Playlists refer to library tracks, so deleting one deletes no track
-or file. "Remove from library" removes SONORA's index entry only.
+audio files are read, never modified: tempo, key and genre corrections stay
+in SONORA's library, and exports write new files without replacing any.
+SONORA moves one of your files only when you choose **Move to Trash** for
+it, which puts it in the system Trash (the Recycle Bin on Windows), where
+you can restore it; nothing is ever deleted for good. Sending playlists to
+a USB drive writes copies into a `SONORA` folder on the drive and only ever
+changes files SONORA wrote there. Playlists refer to library tracks, so
+deleting one deletes no track or file. "Remove from library" removes
+SONORA's entry only: the file stays, and rescans leave it out until you add
+it again or bring it back from Folders.
 
 ## Features
 
@@ -57,7 +61,10 @@ or file. "Remove from library" removes SONORA's index entry only.
   and drag and drop. Rescan library folders at any time or at launch.
   Unchanged files are skipped by size and modification time. Moved or
   renamed files are relinked by content, so their results are kept. Deleted
-  files are marked missing, and a reconnected drive restores them.
+  files are marked missing, and a reconnected drive restores them. Tracks
+  you removed stay out of rescans until you bring them back, and files
+  dropped along with the music that are not audio (cover images, notes) are
+  left out.
 - **Formats**: WAV, AIFF and FLAC are decoded natively, with FLAC MD5
   verification. MP3, AAC/M4A, ALAC, Ogg Vorbis, Opus and others go through
   a bundled FFmpeg. Formats are identified from the file content, not the
@@ -79,8 +86,10 @@ or file. "Remove from library" removes SONORA's index entry only.
 - **Library**: a virtualized table for large libraries, with search, sort,
   filters (score range, format, issue, status, BPM, key, genre),
   multi-select, keyboard navigation, a details panel, CSV export,
-  re-analysis, Reveal in Finder or File Explorer, and removal from the
-  library.
+  re-analysis, Reveal in Finder or File Explorer, removal from the library,
+  and **Move to Trash** for files you no longer want (after asking, into
+  the system Trash or Recycle Bin). Right-click a track (or press
+  Shift+F10) for its menu.
 - **Tempo and key**: detected during analysis, with a confidence, the
   runner-up key, the tuning (A = 432 Hz and off-speed rips are read
   correctly) and flags for drifting tempos and key changes. Keys are shown
@@ -254,14 +263,16 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 219 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, API
+npm run test:rust          # 225 Rust tests on macOS: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, API
 npm run test:unit          # 38 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 22 Playwright tests: real interface + real core on a generated corpus
+npm run build && npm run test:e2e   # 24 Playwright tests: real interface + real core on a generated corpus
 ```
 
-One Rust test is Unix-only (symlink loops), so Windows runs 218. The
-FFmpeg-based checks are skipped with a note when FFmpeg is not installed.
+One Rust test runs only on macOS and Windows (a file moved to the system
+Trash or Recycle Bin) and one only on Unix (symlink loops), so Windows and
+Linux run 224. The FFmpeg-based checks are skipped with a note when FFmpeg
+is not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
 A = 440 Hz, a channel with inverted polarity, tempo changes, and noise and
@@ -269,10 +280,12 @@ sustained chords that must get no tempo.
 
 The end-to-end suite imports the corpus through the interface and
 exercises background analysis, search, sort, filter, keyboard navigation
-(including Delete acting on the track the details panel shows), the track
-analysis view and its charts, Needs attention and its tabs, duplicates and
-fingerprint comparison, CSV export, removal with confirmation (and checks
-the file is untouched), folder rescans, settings persistence, history,
+(including Delete acting on the track the details panel shows), the menu
+a row opens on right-click or Shift+F10, the track analysis view and its
+charts, Needs attention and its tabs, duplicates and fingerprint
+comparison, CSV export, removal with confirmation (and checks the file is
+untouched), folder rescans that leave removed tracks out until they are
+brought back, Move to Trash, settings persistence, history,
 keyboard use of menus, the BPM and Camelot-wheel filters (by mouse and
 keyboard), key notations, corrections (checking the file is untouched), the
 DJ export with its rekordbox.xml, playback (including a format the browser

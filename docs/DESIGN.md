@@ -66,7 +66,9 @@ The building blocks are in `src/components/`:
   group), `TabList` (tabs that switch a panel, with arrow keys), `Checkbox`,
   `SearchField`, `Switch`, `ProgressBar` (determinate only).
 - **Overlays**: `Menu` (action and checkbox menus with full keyboard
-  support), `Popover` (a panel of controls under a button; Escape, a click
+  support), `ContextMenu` (the same menu opened at the pointer by a
+  right-click, or at a row by Shift+F10 or the Menu key; Escape puts focus
+  back), `Popover` (a panel of controls under a button; Escape, a click
   outside or tabbing past its ends closes it), `Dialog` and `useConfirm`
   (native `<dialog>`; destructive confirmations focus Cancel first),
   `TooltipLayer` (one delegated tooltip for every `data-tip` attribute).

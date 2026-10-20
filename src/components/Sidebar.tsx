@@ -67,7 +67,7 @@ export function Sidebar({ active }: { active: View }) {
       case 'queue':
         if (busy && scan && scan.total > 0) return { text: `${formatCount(scan.done)}/${formatCount(scan.total)}`, tone: 'lime' };
         if (busy) return { text: '…', tone: 'lime' };
-        return overview.tracks.pending > 0 ? { text: formatCount(overview.tracks.pending) } : null;
+        return overview.tracks.pendingPresent > 0 ? { text: formatCount(overview.tracks.pendingPresent) } : null;
       case 'folders':
         return overview.folders > 0 ? { text: formatCount(overview.folders) } : null;
       case 'attention':

@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { LuCircleCheck, LuExternalLink } from 'react-icons/lu';
+import { LuCircleCheck, LuExternalLink, LuTriangleAlert } from 'react-icons/lu';
 import { Button } from '../components/Button.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
 import { useCore } from '../state/core.tsx';
@@ -20,7 +20,8 @@ export function DiscogsSettings() {
   const status = useResource(() => client.discogsStatus(), [], { events: ['discogs.finished'] });
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState<'save' | 'test' | null>(null);
-  const [user, setUser] = useState<string | null>(null);
+  /** The last check of the saved token: whose it is, or that Discogs refused it or could not be reached. */
+  const [check, setCheck] = useState<{ ok: true; user: string } | { ok: false } | null>(null);
   const configured = status.data?.configured ?? false;
 
   const save = async () => {
@@ -29,14 +30,21 @@ export function DiscogsSettings() {
     setBusy('save');
     try {
       await client.discogsSetToken(t);
-      setToken('');
-      status.reload();
-      // Check it right away, so a typo shows now rather than at the first lookup.
+    } catch (e) {
+      toast({ tone: 'error', title: 'Could not save the token', body: e instanceof Error ? e.message : String(e) });
+      setBusy(null);
+      return;
+    }
+    setToken('');
+    status.reload();
+    // Check it right away, so a typo shows now rather than at the first lookup.
+    try {
       const r = await client.discogsTest();
-      setUser(r.username);
+      setCheck({ ok: true, user: r.username });
       toast({ tone: 'success', title: `Connected to Discogs as ${r.username}` });
     } catch (e) {
-      toast({ tone: 'error', title: 'Discogs did not accept the token', body: e instanceof Error ? e.message : String(e) });
+      setCheck({ ok: false });
+      toast({ tone: 'error', title: 'The token is saved, but the check failed', body: e instanceof Error ? e.message : String(e), timeout: 0 });
     } finally {
       setBusy(null);
     }
@@ -46,10 +54,10 @@ export function DiscogsSettings() {
     setBusy('test');
     try {
       const r = await client.discogsTest();
-      setUser(r.username);
+      setCheck({ ok: true, user: r.username });
     } catch (e) {
-      setUser(null);
-      toast({ tone: 'error', title: 'Could not reach Discogs with this token', body: e instanceof Error ? e.message : String(e) });
+      setCheck({ ok: false });
+      toast({ tone: 'error', title: 'The check failed', body: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(null);
     }
@@ -64,7 +72,7 @@ export function DiscogsSettings() {
     if (!confirmed) return;
     try {
       await client.discogsSetToken(null);
-      setUser(null);
+      setCheck(null);
       status.reload();
     } catch (e) {
       toast({ tone: 'error', title: 'Could not remove the token', body: e instanceof Error ? e.message : String(e) });
@@ -87,8 +95,8 @@ export function DiscogsSettings() {
           {configured ? (
             <>
               <span className="discogs-state">
-                <LuCircleCheck aria-hidden className="t-lime" />
-                {user ? `Connected as ${user}` : 'Token saved'}
+                {check?.ok === false ? <LuTriangleAlert aria-hidden className="t-amber" /> : <LuCircleCheck aria-hidden className="t-lime" />}
+                {check?.ok ? `Connected as ${check.user}` : check ? 'Token saved, not working' : 'Token saved'}
               </span>
               <Button size="sm" busy={busy === 'test'} onClick={() => void test()}>
                 Test

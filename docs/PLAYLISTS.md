@@ -44,7 +44,9 @@ details panel lists the playlists that hold the track shown.
 In a playlist, drag rows to change the order, or select them and press
 **Alt+↑** or **Alt+↓**. **Delete** takes the selected tracks out of the
 playlist (they stay in the library); **Undo** in the message that follows
-puts them back where they were.
+puts them back where they were. Removing a track from the library, or
+moving its file to the Trash, also takes it out of every playlist; the
+question before it names those playlists.
 
 In the sidebar, drag playlists and folders to change their order, or drop
 them onto a folder to put them inside it. Each one has a menu (the **⋯**
@@ -65,7 +67,8 @@ from nothing. The rules:
 - genres;
 - a lowest DJ score: 55, 75 or 90;
 - the order: tempo, key, title, artist, DJ score or date added, rising or
-  falling;
+  falling (filters saved from the library keep the library's order, and the
+  window names it);
 - at most a number of tracks (up to 10,000).
 
 Other library filters you saved with it (format, issue, status, folder, a
@@ -73,14 +76,15 @@ score range) are kept as they are, and the window lists them. A smart
 playlist holds one score range, so choosing a DJ score replaces a saved
 one. **Edit rules…** changes the rules at any time, and **Convert to a
 playlist** turns a smart playlist into an ordinary playlist of what it lists
-now, which you can then order by hand.
+now, which you can then order by hand. Converting asks first, because the
+rules are not kept: **Duplicate** it before converting to keep both.
 
 ### Keyboard
 
 | Where | Keys |
 | --- | --- |
 | The playlists in the sidebar | **↑** **↓** move between them, **→** **←** open and close folders, **Enter** opens, **F2** renames, **Delete** deletes, **Alt+↑** **Alt+↓** move a playlist among its neighbours, **Alt+→** moves it into the folder above it and **Alt+←** out of its folder, **Shift+F10** opens its menu |
-| The tracks of a playlist | **↑** **↓** move (with **Shift** to select), **Space** selects, **Ctrl+A** (**⌘A**) selects all, **Alt+↑** **Alt+↓** move the selected tracks, **Delete** takes them out, **P** plays, **Enter** opens the track's analysis |
+| The tracks of a playlist | **↑** **↓** move (with **Shift** to select), **Space** selects, **Ctrl+A** (**⌘A**) selects all, **Alt+↑** **Alt+↓** move the selected tracks, **Delete** takes them out, **P** plays, **Enter** opens the track's analysis, **Shift+F10** opens the track's menu (as a right-click does) |
 
 ## A playlist as a set
 
