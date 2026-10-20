@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { LuCircleAlert, LuCircleCheck, LuShieldCheck } from 'react-icons/lu';
-import type { DownloadList, SlskdInfo, SlskdStatus, SourcesStatus } from '../api/types.ts';
+import type { DownloadList, ManagedSlskd, SetupRun, SlskdInfo, SlskdStatus, SourcesStatus } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { TabList, tabId } from '../components/Controls.tsx';
 import { ErrorState, ViewHeader } from '../components/Layout.tsx';
@@ -31,6 +31,8 @@ export type Connection = { ok: true; info: SlskdInfo; at: number } | { ok: false
 export interface SoulseekState {
   sources: Resource<SourcesStatus>;
   slskd: Resource<SlskdStatus>;
+  /** slskd as SONORA set it up and runs it (macOS). */
+  managed: Resource<ManagedSlskd>;
   connection: Connection;
   testing: boolean;
   test: () => Promise<Connection>;
@@ -139,6 +141,18 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
   const idBase = useId();
   const sources = useResource(() => client.sourcesStatus(), [], { events: ['sources.changed', 'sources.imported'] });
   const slskd = useResource(() => client.slskdStatus(), []);
+  // Opening the page starts SONORA's slskd when it is not running (unless
+  // the person stopped it); later looks only ask how it is doing.
+  const firstLook = useRef(true);
+  const managed = useResource(
+    () => {
+      const ensure = firstLook.current;
+      firstLook.current = false;
+      return client.slskdManaged(ensure);
+    },
+    [],
+    { events: ['slskd.setup'], throttleMs: 400 },
+  );
   const [testing, setTesting] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const accepted = sources.data?.accepted ?? false;
@@ -180,6 +194,30 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
     if (!keySaved) setConnection(null);
   }, [keySaved]);
 
+  // The setup finished: SONORA now has slskd's key and its download folder.
+  useCoreEvent(['slskd.setup'], (_name, payload) => {
+    const run = payload as SetupRun | null;
+    if (run?.finished && !run.error) {
+      slskd.reload();
+      sources.reload();
+      void test();
+    }
+  });
+
+  // While the Setup page is open, keep up with slskd starting, signing in or stopping.
+  const onSetup = current === 'setup';
+  const configured = managed.data?.configured ?? false;
+  useEffect(() => {
+    if (!onSetup || !configured) return;
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      managed.reload();
+      void test();
+    }, 6000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onSetup, configured]);
+
   const accept = async () => {
     setAccepting(true);
     try {
@@ -193,7 +231,7 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
     }
   };
 
-  const state: SoulseekState = { sources, slskd, connection, testing, test, downloads };
+  const state: SoulseekState = { sources, slskd, managed, connection, testing, test, downloads };
   const waiting = sources.data?.counts.review ?? 0;
   const activeCount = downloads.data?.active ?? 0;
 

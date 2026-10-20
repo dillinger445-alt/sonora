@@ -375,3 +375,227 @@
   display: flex;
   gap: 8px;
 }
+
+/* Set up Soulseek for me: one button, then a checklist. */
+
+.sk-oneclick {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 8px 0 20px;
+  padding: 16px 18px;
+  border: 1px solid var(--c-line);
+  border-left: 2px solid var(--c-lime-line);
+  border-radius: var(--r-dlg);
+  background: var(--c-well);
+}
+
+.sk-oneclick > div:first-child {
+  max-width: 68ch;
+}
+
+.sk-oneclick-title {
+  font-size: var(--fs-lg, 15px);
+  font-weight: var(--w-strong);
+}
+
+.sk-oneclick-lead {
+  margin-top: 6px;
+  color: var(--c-text-2);
+  line-height: var(--lh-prose);
+}
+
+.sk-oneclick-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sk-manual-link {
+  font-size: 12px;
+}
+
+.sk-setup-form .field {
+  margin-top: 10px;
+}
+
+.sk-setup-form .text-input {
+  width: 100%;
+}
+
+.sk-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+}
+
+.sk-path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sk-path-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sk-share {
+  margin-top: 12px;
+}
+
+.sk-share .sk-path-row {
+  margin-top: 6px;
+}
+
+.sk-warn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--c-amber-line);
+  border-radius: var(--r-ctl);
+  background: var(--c-amber-dim);
+  line-height: var(--lh-prose);
+}
+
+.sk-warn > svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--c-amber);
+}
+
+.sk-warn .btn {
+  margin-left: 4px;
+  vertical-align: baseline;
+}
+
+.sk-will-title {
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: var(--w-strong);
+  color: var(--c-text-2);
+}
+
+/* The steps happen in this order: numbered. */
+.sk-will {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  color: var(--c-text-2);
+  line-height: var(--lh-prose);
+}
+
+.sk-will li + li {
+  margin-top: 4px;
+}
+
+.sk-will li::marker {
+  color: var(--c-text-3);
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-num);
+  font-size: 11px;
+}
+
+.sk-note {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.sk-progress-panel {
+  margin: 8px 0 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-dlg);
+  background: var(--c-well);
+}
+
+.sk-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sk-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+  color: var(--c-text-2);
+}
+
+.sk-step > svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.sk-step.is-running,
+.sk-step.is-failed {
+  color: var(--c-text);
+}
+
+.sk-step.is-done {
+  color: var(--c-text-2);
+}
+
+.sk-step-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 6px;
+}
+
+.sk-step-meter .progress {
+  width: 160px;
+}
+
+.sk-done {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--c-line-faint);
+}
+
+.sk-done > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sk-step-error {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--c-line-faint);
+  line-height: var(--lh-prose);
+}
+
+.sk-step-error .discogs-form,
+.sk-inline-act {
+  margin-top: 8px;
+}
+
+.sk-inline-act {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sk-file-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .sk-fields {
+    grid-template-columns: 1fr;
+  }
+}

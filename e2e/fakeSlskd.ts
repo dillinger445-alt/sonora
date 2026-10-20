@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -45,8 +46,33 @@ export interface FakeSlskd {
 
 const directory = (filename: string) => filename.slice(0, Math.max(filename.lastIndexOf('\\'), 0));
 
-export async function startFakeSlskd(shared: SharedFile[]): Promise<FakeSlskd> {
+/**
+ * With `config`, the fake behaves like the slskd SONORA set up: it takes the
+ * API key from that slskd.yml (as slskd does) and signs in only when the
+ * Soulseek password there is "right".
+ */
+export interface FakeOptions {
+  port?: number;
+  config?: string;
+}
+
+/** A value from the slskd.yml SONORA writes (single-quoted scalars). */
+function yamlValue(text: string, pattern: RegExp): string | null {
+  const m = pattern.exec(text);
+  return m?.[1] != null ? m[1].replace(/''/g, "'") : null;
+}
+
+export async function startFakeSlskd(shared: SharedFile[], options: FakeOptions = {}): Promise<FakeSlskd> {
   const fake = { key: '', shared, searches: [] as string[], transfers: [] as FakeTransfer[] };
+  const fromConfig = () => {
+    if (!options.config || !existsSync(options.config)) return { key: '', password: null as string | null, username: null as string | null };
+    const text = readFileSync(options.config, 'utf8');
+    return {
+      key: yamlValue(text, /^ {8}key: '((?:[^']|'')*)'/m) ?? '',
+      password: yamlValue(text, /^soulseek:\n {2}username: '(?:[^']|'')*'\n {2}password: '((?:[^']|'')*)'/m),
+      username: yamlValue(text, /^soulseek:\n {2}username: '((?:[^']|'')*)'/m),
+    };
+  };
   const started = new Map<string, { text: string; at: number }>();
 
   const send = (res: ServerResponse, status: number, body?: unknown) => {
@@ -64,16 +90,19 @@ export async function startFakeSlskd(shared: SharedFile[]): Promise<FakeSlskd> {
   const server = createServer((req, res) => {
     void (async () => {
       const body = await read(req);
-      if (!fake.key || req.headers['x-api-key'] !== fake.key) return send(res, 401);
+      const cfg = fromConfig();
+      const key = options.config ? cfg.key : fake.key;
+      if (!key || req.headers['x-api-key'] !== key) return send(res, 401);
       const url = new URL(req.url ?? '/', 'http://fake');
       const path = url.pathname.replace(/^\/api\/v0\//, '');
       const method = req.method ?? 'GET';
 
       if (method === 'GET' && path === 'application') {
+        const signedIn = !options.config || cfg.password === 'right';
         return send(res, 200, {
           version: { current: '0.26.1' },
-          server: { state: 'Connected, LoggedIn', isConnected: true, isLoggedIn: true },
-          user: { username: 'e2e-dj' },
+          server: signedIn ? { state: 'Connected, LoggedIn', isConnected: true, isLoggedIn: true } : { state: 'Disconnected', isConnected: false, isLoggedIn: false },
+          user: { username: options.config ? cfg.username : 'e2e-dj' },
           shares: { directories: 2, files: 40 },
         });
       }
@@ -168,7 +197,7 @@ export async function startFakeSlskd(shared: SharedFile[]): Promise<FakeSlskd> {
       return send(res, 404);
     })();
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
   return Object.assign(fake, {
     url: `http://127.0.0.1:${port}`,

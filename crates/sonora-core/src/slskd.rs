@@ -689,6 +689,12 @@ impl Slskd {
         self.call(app, "DELETE", &format!("transfers/downloads/{}/{id}", net::path_segment(username)), None).map(|_| ())
     }
 
+    /// Asks slskd to connect to Soulseek now (it tries again by itself, but
+    /// waits up to five minutes between tries).
+    pub fn connect(&self, app: &App) -> Result<(), SlskdError> {
+        self.call(app, "PUT", "server", None).map(|_| ())
+    }
+
     /// Takes finished downloads off slskd's list. The files stay where they are.
     pub fn clear_finished(&self, app: &App) -> Result<(), SlskdError> {
         self.call(app, "DELETE", "transfers/downloads/all/completed", None).map(|_| ())

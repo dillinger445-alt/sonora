@@ -24,10 +24,13 @@ pub mod playback;
 pub mod playlists;
 pub mod secrets;
 pub mod settings;
+pub mod sha256;
 pub mod slskd;
+pub mod slskd_service;
 pub mod sources;
 pub mod trash;
 pub mod usb;
+pub mod yaml;
 
 pub use api::ApiError;
 pub use app::{App, AppConfig, CoreError};

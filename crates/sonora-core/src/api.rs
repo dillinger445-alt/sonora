@@ -721,7 +721,82 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             app.slskd.set_key(app, Some(&key))?;
             Ok(obj! { "key" => key })
         }
-        "slskd.test" => Ok(app.slskd.test(app)?),
+        "slskd.test" => match app.slskd.test(app) {
+            // SONORA's own slskd has a different key in slskd.yml (the setup
+            // ran twice, say): SONORA takes the one slskd uses and asks again.
+            Err(e) if e.code == "slskd_unauthorized" && app.service.adopt_key(app) => Ok(app.slskd.test(app)?),
+            r => Ok(r?),
+        },
+        "slskd.reconnect" => {
+            app.slskd.connect(app)?;
+            Ok(obj! { "ok" => true })
+        }
+
+        // ------------------------------- slskd set up by SONORA (slskd_service.rs)
+        // macOS: SONORA downloads slskd, writes its settings, runs it with a
+        // launch agent and keeps it healthy. The Soulseek password only
+        // passes through to slskd.yml; it is never logged or returned.
+        "slskd.managed" => {
+            if p.get("ensure").and_then(Value::as_bool) == Some(true) {
+                if let Err(e) = app.service.ensure(app) {
+                    crate::logging::log_fields("warn", "slskd", "could not start slskd", obj! { "error" => e });
+                }
+            }
+            Ok(app.service.status(app))
+        }
+        "slskd.setupPlan" => Ok(app.service.plan(app)),
+        "slskd.setupStart" => {
+            let req = crate::slskd_service::Request::from_json(p).map_err(ApiError::invalid)?;
+            app.service.start(app, req).map_err(|e| ApiError::new("setup_failed", e))
+        }
+        "slskd.setupRetry" => {
+            let password = p.get("password").and_then(Value::as_str).map(str::to_string);
+            app.service.retry(app, password).map_err(|e| ApiError::new("setup_failed", e))
+        }
+        "slskd.setupCancel" => {
+            app.service.cancel();
+            Ok(obj! { "ok" => true })
+        }
+        "slskd.setupDiscard" => app.service.discard(app).map_err(|e| ApiError::new("setup_failed", e)),
+        "slskd.service" => {
+            let action = p.req_str("action").map_err(|e| ApiError::invalid(e.to_string()))?;
+            if !["start", "stop", "restart"].contains(&action) {
+                return Err(ApiError::invalid("action must be start, stop or restart"));
+            }
+            app.service.action(app, action).map_err(|e| ApiError::new("slskd_service", e))?;
+            Ok(app.service.status(app))
+        }
+        "slskd.background" => {
+            let on = p.req_bool("enabled").map_err(|e| ApiError::invalid(e.to_string()))?;
+            app.service.set_background(app, on).map_err(|e| ApiError::new("slskd_service", e))?;
+            Ok(app.service.status(app))
+        }
+        "slskd.removeAgent" => {
+            let r = app.service.remove_agent(app).map_err(|e| ApiError::new("slskd_service", e))?;
+            let mut v = app.service.status(app);
+            v.set("kept", r.get("kept").cloned().unwrap_or(Value::Null));
+            Ok(v)
+        }
+        "slskd.repair" => {
+            app.service.repair(app).map_err(|e| ApiError::new("slskd_service", e))?;
+            Ok(app.service.status(app))
+        }
+        "slskd.password" => {
+            let pw = p.req_str("password").map_err(|e| ApiError::invalid(e.to_string()))?;
+            app.service.change_password(app, pw).map_err(|e| ApiError::new("slskd_service", e))?;
+            Ok(app.service.status(app))
+        }
+        "slskd.stopOther" => {
+            let pid = p.req_i64("pid").map_err(|e| ApiError::invalid(e.to_string()))?;
+            let pid = u32::try_from(pid).map_err(|_| ApiError::invalid("pid must be a process id"))?;
+            app.service.stop_other(app, pid).map_err(|e| ApiError::new("slskd_service", e))?;
+            Ok(app.service.status(app))
+        }
+        "slskd.quitSoulseekQt" => {
+            app.service.quit_soulseek_qt().map_err(|e| ApiError::new("slskd_service", e))?;
+            Ok(app.service.status(app))
+        }
+        "slskd.webPassword" => Ok(obj! { "password" => app.service.web_password(app) }),
         "slskd.search" => {
             if crate::sources::accepted_at(&app.db.read()).is_none() {
                 return Err(ApiError::new("not_accepted", "Read and accept the notice on the Soulseek page before searching."));
