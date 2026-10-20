@@ -347,7 +347,9 @@ fn a_file_that_stays_keeps_its_place_in_the_scan() {
 #[test]
 fn nested_folders_keep_removed_tracks_out() {
     let e = env("nested");
-    let techno = e.music.join("Sets/Techno");
+    // Native separators: on Windows "Sets/Techno" would make paths that differ
+    // from the ones a walk of the outer folder finds.
+    let techno = e.music.join("Sets").join("Techno");
     write(&e.music.join("top.wav"), 61, 8.0);
     write(&techno.join("one.wav"), 62, 8.0);
     write(&techno.join("two.wav"), 63, 8.0);
