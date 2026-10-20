@@ -78,7 +78,10 @@ The building blocks are in `src/components/`:
   from), and `PlayerBar` (transport, waveform seek bar as a slider, volume).
 - **Marks**: `ScoreMeter` (20-segment ladder), `ScoreCell` (number plus a
   10-segment mini ladder), `EvidenceMark`, `SeverityIcon`, `FlagList`,
-  `StatusMark`.
+  `StatusMark`. On the Soulseek page, each folder of results carries a
+  five-bar availability ladder, rising like the wordmark's bars: lime when
+  the person has a free upload slot (more bars for a faster connection),
+  amber when the download would wait in a queue.
 - **Tables and layout**: `TrackTable` (virtualized and paged from the core;
   columns drop by priority as space shrinks), `Sidebar`, `StatusBar`,
   `ViewHeader`, `Section`, `EmptyState`, `ErrorState`.
