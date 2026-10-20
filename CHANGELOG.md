@@ -25,9 +25,10 @@ written for the people using SONORA.
   When it is not signed in, SONORA says why (a wrong password, the same
   account signed in in the Soulseek app, the Soulseek server out of reach)
   with one fix for each. **Repair** puts SONORA's key back if slskd's
-  settings lost it. After your Mac wakes from sleep, slskd signs in again
-  at once. **Turn off** stops it and removes it from login, keeping its
-  settings and your downloads.
+  settings lost it. When your Mac wakes from sleep with SONORA open, slskd
+  signs in again at once. **Stop** keeps it stopped until you start it;
+  **Turn off** also removes it from login, keeping its settings and your
+  downloads.
 - **Listen before you download**: ▶ beside a FLAC, WAV or AIFF result plays
   it in SONORA's player while it arrives, starting within seconds. A preview
   fetches only a minute or so ahead of what plays, stops fetching when you
