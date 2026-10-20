@@ -98,7 +98,7 @@ opens the file manager on the machine it runs on.
 npm run test:rust               # Rust tests; FFmpeg-based tests skip when FFmpeg is missing
 npm run test:unit               # interface unit tests (node --test)
 npm run typecheck
-npx playwright install chromium # once
+npx playwright install chromium webkit # once
 npm run build                   # the end-to-end tests run against dist/
 npm run test:e2e                # Playwright, against the dev bridge and the real core
 ```

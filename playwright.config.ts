@@ -21,7 +21,13 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } }],
+  projects: [
+    { name: 'chromium', testMatch: /sonora\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
+    // The macOS app shows the interface in WebKit (Safari's engine), which
+    // lays some things out differently from Chromium. Checked there after the
+    // main suite, in the state it leaves.
+    { name: 'webkit', testMatch: /webkit\.spec\.ts/, dependencies: ['chromium'], use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 900 } } },
+  ],
   webServer: {
     command: `node e2e/serve.mjs ${BRIDGE_PORT}`,
     url: `http://127.0.0.1:${BRIDGE_PORT}/api/health`,
