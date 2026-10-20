@@ -138,7 +138,7 @@ fn parse_streaminfo(b: &[u8; 34], h: &mut FlacHeader) -> Result<(), AnalysisErro
     Ok(())
 }
 
-fn read_metadata(f: &mut File, file_len: u64) -> Result<FlacHeader, AnalysisError> {
+fn read_metadata<R: Read + Seek>(f: &mut R, file_len: u64) -> Result<FlacHeader, AnalysisError> {
     let mut h = FlacHeader::default();
     let mut head = [0u8; 10];
     let n = read_up_to(f, &mut head)?;
@@ -745,7 +745,7 @@ fn restore_lpc(s: &mut [i64], coefs: &[i64], shift: u32) {
 // Streaming source
 
 pub struct FlacSource {
-    file: File,
+    file: Box<dyn super::ReadSeek>,
     header: FlacHeader,
     info: StreamInfo,
     params: StreamParams,
@@ -775,8 +775,15 @@ pub struct FlacSource {
 impl FlacSource {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let io_err = |e: std::io::Error| OpenError::Failed(AnalysisError::Io(e.to_string()));
-        let mut file = File::open(path).map_err(io_err)?;
+        let file = File::open(path).map_err(io_err)?;
         let len = file.metadata().map_err(io_err)?.len();
+        Self::open_reader(Box::new(file), len)
+    }
+
+    /// Decodes from any reader; `len` is the whole stream's length (a
+    /// reader of audio still arriving waits for the bytes it is asked for).
+    pub fn open_reader(mut file: Box<dyn super::ReadSeek>, len: u64) -> Result<Self, OpenError> {
+        let io_err = |e: std::io::Error| OpenError::Failed(AnalysisError::Io(e.to_string()));
         let header = read_metadata(&mut file, len).map_err(OpenError::Failed)?;
         if header.bits_per_sample < 4 {
             return Err(OpenError::NotNative(format!("{}-bit FLAC is not supported natively", header.bits_per_sample)));

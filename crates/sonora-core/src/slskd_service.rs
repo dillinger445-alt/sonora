@@ -582,7 +582,7 @@ impl Layout {
                     .collect()
             })
             .unwrap_or_default();
-        v.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+        v.sort_by_key(|ver| std::cmp::Reverse(version_key(ver)));
         v
     }
 
@@ -1810,20 +1810,22 @@ mod tests {
 
     #[test]
     fn launch_agent_runs_slskd_with_its_folder() {
-        let layout = Layout::new(Path::new("/Users/me/Library/Application Support/app.sonora.analyzer"), Some(PathBuf::from("/Users/me/Library/LaunchAgents")));
+        let home = std::env::temp_dir().join("me");
+        let layout = Layout::new(&home.join("Library").join("Application Support").join("app.sonora.analyzer"), Some(home.join("Library").join("LaunchAgents")));
         let p = plist(&layout, "0.26.1", true);
+        let bin = layout.root.join("app-0.26.1").join("slskd");
         assert!(p.contains("<string>app.sonora.analyzer.slskd</string>"));
-        assert!(p.contains("<string>/Users/me/Library/Application Support/app.sonora.analyzer/slskd/app-0.26.1/slskd</string>"));
-        assert!(p.contains("<string>--app-dir</string>\n\t\t<string>/Users/me/Library/Application Support/app.sonora.analyzer/slskd/data</string>"));
+        assert!(p.contains(&format!("<string>{}</string>", xml(&bin.to_string_lossy()))));
+        assert!(p.contains(&format!("<string>--app-dir</string>\n\t\t<string>{}</string>", xml(&layout.root.join("data").to_string_lossy()))));
         assert!(p.contains("<key>RunAtLoad</key>\n\t<true/>"));
         assert!(p.contains("<key>SuccessfulExit</key>\n\t\t<false/>"));
         assert!(p.contains("<string>/dev/null</string>"));
-        assert_eq!(layout.plist().unwrap(), PathBuf::from("/Users/me/Library/LaunchAgents/app.sonora.analyzer.slskd.plist"));
+        assert_eq!(layout.plist().unwrap(), home.join("Library").join("LaunchAgents").join("app.sonora.analyzer.slskd.plist"));
         let fg = plist(&layout, "0.26.1", false);
         assert!(fg.contains("<key>RunAtLoad</key>\n\t<false/>") && fg.contains("<key>KeepAlive</key>\n\t<false/>"));
         // Paths are escaped for XML.
-        let odd = Layout::new(Path::new("/tmp/a&b <c>"), Some(PathBuf::from("/tmp/agents")));
-        assert!(plist(&odd, "1.0", true).contains("/tmp/a&amp;b &lt;c&gt;/slskd/data"));
+        let odd = Layout::new(&home.join("a&b <c>"), Some(home.join("agents")));
+        assert!(plist(&odd, "1.0", true).contains("a&amp;b &lt;c&gt;"));
     }
 
     #[test]
@@ -1888,14 +1890,18 @@ mod tests {
 
     #[test]
     fn requests_are_checked() {
-        let ok = obj! { "username" => " dj ", "password" => "pw", "downloads" => "/Users/me/Music/Soulseek" };
+        let music = std::env::temp_dir().join("Music").join("Soulseek");
+        let dl = music.to_string_lossy().into_owned();
+        let adopt = std::env::temp_dir().join("slskd.yml").to_string_lossy().into_owned();
+        let ok = obj! { "username" => " dj ", "password" => "pw", "downloads" => dl.as_str() };
         let r = Request::from_json(&ok).unwrap();
         assert_eq!(r.username, "dj");
         assert_eq!(r.password.as_deref(), Some("pw"));
-        assert!(Request::from_json(&obj! { "password" => "pw", "downloads" => "/x" }).is_err());
-        assert!(Request::from_json(&obj! { "username" => "dj", "downloads" => "/x" }).is_err(), "a password, or settings to take it from");
-        assert!(Request::from_json(&obj! { "username" => "dj", "password" => "a\nb", "downloads" => "/x" }).is_err());
+        assert_eq!(r.downloads, music);
+        assert!(Request::from_json(&obj! { "password" => "pw", "downloads" => dl.as_str() }).is_err());
+        assert!(Request::from_json(&obj! { "username" => "dj", "downloads" => dl.as_str() }).is_err(), "a password, or settings to take it from");
+        assert!(Request::from_json(&obj! { "username" => "dj", "password" => "a\nb", "downloads" => dl.as_str() }).is_err());
         assert!(Request::from_json(&obj! { "username" => "dj", "password" => "pw", "downloads" => "relative/path" }).is_err());
-        assert!(Request::from_json(&obj! { "username" => "dj", "adopt" => "/Users/me/Desktop/slskd/data/slskd.yml", "downloads" => "/x" }).is_ok());
+        assert!(Request::from_json(&obj! { "username" => "dj", "adopt" => adopt.as_str(), "downloads" => dl.as_str() }).is_ok());
     }
 }

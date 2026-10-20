@@ -183,6 +183,11 @@ export function createTauriBridge(): Bridge {
       return convertFileSrc(prepared.stream, 'sonora');
     },
 
+    previewUrl(id: number): string {
+      // Served by the shell from what the core decoded so far (`p<id>`).
+      return convertFileSrc(`p${id}`, 'sonora');
+    },
+
     async onFileDrop(handlers: DropHandlers): Promise<() => void> {
       let hovering = false;
       const setHover = (over: boolean) => {

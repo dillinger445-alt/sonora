@@ -6,13 +6,15 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { LuLoaderCircle, LuPause, LuPlay, LuVolume2, LuVolumeX, LuX } from 'react-icons/lu';
-import { formatTimecode } from '../lib/format.ts';
+import { LuDownload, LuLoaderCircle, LuPause, LuPlay, LuSkipForward, LuVolume2, LuVolumeX, LuX } from 'react-icons/lu';
+import type { PreviewSession } from '../api/types.ts';
+import { formatTimecode, plural } from '../lib/format.ts';
 import { navigate } from '../lib/router.ts';
 import { decodeWaveform, type WaveformData } from '../lib/visuals.ts';
 import { useCore } from '../state/core.tsx';
 import { usePlaybackTime, usePlayer } from '../state/player.tsx';
-import { IconButton } from './Button.tsx';
+import { useToast } from '../state/toasts.tsx';
+import { Button, IconButton } from './Button.tsx';
 import { cssVar, setupCanvas, theme, useDevicePixelRatio } from '../charts/canvas.ts';
 import { BpmText, KeyBadge } from './DjMarks.tsx';
 
@@ -35,8 +37,8 @@ function drawOverview(c: HTMLCanvasElement, w: WaveformData | null, width: numbe
   }
 }
 
-/** Waveform seek bar; re-renders on every frame, so it stays small. */
-function SeekBar({ duration, wave, onSeek }: { duration: number; wave: WaveformData | null; onSeek: (t: number) => void }) {
+/** Waveform seek bar; re-renders on every frame, so it stays small. `arrived`: the share of a preview that can be played so far. */
+function SeekBar({ duration, wave, onSeek, arrived }: { duration: number; wave: WaveformData | null; onSeek: (t: number) => void; arrived?: number }) {
   const time = usePlaybackTime();
   const wrap = useRef<HTMLDivElement>(null);
   const base = useRef<HTMLCanvasElement>(null);
@@ -91,7 +93,7 @@ function SeekBar({ duration, wave, onSeek }: { duration: number; wave: WaveformD
       aria-valuemin={0}
       aria-valuemax={Math.round(duration)}
       aria-valuenow={Math.round(time)}
-      aria-valuetext={`${formatTimecode(time)} of ${formatTimecode(duration)}`}
+      aria-valuetext={`${formatTimecode(time)} of ${formatTimecode(duration)}${arrived != null && arrived < 1 ? `, ${formatTimecode(arrived * duration)} arrived` : ''}`}
       onKeyDown={onKey}
       onPointerDown={(e) => {
         dragging.current = true;
@@ -109,6 +111,7 @@ function SeekBar({ duration, wave, onSeek }: { duration: number; wave: WaveformD
       }}
     >
       <canvas ref={base} aria-hidden />
+      {arrived != null ? <div className="seek-arrived" style={{ width: `${Math.max(0, Math.min(1, arrived)) * 100}%` }} aria-hidden /> : null}
       <div className="seek-played" style={{ width: `${frac * 100}%` }} aria-hidden>
         <canvas ref={played} />
       </div>
@@ -127,6 +130,64 @@ function Clock({ duration }: { duration: number | null }) {
   );
 }
 
+/** Where a preview stands, in words. */
+export function previewWords(p: PreviewSession | null, username: string): string {
+  if (!p) return `Asking ${username}…`;
+  if (p.handedOver) return 'Downloading; it joins your library when it finishes';
+  if (p.followsDownload) return 'Playing along with the download';
+  if (p.limitReached) return 'The preview stops here: its cache is full';
+  if (p.endsEarly) return 'The transfer stopped, so the preview ends early';
+  switch (p.state) {
+    case 'connecting':
+      return `Asking ${username}…`;
+    case 'queued':
+      return p.queue != null ? `Number ${p.queue} in ${username}’s queue` : `Waiting in ${username}’s queue`;
+    case 'buffering':
+      return 'Buffering…';
+    case 'reconnecting':
+      return 'The connection dropped; asking again…';
+    case 'ready':
+      return p.transfer === 'complete' ? 'All of it has arrived' : p.transfer === 'paused' ? 'Enough has arrived for now' : 'Arriving as it plays';
+    default:
+      return '';
+  }
+}
+
+/** The player while a Soulseek preview is loaded: no analysis, a Download button, the next preview. */
+function PreviewControls() {
+  const { client } = useCore();
+  const toast = useToast();
+  const player = usePlayer();
+  const src = player.track?.preview;
+  const [asking, setAsking] = useState(false);
+  if (!src) return null;
+  const p = player.preview;
+  const download = async () => {
+    setAsking(true);
+    try {
+      const r = await client.slskdDownload(src.username, [{ filename: src.filename, size: src.size }]);
+      if (r.failed > 0) toast({ tone: 'warning', title: 'slskd did not queue it', body: 'It may be downloading already.' });
+      else toast({ tone: 'success', title: `Downloading ${src.name}`, body: 'It carries on from what the preview fetched, and joins your library when it finishes.' });
+    } catch (e) {
+      toast({ tone: 'error', title: 'slskd could not start the download', body: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setAsking(false);
+    }
+  };
+  return (
+    <span className="player-dj">
+      {!p?.handedOver && !p?.followsDownload ? (
+        <Button size="sm" icon={LuDownload} busy={asking} onClick={() => void download()}>
+          Download
+        </Button>
+      ) : null}
+      {player.queue.length > 0 ? (
+        <IconButton size="sm" icon={LuSkipForward} label={`Next preview: ${player.queue[0]?.name ?? ''}`} data-tip={`Next: ${player.queue[0]?.name ?? ''} (${plural(player.queue.length, 'in the queue', 'in the queue')})`} onClick={player.skipPreview} />
+      ) : null}
+    </span>
+  );
+}
+
 export function PlayerBar() {
   const { client, settings } = useCore();
   const player = usePlayer();
@@ -135,10 +196,10 @@ export function PlayerBar() {
   const [muted, setMuted] = useState<number | null>(null);
   const id = t?.id ?? null;
 
-  // The overview of the loaded track, from its stored analysis.
+  // The overview of the loaded track, from its stored analysis (previews have none).
   useEffect(() => {
     setWave(null);
-    if (id == null) return;
+    if (id == null || id < 0) return;
     let stale = false;
     client.track(id).then(
       (d) => {
@@ -155,9 +216,12 @@ export function PlayerBar() {
   const active = player.status === 'playing' || player.status === 'loading';
   const duration = player.duration ?? t.duration ?? null;
   const notation = settings?.keyNotation ?? 'camelot';
+  const preview = t.preview;
+  const p = player.preview;
+  const arrived = preview && p && duration ? (p.transfer === 'complete' ? 1 : (p.decodedSeconds ?? 0) / duration) : undefined;
 
   return (
-    <section className={`player ${player.status === 'error' ? 'has-error' : ''}`} aria-label="Player">
+    <section className={`player ${player.status === 'error' ? 'has-error' : ''} ${preview ? 'is-preview' : ''}`} aria-label="Player">
       <button
         type="button"
         className={`player-play ${active ? 'is-on' : ''}`}
@@ -168,12 +232,25 @@ export function PlayerBar() {
         {player.status === 'loading' ? <LuLoaderCircle className="spin" aria-hidden /> : active ? <LuPause aria-hidden /> : <LuPlay aria-hidden />}
       </button>
       <div className="player-meta">
-        <button type="button" className="player-title" onClick={() => navigate({ view: 'track', id: t.id })} data-tip="Open the full analysis">
-          {t.displayTitle}
-        </button>
+        {preview ? (
+          <span className="player-title is-static" title={preview.filename}>
+            {t.displayTitle}
+          </span>
+        ) : (
+          <button type="button" className="player-title" onClick={() => navigate({ view: 'track', id: t.id })} data-tip="Open the full analysis">
+            {t.displayTitle}
+          </button>
+        )}
         {player.status === 'error' ? (
           <span className="player-sub t-red" role="alert">
             {player.error ?? 'This file cannot be played.'}
+          </span>
+        ) : preview ? (
+          <span className="player-sub faint" aria-live="polite">
+            <span className="player-badge" data-tip="A preview plays while it arrives. It is not checked, kept or added to your library.">
+              Preview
+            </span>{' '}
+            {preview.username} · {previewWords(p, preview.username)}
           </span>
         ) : (
           <span className="player-sub faint">
@@ -186,9 +263,10 @@ export function PlayerBar() {
           </span>
         )}
       </div>
-      {duration != null && duration > 0 ? <SeekBar duration={duration} wave={wave} onSeek={player.seek} /> : <div className="seek is-empty" />}
+      {duration != null && duration > 0 ? <SeekBar duration={duration} wave={wave} onSeek={player.seek} arrived={arrived} /> : <div className="seek is-empty" />}
       <Clock duration={duration} />
-      <span className="player-dj">
+      {preview ? <PreviewControls /> : null}
+      <span className={`player-dj ${preview ? 'is-hidden' : ''}`}>
         <BpmText bpm={t.djBpm} />
         {t.djBpm != null ? <span className="faint player-unit">BPM</span> : null}
         <KeyBadge keyId={t.djKey} notation={notation} />

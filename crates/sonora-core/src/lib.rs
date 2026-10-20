@@ -22,6 +22,7 @@ pub mod model;
 pub mod net;
 pub mod playback;
 pub mod playlists;
+pub mod preview;
 pub mod secrets;
 pub mod settings;
 pub mod sha256;

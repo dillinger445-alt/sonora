@@ -6,16 +6,82 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LuCheck, LuCircleStop, LuDownload, LuSearch } from 'react-icons/lu';
+import { LuCheck, LuCircleStop, LuDownload, LuListPlus, LuLoaderCircle, LuPause, LuPlay, LuSearch, LuX } from 'react-icons/lu';
 import type { FoundFile, FoundFolder, SearchResults, Transfer } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
-import { Segmented } from '../components/Controls.tsx';
+import { previewWords } from '../components/PlayerBar.tsx';
+import { Checkbox, Segmented } from '../components/Controls.tsx';
 import { EmptyState } from '../components/Layout.tsx';
 import { DASH, formatBytes, formatCount, formatDuration, formatKbps, formatRateKhz, plural } from '../lib/format.ts';
 import { navigate } from '../lib/router.ts';
 import { useCore } from '../state/core.tsx';
+import { previewKey, usePlayer, type PreviewSource } from '../state/player.tsx';
 import { useToast } from '../state/toasts.tsx';
 import type { SoulseekState } from './Soulseek.tsx';
+
+/** Formats a preview can be played of (decoded as they arrive). */
+const PREVIEWABLE = new Set(['flac', 'wav', 'wave', 'aif', 'aiff', 'aifc']);
+
+/** Why a file cannot be previewed, or null when it can. */
+function previewBlock(x: FoundFile, local: boolean): string | null {
+  if (!local) return 'Previews need slskd on this computer.';
+  if (x.size <= 0) return 'Its size is unknown, so it cannot be previewed.';
+  if (PREVIEWABLE.has(x.ext)) return null;
+  if (x.ext === 'm4a' || x.ext === 'mp4' || x.ext === 'alac') return 'M4A files keep what a player needs at their end, so they cannot be played before they arrive whole.';
+  return `${x.ext ? x.ext.toUpperCase() : 'This file'} cannot be previewed. Previews are for FLAC, WAV and AIFF.`;
+}
+
+function sourceOf(f: FoundFolder, x: FoundFile): PreviewSource {
+  return { username: f.username, filename: x.filename, name: x.name, folder: f.name, size: x.size, length: x.length };
+}
+
+/** The Soulseek files to listen to next, one after another. */
+function PreviewQueue() {
+  const player = usePlayer();
+  const q = player.queue;
+  if (q.length === 0) return null;
+  const listening = player.track?.preview != null;
+  return (
+    <section className="sk-queue" aria-label="Preview queue">
+      <div className="sk-section-head">
+        <h3 className="sk-section-title">
+          Up next <span className="num faint">{formatCount(q.length)}</span>
+        </h3>
+        <label className="check-row sk-queue-advance">
+          <Checkbox checked={player.autoAdvance} onChange={(e) => player.setAutoAdvance(e.target.checked)} />
+          <span>Play the next one when a preview ends</span>
+        </label>
+        {!listening ? (
+          <Button size="sm" variant="primary" icon={LuPlay} onClick={player.skipPreview}>
+            Play the queue
+          </Button>
+        ) : null}
+        <Button size="sm" variant="ghost" onClick={player.clearQueue}>
+          Clear
+        </Button>
+      </div>
+      <ol className="sk-queue-list">
+        {q.map((x, i) => (
+          <li key={previewKey(x)}>
+            <span className="num faint sk-queue-n">{i + 1}</span>
+            <span className="ellipsis" title={x.filename}>
+              {x.name}
+            </span>
+            <span className="faint ellipsis">{x.username}</span>
+            <span className="sk-queue-act">
+              {i > 0 ? (
+                <Button size="sm" variant="ghost" onClick={() => player.playPreviewNext(x)}>
+                  Play next
+                </Button>
+              ) : null}
+              <IconButton size="sm" icon={LuX} label={`Take ${x.name} out of the queue`} onClick={() => player.removeFromQueue(x)} />
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
 
 /** The search on screen, kept while the person looks at other pages. */
 let remembered: { id: string; text: string; lossless: boolean } | null = null;
@@ -90,12 +156,18 @@ function FolderBlock({
   transfers,
   onDownload,
   busy,
+  local,
 }: {
   f: FoundFolder;
   transfers: Map<string, Transfer>;
   onDownload: (f: FoundFolder, files: FoundFile[]) => void;
   busy: boolean;
+  /** slskd is on this computer (previews need it). */
+  local: boolean;
 }) {
+  const player = usePlayer();
+  const current = player.track?.preview ? previewKey(player.track.preview) : null;
+  const queued = new Set(player.queue.map(previewKey));
   const wanted = f.files.filter((x) => {
     const t = transfers.get(fileKey(f.username, x.filename));
     return !x.inLibrary && (!t || t.state === 'failed' || t.state === 'cancelled');
@@ -134,6 +206,7 @@ function FolderBlock({
       </header>
       <table className="list-table sk-files">
         <colgroup>
+          <col className="c-play" />
           <col className="c-name" />
           <col className="c-fmt" />
           <col className="c-quality" />
@@ -143,6 +216,7 @@ function FolderBlock({
         </colgroup>
         <thead className="visually-hidden">
           <tr>
+            <th>Preview</th>
             <th>File</th>
             <th>Format</th>
             <th>Reported quality</th>
@@ -154,10 +228,40 @@ function FolderBlock({
         <tbody>
           {f.files.map((x) => {
             const t = transfers.get(fileKey(f.username, x.filename));
+            const src = sourceOf(f, x);
+            const key = previewKey(src);
+            const blocked = previewBlock(x, local);
+            const isCurrent = current === key;
+            const playing = isCurrent && (player.status === 'playing' || player.status === 'loading');
+            const loading = isCurrent && player.status === 'loading';
+            const words = isCurrent
+              ? player.status === 'error'
+                ? (player.error ?? 'Playback failed')
+                : player.status === 'playing'
+                  ? 'Playing'
+                  : player.status === 'paused' && player.preview?.ready
+                    ? 'Paused'
+                    : previewWords(player.preview, f.username)
+              : null;
             return (
-              <tr key={x.filename}>
-                <td className="ellipsis selectable" title={x.filename}>
-                  {x.name}
+              <tr key={x.filename} className={isCurrent ? 'is-previewing' : undefined}>
+                <td className="sk-play">
+                  <IconButton
+                    size="sm"
+                    icon={loading ? LuLoaderCircle : playing ? LuPause : LuPlay}
+                    className={`sk-play-btn ${isCurrent ? 'is-current' : ''} ${loading ? 'is-loading' : ''}`}
+                    label={blocked ?? (playing ? `Pause the preview of ${x.name}` : `Preview ${x.name}`)}
+                    disabled={blocked != null}
+                    onClick={() => player.togglePreview(src)}
+                  />
+                </td>
+                <td className="sk-name-cell" title={x.filename}>
+                  <span className="ellipsis selectable">{x.name}</span>
+                  {words ? (
+                    <span className={`sk-pv-state ${isCurrent && player.status === 'error' ? 't-amber' : 'faint'}`} aria-live="polite">
+                      {words}
+                    </span>
+                  ) : null}
                 </td>
                 <td className={x.lossless ? 'sk-fmt' : 'sk-fmt faint'}>{x.ext.toUpperCase() || DASH}</td>
                 <td className="num faint">{reported(x)}</td>
@@ -173,6 +277,15 @@ function FolderBlock({
                   ) : (
                     <IconButton size="sm" icon={LuDownload} label={`Download ${x.name}`} disabled={busy} onClick={() => onDownload(f, [x])} />
                   )}
+                  {blocked == null && !isCurrent ? (
+                    <IconButton
+                      size="sm"
+                      icon={LuListPlus}
+                      label={queued.has(key) ? `${x.name} is in the preview queue` : `Add ${x.name} to the preview queue`}
+                      disabled={queued.has(key)}
+                      onClick={() => player.enqueuePreview(src)}
+                    />
+                  ) : null}
                 </td>
               </tr>
             );
@@ -369,10 +482,21 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
 
       {search && results && folders.length > 0 ? (
         <>
-          <p className="sk-unverified faint">Formats, quality and sizes are what other people’s clients report. SONORA checks every file when it arrives.</p>
+          <p className="sk-unverified faint">
+            Formats, quality and sizes are what other people’s clients report. SONORA checks every file when it arrives. A preview plays a file while it arrives, from
+            someone else’s share: it is not checked, kept or added to your library, and the same rules apply to it as to a download.
+          </p>
+          <PreviewQueue />
           <div className="sk-results">
             {folders.map((f) => (
-              <FolderBlock key={`${f.username}\n${f.directory}`} f={f} transfers={transfers} onDownload={download} busy={asking.has(`${f.username}\n${f.directory}`)} />
+              <FolderBlock
+                key={`${f.username}\n${f.directory}`}
+                f={f}
+                transfers={transfers}
+                onDownload={download}
+                busy={asking.has(`${f.username}\n${f.directory}`)}
+                local={state.slskd.data?.local ?? false}
+              />
             ))}
           </div>
         </>

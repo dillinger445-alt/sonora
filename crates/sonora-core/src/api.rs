@@ -832,8 +832,40 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                 let size = f.get("size").and_then(Value::as_i64).filter(|s| *s >= 0).ok_or_else(|| ApiError::invalid("each file needs its size"))?;
                 list.push((name.to_string(), size));
             }
+            // Files being previewed: their preview hands over to the download,
+            // which resumes from what the preview already fetched.
+            let names: Vec<String> = list.iter().map(|(f, _)| f.clone()).collect();
+            app.previews.hand_over(app, username, &names);
             Ok(app.slskd.download(app, username, &list)?)
         }
+
+        // ---------------------------------------- previews (preview.rs)
+        // Listening to a Soulseek file before downloading it: never added to
+        // the library, never kept.
+        "preview.start" => {
+            if crate::sources::accepted_at(&app.db.read()).is_none() {
+                return Err(ApiError::new("not_accepted", "Read and accept the notice on the Soulseek page before listening."));
+            }
+            let username = p.get("username").and_then(Value::as_str).filter(|u| !u.trim().is_empty()).ok_or_else(|| ApiError::invalid("username must be a Soulseek user name"))?;
+            let filename = p.get("filename").and_then(Value::as_str).filter(|f| !f.is_empty()).ok_or_else(|| ApiError::invalid("filename must be the file's path"))?;
+            let size = p.get("size").and_then(Value::as_i64).filter(|s| *s >= 0).ok_or_else(|| ApiError::invalid("size must be the file's size"))?;
+            let length = p.get("length").and_then(Value::as_f64);
+            Ok(app.previews.start(app, username, filename, size as u64, length)?)
+        }
+        "preview.status" => {
+            let id = id_param(p, "id")?;
+            app.previews.get(id as u64).map(|s| s.to_json()).ok_or_else(|| ApiError::not_found("That preview ended."))
+        }
+        "preview.position" => {
+            let id = id_param(p, "id")?;
+            let seconds = p.get("seconds").and_then(Value::as_f64).ok_or_else(|| ApiError::invalid("seconds must be a number"))?;
+            Ok(obj! { "ok" => app.previews.position(id as u64, seconds) })
+        }
+        "preview.stop" => {
+            let id = id_param(p, "id")?;
+            Ok(obj! { "ok" => app.previews.stop(app, id as u64) })
+        }
+        "preview.list" => Ok(Value::Array(app.previews.list())),
         "slskd.downloads" => Ok(app.slskd.downloads(app)?),
         "slskd.cancel" => {
             let username = p.get("username").and_then(Value::as_str).ok_or_else(|| ApiError::invalid("username must be a Soulseek user name"))?;

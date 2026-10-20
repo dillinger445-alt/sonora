@@ -27,6 +27,7 @@ import type {
   PlaylistKind,
   PlaylistNode,
   PreparedPlayback,
+  PreviewSession,
   QueryResult,
   ScanItemFilter,
   ScanItemRow,
@@ -198,6 +199,13 @@ export class Client {
   slskdStopOther = (pid: number) => this.call<ManagedSlskd>('slskd.stopOther', { pid });
   slskdQuitSoulseekQt = () => this.call<ManagedSlskd>('slskd.quitSoulseekQt');
   slskdWebPassword = () => this.call<{ password: string | null }>('slskd.webPassword');
+
+  // Previews: listening to a Soulseek file before downloading it.
+  previewStart = (f: { username: string; filename: string; size: number; length: number | null }) => this.call<PreviewSession>('preview.start', f);
+  previewStatus = (id: number) => this.call<PreviewSession>('preview.status', { id });
+  /** How far the player got (the preview reads ahead from there). */
+  previewPosition = (id: number, seconds: number) => this.call<{ ok: boolean }>('preview.position', { id, seconds });
+  previewStop = (id: number) => this.call<{ ok: boolean }>('preview.stop', { id });
 
   // Folders
   folders = () => this.call<Folder[]>('folders.list');

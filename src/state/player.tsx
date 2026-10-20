@@ -6,6 +6,13 @@
  * bridge turns that path into a URL the audio element may load. Nothing
  * leaves the computer.
  *
+ * The same player plays Soulseek previews: a file from someone else's share,
+ * listened to while it arrives. The core asks slskd for it, decodes what
+ * comes in, and serves it to this element; the player starts once a couple
+ * of seconds are there, tells the core how far it got (so the core reads
+ * ahead only so far), and seeks only within what has arrived. A preview is
+ * never added to the library. Previews can be queued, one after another.
+ *
  * Position updates are published through `usePlaybackTime`, which only the
  * small components that draw a playhead subscribe to, so the rest of the
  * interface does not re-render while a track plays.
@@ -13,13 +20,25 @@
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { CoreError } from '../api/bridge.ts';
-import type { TrackRow } from '../api/types.ts';
+import type { PreviewSession, TrackRow } from '../api/types.ts';
 import { readPref, writePref } from '../lib/persist.ts';
 import { useCore, useCoreEvent } from './core.tsx';
 import { throttle } from './emitter.ts';
 
-/** What the player needs to know about a track. */
-export type PlayableTrack = Pick<TrackRow, 'id' | 'displayTitle' | 'artist' | 'duration' | 'djBpm' | 'djKey'>;
+/** A Soulseek file to listen to before downloading it. */
+export interface PreviewSource {
+  username: string;
+  /** The full path on the other user's computer. */
+  filename: string;
+  name: string;
+  folder: string;
+  size: number;
+  /** Seconds, as the other user's client reports. */
+  length: number | null;
+}
+
+/** What the player needs to know about a track. A preview carries its source. */
+export type PlayableTrack = Pick<TrackRow, 'id' | 'displayTitle' | 'artist' | 'duration' | 'djBpm' | 'djKey'> & { preview?: PreviewSource };
 
 export type PlayerStatus = 'loading' | 'playing' | 'paused' | 'error';
 
@@ -31,6 +50,8 @@ export interface PlayerState {
   transcoded: boolean;
   /** Duration reported by the audio element (falls back to the library's). */
   duration: number | null;
+  /** The preview behind the loaded track, as the core last described it. */
+  preview: PreviewSession | null;
 }
 
 export interface Player extends PlayerState {
@@ -47,6 +68,20 @@ export interface Player extends PlayerState {
   setVolume: (v: number) => void;
   /** Whether `id` is the loaded track, and playing (or about to). */
   isPlaying: (id: number) => boolean;
+  /** Listens to a Soulseek file (or pauses it when it is the one playing). */
+  togglePreview: (src: PreviewSource) => void;
+  /** Soulseek files to listen to one after another. Nothing is downloaded until asked. */
+  queue: PreviewSource[];
+  enqueuePreview: (src: PreviewSource) => void;
+  /** Puts `src` first in the queue. */
+  playPreviewNext: (src: PreviewSource) => void;
+  removeFromQueue: (src: PreviewSource) => void;
+  clearQueue: () => void;
+  /** Plays the first preview in the queue. */
+  skipPreview: () => void;
+  /** Play the next queued preview when one ends. */
+  autoAdvance: boolean;
+  setAutoAdvance: (v: boolean) => void;
 }
 
 interface TimeSource {
@@ -69,6 +104,23 @@ export function usePlaybackTime(): number {
   return useSyncExternalStore(src.subscribe, src.get, src.get);
 }
 
+/** One key per file on Soulseek. */
+export const previewKey = (src: Pick<PreviewSource, 'username' | 'filename'>) => `${src.username}\n${src.filename}`;
+
+/** A preview's place among tracks: a negative id (library tracks are positive), the same for the same file. */
+export function previewTrackId(src: Pick<PreviewSource, 'username' | 'filename'>): number {
+  let h = 0x811c9dc5;
+  for (const ch of previewKey(src)) {
+    h ^= ch.codePointAt(0) ?? 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return -(h + 1);
+}
+
+export function previewTrack(src: PreviewSource): PlayableTrack {
+  return { id: previewTrackId(src), displayTitle: src.name, artist: src.username, duration: src.length, djBpm: null, djKey: null, preview: src };
+}
+
 /** Formats the web view can decode, by the names `playback.prepare` uses. */
 function playableKinds(audio: HTMLAudioElement): string[] {
   const probes: [string, string][] = [
@@ -88,6 +140,7 @@ function playableKinds(audio: HTMLAudioElement): string[] {
 }
 
 const isVolume = (v: unknown): v is number => typeof v === 'number' && v >= 0 && v <= 1;
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 
 interface Attempt {
   id: number;
@@ -98,6 +151,8 @@ interface Attempt {
   /** The URL given to the audio element, once it is set. */
   src: string | null;
   failed: boolean;
+  /** The core's preview session (previews only). */
+  previewId: number | null;
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
@@ -107,8 +162,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     a.preload = 'auto';
     return a;
   });
-  const [state, setState] = useState<PlayerState>({ track: null, status: 'paused', error: null, transcoded: false, duration: null });
+  const [state, setState] = useState<PlayerState>({ track: null, status: 'paused', error: null, transcoded: false, duration: null, preview: null });
   const [volume, setVolumeState] = useState(() => readPref('player.volume', 0.9, isVolume));
+  const [queue, setQueue] = useState<PreviewSource[]>([]);
+  const [autoAdvance, setAutoAdvanceState] = useState(() => readPref('player.previewAdvance', true, isBool));
   const playable = useMemo(() => playableKinds(audio), [audio]);
 
   // Which request is current: a newer `play` makes older answers irrelevant.
@@ -127,6 +184,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
+  });
+  const queueRef = useRef(queue);
+  useLayoutEffect(() => {
+    queueRef.current = queue;
   });
 
   // ----------------------------------------------------------- position
@@ -165,6 +226,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // ------------------------------------------------------------ loading
   const loadRef = useRef<(track: PlayableTrack, at: number, decode: boolean) => Promise<void>>(async () => undefined);
+  const advanceRef = useRef<() => void>(() => undefined);
 
   const notify = useCallback((t: number) => {
     time.current = t;
@@ -175,24 +237,119 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const fail = useCallback((a: Attempt, formatError: boolean, message: string) => {
     if (a.failed || a.id !== seq.current) return;
     a.failed = true;
-    if (formatError && !a.decoded) {
+    if (formatError && !a.decoded && !a.track.preview) {
       void loadRef.current(a.track, time.current, true);
       return;
     }
     setState((s) => ({ ...s, status: 'error', error: message }));
   }, []);
 
+  /** A preview that is not playing any more stops in the core (its transfer and files go). */
+  const releasePreview = useCallback(
+    (a: Attempt | null) => {
+      if (a?.previewId == null) return;
+      const pid = a.previewId;
+      a.previewId = null;
+      void client.previewStop(pid).catch(() => undefined);
+    },
+    [client],
+  );
+
+  /** Starts the element on the URL it was given (or waits for the play button). */
+  const begin = useCallback(
+    async (a: Attempt, url: string) => {
+      pendingSeek.current = a.at > 0 ? a.at : null;
+      notify(a.at);
+      audio.src = url;
+      a.src = audio.src;
+      if (!wantPlay.current) {
+        // Paused while preparing: ready to play from the chosen position.
+        setState((s) => ({ ...s, status: 'paused' }));
+        return;
+      }
+      try {
+        await audio.play();
+      } catch (e) {
+        if (a.id !== seq.current) return;
+        const name = e instanceof DOMException ? e.name : '';
+        // A newer source replaced this one.
+        if (name === 'AbortError') return;
+        // Autoplay was refused (no click to start it): wait for the play button.
+        if (name === 'NotAllowedError') {
+          setState((s) => ({ ...s, status: 'paused' }));
+          return;
+        }
+        fail(a, name === 'NotSupportedError', e instanceof Error ? e.message : String(e));
+      }
+    },
+    [audio, fail, notify],
+  );
+
+  /** What the core says about the current preview: start once enough has arrived. */
+  const onPreview = useCallback(
+    (p: PreviewSession) => {
+      const a = attempt.current;
+      if (!a || a.previewId !== p.id || a.id !== seq.current) return;
+      setState((s) => ({ ...s, preview: p, duration: p.totalSeconds ?? s.duration }));
+      if (p.state === 'failed' || p.state === 'unavailable') {
+        if (!a.failed) {
+          a.failed = true;
+          audio.pause();
+          setState((s) => ({ ...s, status: 'error', error: p.error ?? 'This preview cannot be played.' }));
+        }
+        return;
+      }
+      if (p.ready && a.src == null && !a.failed) void begin(a, bridge.previewUrl(p.id));
+    },
+    [audio, begin, bridge],
+  );
+  const onPreviewRef = useRef(onPreview);
+  useLayoutEffect(() => {
+    onPreviewRef.current = onPreview;
+  });
+  useCoreEvent(['preview.changed'], (_name, payload) => onPreviewRef.current(payload as PreviewSession));
+
   const load = useCallback(
     async (track: PlayableTrack, at: number, decode: boolean) => {
       const id = ++seq.current;
-      const a: Attempt = { id, track, at, decoded: decode, src: null, failed: false };
+      const previous = attempt.current;
+      const a: Attempt = { id, track, at, decoded: decode, src: null, failed: false, previewId: null };
       attempt.current = a;
       wantPlay.current = true;
       // The previous track stops now, not when the next one is ready.
       audio.pause();
       pendingSeek.current = null;
       notify(at);
-      setState((s) => ({ ...s, track, status: 'loading', error: null, duration: s.track?.id === track.id ? s.duration : (track.duration ?? null) }));
+      // A preview that is no longer what plays stops in the core.
+      releasePreview(previous);
+      setState((s) => ({
+        ...s,
+        track,
+        status: 'loading',
+        error: null,
+        preview: null,
+        transcoded: false,
+        duration: s.track?.id === track.id ? s.duration : (track.duration ?? null),
+      }));
+      const src = track.preview;
+      if (src) {
+        // A Soulseek preview: the core asks slskd for the file and plays it as it arrives.
+        try {
+          const p = await client.previewStart({ username: src.username, filename: src.filename, size: src.size, length: src.length });
+          if (id !== seq.current) {
+            void client.previewStop(p.id).catch(() => undefined);
+            return;
+          }
+          a.previewId = p.id;
+          onPreviewRef.current(p);
+        } catch (e) {
+          if (id === seq.current) {
+            a.failed = true;
+            setState((s) => ({ ...s, status: 'error', error: e instanceof Error ? e.message : String(e) }));
+          }
+        }
+        return;
+      }
       let url: string;
       let transcoded: boolean;
       try {
@@ -208,32 +365,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return;
       }
       // Seeks made while the file was prepared moved `a.at`.
-      pendingSeek.current = a.at > 0 ? a.at : null;
-      notify(a.at);
-      audio.src = url;
-      a.src = audio.src;
       setState((s) => ({ ...s, transcoded }));
-      if (!wantPlay.current) {
-        // Paused while preparing: ready to play from the chosen position.
-        setState((s) => ({ ...s, status: 'paused' }));
-        return;
-      }
-      try {
-        await audio.play();
-      } catch (e) {
-        if (id !== seq.current) return;
-        const name = e instanceof DOMException ? e.name : '';
-        // A newer source replaced this one.
-        if (name === 'AbortError') return;
-        // Autoplay was refused (no click to start it): wait for the play button.
-        if (name === 'NotAllowedError') {
-          setState((s) => ({ ...s, status: 'paused' }));
-          return;
-        }
-        fail(a, name === 'NotSupportedError', e instanceof Error ? e.message : String(e));
-      }
+      await begin(a, url);
     },
-    [audio, bridge, client, playable, fail, notify],
+    [audio, begin, bridge, client, playable, notify, releasePreview],
   );
   useLayoutEffect(() => {
     loadRef.current = load;
@@ -257,6 +392,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const onEnded = () => {
       publish();
       setState((s) => ({ ...s, status: 'paused' }));
+      if (stateRef.current.track?.preview) advanceRef.current();
     };
     const onError = () => {
       const a = attempt.current;
@@ -265,6 +401,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const code = audio.error?.code;
       fail(a, code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE, audio.error?.message || 'The audio could not be played.');
     };
+    // A preview that cannot go on (it ends early, or the cache is full)
+    // stops where its audio stops, instead of playing silence.
+    const onTime = () => {
+      publish();
+      const p = stateRef.current.preview;
+      if (p && (p.endsEarly || p.limitReached) && p.decodedSeconds != null && audio.currentTime >= p.decodedSeconds - 0.05 && !audio.paused) {
+        audio.pause();
+        if (stateRef.current.track?.preview) advanceRef.current();
+      }
+    };
     audio.addEventListener('playing', onPlaying);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('waiting', onWaiting);
@@ -272,7 +418,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('error', onError);
     audio.addEventListener('seeked', publish);
-    audio.addEventListener('timeupdate', publish);
+    audio.addEventListener('timeupdate', onTime);
     return () => {
       audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('pause', onPause);
@@ -281,13 +427,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('error', onError);
       audio.removeEventListener('seeked', publish);
-      audio.removeEventListener('timeupdate', publish);
+      audio.removeEventListener('timeupdate', onTime);
     };
   }, [audio, fail, publish]);
 
   useEffect(() => {
     audio.volume = volume;
   }, [audio, volume]);
+
+  // A preview reads ahead of what plays, not of what has arrived: the core
+  // learns how far playback got.
+  const previewPlaying = state.status === 'playing' && state.track?.preview != null;
+  useEffect(() => {
+    if (!previewPlaying) return;
+    const tell = () => {
+      const pid = attempt.current?.previewId;
+      if (pid != null) void client.previewPosition(pid, audio.currentTime).catch(() => undefined);
+    };
+    tell();
+    const timer = setInterval(tell, 1500);
+    return () => clearInterval(timer);
+  }, [previewPlaying, client, audio]);
 
   // ------------------------------------------------------------ actions
   /** The file being prepared will start playing (from `at`, if given) once it is ready. */
@@ -359,29 +519,39 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const seek = useCallback(
     (seconds: number) => {
-      if (!stateRef.current.track) return;
+      const s = stateRef.current;
+      if (!s.track) return;
       const a = preparing();
       // While preparing, the element still holds the previous file.
-      const d = !a && Number.isFinite(audio.duration) ? audio.duration : (stateRef.current.duration ?? seconds);
-      const t = Math.max(0, Math.min(d, seconds));
+      const d = !a && Number.isFinite(audio.duration) ? audio.duration : (s.duration ?? seconds);
+      let t = Math.max(0, Math.min(d, seconds));
+      // A preview seeks only within what has arrived.
+      const p = s.track.preview ? s.preview : null;
+      if (s.track.preview && p?.transfer !== 'complete') {
+        const reach = Math.max(0, (p?.decodedSeconds ?? 0) - 0.3);
+        t = Math.min(t, reach);
+      }
       if (a) a.at = t;
       else if (audio.readyState === 0) pendingSeek.current = t;
       else audio.currentTime = t;
       notify(t);
+      const pid = attempt.current?.previewId;
+      if (pid != null) void client.previewPosition(pid, t).catch(() => undefined);
     },
-    [audio, preparing, notify],
+    [audio, client, preparing, notify],
   );
 
   const stop = useCallback(() => {
     seq.current += 1;
+    releasePreview(attempt.current);
     attempt.current = null;
     wantPlay.current = false;
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
     time.current = 0;
-    setState({ track: null, status: 'paused', error: null, transcoded: false, duration: null });
-  }, [audio]);
+    setState({ track: null, status: 'paused', error: null, transcoded: false, duration: null, preview: null });
+  }, [audio, releasePreview]);
 
   const setVolume = useCallback((v: number) => {
     const c = Math.max(0, Math.min(1, v));
@@ -389,13 +559,49 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     writePref('player.volume', c);
   }, []);
 
+  // ------------------------------------------------------ preview queue
+  const togglePreview = useCallback((src: PreviewSource) => toggle(previewTrack(src)), [toggle]);
+
+  const enqueuePreview = useCallback((src: PreviewSource) => {
+    setQueue((q) => (q.some((x) => previewKey(x) === previewKey(src)) ? q : [...q, src]));
+  }, []);
+
+  const playPreviewNext = useCallback((src: PreviewSource) => {
+    setQueue((q) => [src, ...q.filter((x) => previewKey(x) !== previewKey(src))]);
+  }, []);
+
+  const removeFromQueue = useCallback((src: PreviewSource) => {
+    setQueue((q) => q.filter((x) => previewKey(x) !== previewKey(src)));
+  }, []);
+
+  const clearQueue = useCallback(() => setQueue([]), []);
+
+  const skipPreview = useCallback(() => {
+    const [next, ...rest] = queueRef.current;
+    if (!next) return;
+    setQueue(rest);
+    play(previewTrack(next));
+  }, [play]);
+
+  const setAutoAdvance = useCallback((v: boolean) => {
+    setAutoAdvanceState(v);
+    writePref('player.previewAdvance', v);
+  }, []);
+
+  useLayoutEffect(() => {
+    advanceRef.current = () => {
+      if (autoAdvance && queueRef.current.length > 0) skipPreview();
+    };
+  });
+
   // Keep the title, tempo and key shown in the player current when the
   // track is edited or analyzed again.
   const refreshTrack = useMemo(
     () =>
       throttle(() => {
         const id = stateRef.current.track?.id;
-        if (id == null) return;
+        // Previews are not in the library.
+        if (id == null || id < 0) return;
         client.track(id, { visuals: false }).then(
           ({ track: t }) =>
             setState((s) =>
@@ -420,7 +626,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (!ms) return;
     const t = state.track;
     try {
-      ms.metadata = t ? new MediaMetadata({ title: t.displayTitle, artist: t.artist ?? '', album: 'SONORA' }) : null;
+      ms.metadata = t ? new MediaMetadata({ title: t.displayTitle, artist: t.preview ? `Preview from ${t.preview.username}` : (t.artist ?? ''), album: 'SONORA' }) : null;
       ms.playbackState = !t ? 'none' : state.status === 'playing' ? 'playing' : 'paused';
     } catch {
       // Not supported by this web view.
@@ -429,13 +635,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined;
     if (!ms) return;
-    const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+    const handlers: [MediaSessionAction, MediaSessionActionHandler | null][] = [
       ['play', () => resume()],
       ['pause', () => pause()],
       ['stop', () => stop()],
       ['seekbackward', (d) => seek(time.current - (d.seekOffset ?? 10))],
       ['seekforward', (d) => seek(time.current + (d.seekOffset ?? 10))],
       ['seekto', (d) => seek(d.seekTime ?? time.current)],
+      ['nexttrack', state.track?.preview && queue.length > 0 ? () => skipPreview() : null],
     ];
     for (const [a, h] of handlers) {
       try {
@@ -453,16 +660,62 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
       }
     };
-  }, [resume, pause, stop, seek]);
+  }, [resume, pause, stop, seek, skipPreview, state.track, queue.length]);
 
   // Stop on unmount (window closing, or the interface reloading).
-  useEffect(() => () => audio.pause(), [audio]);
+  useEffect(
+    () => () => {
+      audio.pause();
+      releasePreview(attempt.current);
+    },
+    [audio, releasePreview],
+  );
 
   const isPlaying = useCallback((id: number) => state.track?.id === id && (state.status === 'playing' || state.status === 'loading'), [state.track, state.status]);
 
   const value = useMemo<Player>(
-    () => ({ ...state, volume, play, toggle, pause, resume, seek, stop, setVolume, isPlaying }),
-    [state, volume, play, toggle, pause, resume, seek, stop, setVolume, isPlaying],
+    () => ({
+      ...state,
+      volume,
+      play,
+      toggle,
+      pause,
+      resume,
+      seek,
+      stop,
+      setVolume,
+      isPlaying,
+      togglePreview,
+      queue,
+      enqueuePreview,
+      playPreviewNext,
+      removeFromQueue,
+      clearQueue,
+      skipPreview,
+      autoAdvance,
+      setAutoAdvance,
+    }),
+    [
+      state,
+      volume,
+      play,
+      toggle,
+      pause,
+      resume,
+      seek,
+      stop,
+      setVolume,
+      isPlaying,
+      togglePreview,
+      queue,
+      enqueuePreview,
+      playPreviewNext,
+      removeFromQueue,
+      clearQueue,
+      skipPreview,
+      autoAdvance,
+      setAutoAdvance,
+    ],
   );
 
   return (

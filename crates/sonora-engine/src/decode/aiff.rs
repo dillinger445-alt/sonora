@@ -6,7 +6,7 @@ use super::sniff::read_up_to;
 use super::{ChecksumStatus, DecodeStats, PcmSource, SampleKind, StreamInfo};
 use crate::error::AnalysisError;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 pub enum OpenError {
@@ -70,8 +70,15 @@ pub fn extended_to_f64(b: &[u8]) -> f64 {
 pub fn parse_header(path: &Path) -> Result<AiffHeader, OpenError> {
     let mut f = File::open(path)?;
     let file_len = f.metadata()?.len();
+    parse_header_from(&mut f, file_len, false)
+}
+
+/// Parses the chunk structure from any reader of a stream `file_len` bytes
+/// long. With `stop_at_audio`, chunks after the sound data are not looked
+/// at (a file still arriving has not got them yet).
+pub fn parse_header_from<R: Read + Seek>(f: &mut R, file_len: u64, stop_at_audio: bool) -> Result<AiffHeader, OpenError> {
     let mut hdr = [0u8; 12];
-    if read_up_to(&mut f, &mut hdr)? < 12 {
+    if read_up_to(f, &mut hdr)? < 12 {
         return Err(corrupt("file too short for an AIFF header"));
     }
     if &hdr[0..4] != b"FORM" {
@@ -90,7 +97,7 @@ pub fn parse_header(path: &Path) -> Result<AiffHeader, OpenError> {
     let mut ch = [0u8; 8];
     while pos + 8 <= file_len {
         f.seek(SeekFrom::Start(pos))?;
-        if read_up_to(&mut f, &mut ch)? < 8 {
+        if read_up_to(f, &mut ch)? < 8 {
             break;
         }
         let id = [ch[0], ch[1], ch[2], ch[3]];
@@ -102,23 +109,26 @@ pub fn parse_header(path: &Path) -> Result<AiffHeader, OpenError> {
                     return Err(corrupt("invalid COMM chunk size"));
                 }
                 let mut b = vec![0u8; size as usize];
-                if read_up_to(&mut f, &mut b)? < size as usize {
+                if read_up_to(f, &mut b)? < size as usize {
                     return Err(corrupt("truncated COMM chunk"));
                 }
                 comm = Some(b);
             }
             b"SSND" => {
                 let mut b = [0u8; 8];
-                if read_up_to(&mut f, &mut b)? < 8 {
+                if read_up_to(f, &mut b)? < 8 {
                     return Err(corrupt("truncated SSND chunk"));
                 }
                 let offset = u32be(&b[0..4]) as u64;
                 ssnd = Some((body + 8 + offset, size.saturating_sub(8 + offset)));
+                if stop_at_audio && comm.is_some() {
+                    break;
+                }
             }
             b"NAME" | b"AUTH" | b"ANNO" | b"(c) " => {
                 if size < 4096 {
                     let mut b = vec![0u8; size as usize];
-                    let n = read_up_to(&mut f, &mut b)?;
+                    let n = read_up_to(f, &mut b)?;
                     let text = String::from_utf8_lossy(&b[..n]).trim_end_matches('\0').trim().to_string();
                     let key = match &id {
                         b"NAME" => "title",
@@ -190,7 +200,7 @@ pub fn parse_header(path: &Path) -> Result<AiffHeader, OpenError> {
 }
 
 pub struct AiffSource {
-    reader: BufReader<File>,
+    reader: BufReader<Box<dyn super::ReadSeek>>,
     info: StreamInfo,
     enc: PcmEncoding,
     block_align: usize,
@@ -202,13 +212,19 @@ pub struct AiffSource {
 
 impl AiffSource {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let h = parse_header(path)?;
+        let f = File::open(path)?;
+        let len = f.metadata()?.len();
+        Self::open_reader(Box::new(f), len, false)
+    }
+
+    /// Decodes from any reader of a stream `len` bytes long (see [`parse_header_from`]).
+    pub fn open_reader(mut f: Box<dyn super::ReadSeek>, len: u64, stop_at_audio: bool) -> Result<Self, OpenError> {
+        let h = parse_header_from(&mut f, len, stop_at_audio)?;
         let enc = match h.encoding {
             Some(e) => e,
             None => return Err(OpenError::NotNative(h)),
         };
         let block_align = enc.bytes() * h.channels as usize;
-        let mut f = File::open(path)?;
         f.seek(SeekFrom::Start(h.data_offset))?;
         let kind = if enc.is_float() { SampleKind::Float } else { SampleKind::Int };
         let bits = if enc.is_float() { enc.container_bits() } else { h.sample_size.min(enc.container_bits()) };

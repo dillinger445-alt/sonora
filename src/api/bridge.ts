@@ -83,6 +83,8 @@ export interface Bridge {
   openExternal(url: string): Promise<void>;
   /** URL the audio element can play for a file the core prepared for playback. */
   mediaUrl(prepared: PreparedPlayback): string;
+  /** URL the audio element plays a Soulseek preview from (audio still arriving). */
+  previewUrl(id: number): string;
   /** Reveals a file in Finder / File Explorer. */
   reveal(path: string): Promise<void>;
   /** Registers file drag-and-drop handlers; resolves to an unregister function. */
