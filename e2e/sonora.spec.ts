@@ -1112,6 +1112,10 @@ test('Soulseek: one button sets slskd up, a failed step can be tried again, and 
     // SONORA keeps slskd running, and watches the folder it saves to.
     const panel = page.getByRole('region', { name: 'slskd', exact: true });
     await expect(panel.getByRole('switch', { name: 'Run slskd in the background' })).toBeChecked();
+    // The path of slskd.yml breaks inside its column instead of running over the next one.
+    const intro = panel.locator('.settings-desc');
+    await expect(intro).toContainText('slskd.yml');
+    expect(await intro.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await expect(page.getByText(downloads, { exact: true })).toBeVisible();
     expect(readFileSync(config, 'utf8')).toContain(`downloads: '${downloads}'`);
 

@@ -572,6 +572,8 @@
   font-size: 12px;
   color: var(--c-text-3);
   line-height: 1.45;
+  /* Paths (slskd's settings file, say) break where they must, inside the column. */
+  overflow-wrap: anywhere;
 }
 
 .settings-body {
