@@ -1018,6 +1018,9 @@ pub struct Service {
     stopped: AtomicBool,
     /// SONORA is quitting: the watcher stops.
     quitting: AtomicBool,
+    /// Held while SONORA starts slskd or lets it go on quitting, so the two
+    /// never cross (slskd started again just as SONORA quits).
+    agent_turn: Mutex<()>,
 }
 
 impl Default for Service {
@@ -1028,6 +1031,7 @@ impl Default for Service {
             cancel: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
+            agent_turn: Mutex::new(()),
         }
     }
 }
@@ -1665,7 +1669,8 @@ impl Service {
 
     /// Installs (or updates) the launch agent and starts slskd if it is not running.
     fn run_agent(&self, app: &App) -> Result<(), String> {
-        if !self.configured(app) || lock(&self.run).active || self.stopped.load(Ordering::Relaxed) {
+        let _turn = lock(&self.agent_turn);
+        if self.quitting.load(Ordering::Relaxed) || !self.configured(app) || lock(&self.run).active || self.stopped.load(Ordering::Relaxed) {
             return Ok(());
         }
         let layout = self.layout(app);
@@ -1688,6 +1693,7 @@ impl Service {
     /// When SONORA quits: slskd keeps running only in the background mode.
     pub fn on_quit(&self, app: &App) {
         self.quitting.store(true, Ordering::Relaxed);
+        let _turn = lock(&self.agent_turn);
         if self.configured(app) && !app.settings().slskd_background && self.system().agent().pid.is_some() {
             let _ = self.system().unload();
         }
