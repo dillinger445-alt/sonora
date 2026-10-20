@@ -12,6 +12,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 const KEY: &str = "test-key-0123456789abcdef";
+
+/// The log file is the process's (the last app opened sets it): the tests
+/// here run one at a time so each reads its own log.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 const SEARCH_ID: &str = "0b9a3c34-5f39-4d1e-9a51-6d1f2e3a4b5c";
 const TRANSFER_ID: &str = "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
 
@@ -192,6 +196,7 @@ fn write_download(p: &Path) -> i64 {
 
 #[test]
 fn search_download_and_find_the_track() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("flow");
     let (app, fake) = open(&e);
 
@@ -298,6 +303,7 @@ fn search_download_and_find_the_track() {
 
 #[test]
 fn problems_are_explained() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("problems");
     let (app, fake) = open(&e);
     call(&app, "sources.accept", &obj! {});
