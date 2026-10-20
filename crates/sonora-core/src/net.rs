@@ -37,6 +37,8 @@ pub enum NetError {
     NoCurl(String),
     /// Nothing answers at that address (refused, unknown host, no route).
     Unreachable(String),
+    /// The server's https certificate could not be checked.
+    Certificate(String),
     TimedOut,
     Failed(String),
 }
@@ -101,6 +103,8 @@ fn classify(stderr: &str) -> NetError {
     match code {
         // Could not resolve the host, could not connect.
         Some(6) | Some(7) => NetError::Unreachable(line),
+        // TLS: the handshake, the certificate or its issuer.
+        Some(35) | Some(51) | Some(58) | Some(60) | Some(77) | Some(83) | Some(90) | Some(91) => NetError::Certificate(line),
         Some(28) => NetError::TimedOut,
         _ => NetError::Failed(line),
     }
@@ -195,7 +199,8 @@ mod tests {
         assert!(matches!(classify("curl: (7) Failed to connect to localhost port 5030"), NetError::Unreachable(_)));
         assert!(matches!(classify("curl: (6) Could not resolve host: nas"), NetError::Unreachable(_)));
         assert_eq!(classify("curl: (28) Operation timed out after 15001 milliseconds"), NetError::TimedOut);
-        assert!(matches!(classify("curl: (60) SSL certificate problem"), NetError::Failed(_)));
+        assert!(matches!(classify("curl: (60) SSL certificate problem: self-signed certificate"), NetError::Certificate(_)));
+        assert!(matches!(classify("curl: (52) Empty reply from server"), NetError::Failed(_)));
         assert!(matches!(classify(""), NetError::Failed(_)));
     }
 

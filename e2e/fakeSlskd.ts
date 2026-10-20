@@ -90,9 +90,13 @@ export async function startFakeSlskd(shared: SharedFile[]): Promise<FakeSlskd> {
         if (!s) return send(res, 404);
         if (method === 'PUT') return send(res, 200);
         // Answers arrive over a second or so, as they do from the network.
-        const done = Date.now() - s.at > 1200;
+        // Like slskd, the responses are stored only once the search has
+        // ended (endedAt), a moment after it says "Completed".
+        const elapsed = Date.now() - s.at;
+        const completed = elapsed > 1200;
+        const ended = elapsed > 1800;
         const users = [...new Set(fake.shared.map((f) => f.username))];
-        const answering = done ? users : users.slice(0, 1);
+        const answering = completed ? users : users.slice(0, 1);
         const responses = answering.map((username) => ({
           username,
           hasFreeUploadSlot: username === users[0],
@@ -105,9 +109,10 @@ export async function startFakeSlskd(shared: SharedFile[]): Promise<FakeSlskd> {
         return send(res, 200, {
           id: search,
           searchText: s.text,
-          state: done ? 'Completed, TimedOut' : 'InProgress',
+          state: completed ? 'Completed, TimedOut' : 'InProgress',
           responseCount: responses.length,
-          responses: url.searchParams.get('includeResponses') === 'true' ? responses : [],
+          ...(ended ? { endedAt: new Date(s.at + 1800).toISOString() } : {}),
+          responses: ended && url.searchParams.get('includeResponses') === 'true' ? responses : [],
         });
       }
       if (method === 'POST' && path.startsWith('transfers/downloads/')) {

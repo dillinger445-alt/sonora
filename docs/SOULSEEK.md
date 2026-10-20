@@ -100,15 +100,18 @@ the notice, and go through **Setup**:
          sonora:
            key: <the key SONORA made>
            role: readwrite
-           cidr: 127.0.0.1/32,::1/128
    ```
 
    If `slskd.yml` already has a `web:` or `authentication:` section, add
-   the lines inside it rather than a second one. The `cidr` line lets only
-   this computer use the key. Save the file, restart slskd, and choose
-   **I restarted slskd: test**. A key you already have can be pasted
-   instead. SONORA keeps the key in the macOS keychain or in Windows
-   Credential Manager, never in its library or its logs.
+   the lines inside it rather than a second one. Save the file, restart
+   slskd, and choose **I restarted slskd: test**. A key you already have
+   can be pasted instead. SONORA keeps the key in the macOS keychain or in
+   Windows Credential Manager, never in its library or its logs.
+
+   To let only this computer use the key, you can add
+   `cidr: 127.0.0.1/32,::1/128` under `role`. Leave it out when slskd runs
+   in Docker: requests then reach slskd from Docker's own address, and the
+   key would be refused.
 3. **Connection**: slskd's address, `http://localhost:5030` unless slskd
    runs elsewhere. **Test** shows slskd's version, the Soulseek user it is
    signed in as and how much it shares.
@@ -120,7 +123,9 @@ the notice, and go through **Setup**:
 
 On **Search**, type an artist, a title, a label or a catalogue number.
 Soulseek matches every word against folder and file names, so fewer words
-usually find more. Results arrive for about 15 seconds.
+usually find more. slskd searches for about 15 seconds and hands over the
+results when the search ends; until then SONORA shows how many people have
+answered.
 
 - Results are grouped by folder, one folder of one person's share per
   block. The folder from someone with a free upload slot and a fast
@@ -148,9 +153,10 @@ and leaves the files where they are.
 SONORA looks at the download folder every 20 seconds and takes a file once
 it is finished:
 
-- its name and folder are not the ones clients use for partial downloads
-  (an `incomplete` folder, names ending in `.part`, `.tmp` or
-  `.incomplete`, and similar);
+- it is not a partial download: not in an `incomplete`, `Incomplete
+  Downloads`, `temp` or `tmp` folder directly in the download folder, not
+  named the way Nicotine+ names partial files, and not ending in `.part`,
+  `.tmp`, `.incomplete` or similar;
 - its size and modification time are the same at two looks in a row, and
   it last changed at least 10 seconds ago;
 - it can be opened for reading.
@@ -167,6 +173,11 @@ details.
 To look at each file first, turn on **Review each download before it joins
 the library**. Finished files then wait under **Waiting for you** on the
 Downloads tab until you add them or keep them out.
+
+Music that is already in the folder when you choose it was not downloaded
+since, so SONORA leaves it alone: it is not added and not marked as coming
+from Soulseek. The Setup tab says how many such files are not in your
+library, with **Add them** if you want them after all.
 
 SONORA only reads the download folder. It never moves, renames or deletes
 a file there. A track you remove from the library stays out, as it does for
@@ -185,7 +196,8 @@ not whether you may have it.
   analysis page shows this under **Came from**.
 - **Does not keep**: anything about other users. User names appear in
   search results and downloads while SONORA shows them, taken from slskd
-  each time.
+  each time. When slskd reports a problem, SONORA's log notes only that a
+  request failed, not slskd's message, which can name other users.
 - Nothing goes anywhere but slskd. SONORA's requests go through the
   system's `curl`, straight to slskd's address.
 
@@ -225,7 +237,14 @@ the one in Setup.
 the one SONORA saved, the `cidr` line does not include this computer, or
 slskd was not restarted after the change.
 
-**"slskd refused the request"**: give the key `role: readwrite`.
+**"slskd refused the request"**: a slskd running as a relay agent does not
+search or download; enter the address of the main slskd. Otherwise give the
+key `role: readwrite`.
+
+**"SONORA could not check slskd's https certificate"**: slskd makes a new
+certificate each time it starts, which no system trusts. Use `http://` for
+slskd on this computer, or give slskd a certificate your system trusts (a
+reverse proxy with a certificate from Let's Encrypt, say).
 
 **"slskd is not connected to Soulseek"**: check the user name and password
 in `slskd.yml` and slskd's web page. The Soulseek server is sometimes down

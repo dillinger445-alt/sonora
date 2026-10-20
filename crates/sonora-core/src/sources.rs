@@ -132,17 +132,21 @@ pub fn accept(c: &Connection) -> Result<i64, StoreError> {
     Ok(now)
 }
 
-/// Where a path sits inside the clients' partial-download places: a folder
-/// named "incomplete" (SoulseekQt, Nicotine+, slskd keep partial files
-/// there), or a name clients give partial files.
+/// Whether a path is one of the clients' partial downloads: inside a folder
+/// for partial files directly in the watched folder ("incomplete",
+/// "Incomplete Downloads", "temp", "tmp"), named the way Nicotine+ names
+/// them ("INCOMPLETE" and a 32-digit hash before the name), or ending in a
+/// partial-file extension (.part, .tmp…). Folders further down keep their
+/// names: an album may well be called "Incomplete".
 fn is_partial(path: &Path, root: &Path) -> bool {
     let inside = path.strip_prefix(root).unwrap_or(path);
-    let mut parts = inside.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect::<Vec<_>>();
-    let name = parts.pop().unwrap_or_default();
-    if parts.iter().any(|p| p == "incomplete" || p == "incomplete downloads" || p == "temp" || p == "tmp") {
+    let parts: Vec<String> = inside.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect();
+    let Some((name, folders)) = parts.split_last() else { return false };
+    if folders.first().is_some_and(|f| matches!(f.as_str(), "incomplete" | "incomplete downloads" | "temp" | "tmp")) {
         return true;
     }
-    name.starts_with("incomplete") || name.starts_with('~') || [".part", ".partial", ".tmp", ".incomplete", ".crdownload", ".download"].iter().any(|s| name.ends_with(s))
+    let nicotine = name.strip_prefix("incomplete").is_some_and(|rest| rest.len() > 32 && rest.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit));
+    nicotine || [".part", ".partial", ".tmp", ".incomplete", ".crdownload", ".download"].iter().any(|s| name.ends_with(s))
 }
 
 /// The file can be opened for reading (on Windows a file still being
@@ -320,10 +324,69 @@ pub fn record_imports(db: &Db, events: &EventBus, source: &str, files: &[PathBuf
 
 fn counts(c: &Connection) -> Result<Value, StoreError> {
     let mut v = obj! { "review" => 0, "imported" => 0, "failed" => 0, "declined" => 0, "importing" => 0 };
-    for (state, n) in c.query("SELECT state, COUNT(*) FROM source_files GROUP BY state", params![], |r| (r.text(0), r.i64(1)))? {
+    for (state, n) in c.query("SELECT state, COUNT(*) FROM source_files WHERE state != 'existing' GROUP BY state", params![], |r| (r.text(0), r.i64(1)))? {
         v.set(&state, n);
     }
     Ok(v)
+}
+
+/// Files that were in the folder when it was chosen and that the library
+/// does not have (nor had them removed): they stay out unless added.
+fn existing_paths(c: &Connection, folder: &Path) -> Result<Vec<String>, StoreError> {
+    let pattern = format!("{}%", library::under_pattern(folder));
+    Ok(c.query(
+        "SELECT s.path FROM source_files s WHERE s.state = 'existing' AND s.path LIKE ? ESCAPE '\\' \
+         AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.path = s.path) AND NOT EXISTS (SELECT 1 FROM removed_files r WHERE r.path = s.path) ORDER BY s.path",
+        params![pattern],
+        |r| r.text(0),
+    )?)
+}
+
+/// Notes the audio files already in a folder when it is chosen. They were
+/// not downloaded since, so they are neither added nor marked as coming
+/// from Soulseek unless the person adds them.
+pub fn note_existing(app: &App, folder: &Path) -> Result<(), StoreError> {
+    let mut found = Vec::new();
+    let never = AtomicBool::new(false);
+    index::walk(folder, WalkOptions { skip_hidden: true, follow_symlinks: false }, &never, |c| {
+        if !is_partial(&c.path, folder) {
+            found.push(c);
+        }
+    });
+    let now = now_ms();
+    app.db.write().transaction(|tx| {
+        for cand in &found {
+            tx.execute(
+                "INSERT OR IGNORE INTO source_files (path, source, size, mtime, state, track_id, found_at, decided_at, error) VALUES (?, ?, ?, ?, 'existing', NULL, ?, NULL, NULL)",
+                params![library::path_str(&cand.path), SOULSEEK, cand.size as i64, cand.mtime, now],
+            )?;
+        }
+        Ok::<(), StoreError>(())
+    })
+}
+
+/// Adds the files that were in the folder before it was chosen (or holds
+/// them for review). Returns how many.
+pub fn add_existing(app: &App) -> Result<usize, StoreError> {
+    let settings = app.settings();
+    let Some(folder) = settings.soulseek_folder.clone() else { return Ok(0) };
+    let paths = existing_paths(&app.db.read(), Path::new(&folder))?;
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    let now = now_ms();
+    let state = if settings.soulseek_review { "review" } else { "importing" };
+    app.db.write().transaction(|tx| {
+        for p in &paths {
+            tx.execute("UPDATE source_files SET state = ?, found_at = ? WHERE path = ?", params![state, now, p.clone()])?;
+        }
+        Ok::<(), StoreError>(())
+    })?;
+    if !settings.soulseek_review {
+        app.scans.start_indexing(SOULSEEK, IndexJob::Source { files: paths.iter().map(PathBuf::from).collect(), source: SOULSEEK.to_string() });
+    }
+    app.events.emit("sources.changed", &counts(&app.db.read())?);
+    Ok(paths.len())
 }
 
 /// What the interface shows about the watcher.
@@ -343,6 +406,10 @@ pub fn status_json(app: &App) -> Result<Value, StoreError> {
         "lastCheck" => st.last_check,
         "error" => st.error.map(Value::String).unwrap_or(Value::Null),
         "settling" => st.settling as i64,
+        "existing" => match settings.soulseek_folder.as_deref() {
+            Some(f) => existing_paths(&c, Path::new(f))?.len(),
+            None => 0,
+        },
         "counts" => counts(&c)?,
     })
 }
@@ -409,10 +476,12 @@ mod tests {
     #[test]
     fn partial_downloads_are_recognised() {
         let root = Path::new("/music/downloads");
-        for p in ["incomplete/a.flac", "Incomplete/user/b.mp3", "user/INCOMPLETE123abc.flac", "c.flac.part", "d.mp3.tmp", "e.flac.incomplete", "~f.flac", "temp/g.wav"] {
+        let nicotine = "user/INCOMPLETE0123456789abcdef0123456789abcdef02 Song.flac";
+        for p in ["incomplete/a.flac", "Incomplete/user/b.mp3", "Incomplete Downloads/x.flac", nicotine, "c.flac.part", "d.mp3.tmp", "e.flac.incomplete", "temp/g.wav", "tmp/h.aiff"] {
             assert!(is_partial(&root.join(p), root), "{p}");
         }
-        for p in ["a.flac", "user/album/02 Song.mp3", "complete/x.wav", "parts/a.flac", "temperance/b.flac"] {
+        // Albums and songs may have these words in their names.
+        for p in ["a.flac", "user/album/02 Song.mp3", "complete/x.wav", "parts/a.flac", "temperance/b.flac", "Artist/Incomplete/01 Song.flac", "Incomplete Love.flac", "Artist/tmp/x.flac", "~intro.flac"] {
             assert!(!is_partial(&root.join(p), root), "{p}");
         }
     }

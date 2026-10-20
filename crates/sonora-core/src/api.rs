@@ -649,6 +649,11 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                             return Err(ApiError::invalid("Choose the folder your Soulseek client saves downloads in, not SONORA's own data folder."));
                         }
                     }
+                    if s.soulseek_folder.as_deref() != Some(path) {
+                        // What is there already was not downloaded since: it stays
+                        // out unless the person adds it.
+                        crate::sources::note_existing(app, &dir)?;
+                    }
                     s.soulseek_folder = Some(path.to_string());
                 }
             }
@@ -659,6 +664,11 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
             app.sources.wake();
             Ok(crate::sources::status_json(app)?)
+        }
+        "sources.addExisting" => {
+            let n = crate::sources::add_existing(app)?;
+            app.sources.wake();
+            Ok(obj! { "added" => n })
         }
         "sources.check" => {
             let r = crate::sources::check(app);

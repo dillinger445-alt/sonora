@@ -160,6 +160,8 @@ export class Client {
   sourcesCheck = () => this.call<SourcesStatus & { found: { imported: number; held: number; settling: number } }>('sources.check');
   sourcesReview = () => this.call<SourceFile[]>('sources.review');
   sourcesDecide = (paths: string[], add: boolean) => this.call<{ added: number; declined: number }>('sources.decide', { paths, add });
+  /** Adds the files that were in the folder before it was chosen (or holds them for review). */
+  sourcesAddExisting = () => this.call<{ added: number }>('sources.addExisting');
 
   // slskd: searching and downloading through the Soulseek client the person runs.
   slskdStatus = () => this.call<SlskdStatus>('slskd.status');

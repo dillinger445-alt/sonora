@@ -5,7 +5,7 @@
  * each file once it arrives.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { LuCheck, LuCircleStop, LuDownload, LuSearch } from 'react-icons/lu';
 import type { FoundFile, FoundFolder, SearchResults, Transfer } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
@@ -192,24 +192,34 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
   const [results, setResults] = useState<SearchResults | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const [asking, setAsking] = useState<string | null>(null);
+  /** Folders whose download request is on its way. */
+  const [asking, setAsking] = useState<ReadonlySet<string>>(new Set());
+  // slskd takes two download requests at a time: SONORA sends them one by one.
+  const queue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     remembered = search ? { ...search, lossless } : null;
   }, [search, lossless]);
 
-  // Results come in for as long as slskd keeps searching (about 15 seconds).
+  // slskd keeps searching for about 15 seconds and hands over the results
+  // when the search ends; until then it tells how many people answered. A
+  // search that slskd never finishes is left after three minutes.
+  const [stuck, setStuck] = useState(false);
   useEffect(() => {
     if (!search) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const since = Date.now();
+    setStuck(false);
     const tick = async () => {
       try {
         const r = await client.slskdResults(search.id, lossless);
         if (stopped) return;
         setResults(r);
         setError(null);
-        if (r.state === 'searching') timer = setTimeout(() => void tick(), 1200);
+        if (r.state !== 'searching') return;
+        if (Date.now() - since > 180_000) setStuck(true);
+        else timer = setTimeout(() => void tick(), 1200);
       } catch (e) {
         if (!stopped) setError(message(e));
       }
@@ -258,27 +268,34 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
     }
   };
 
-  const download = async (f: FoundFolder, files: FoundFile[]) => {
+  const download = (f: FoundFolder, files: FoundFile[]) => {
     if (files.length === 0) return;
     const key = `${f.username}\n${f.directory}`;
-    setAsking(key);
-    try {
-      const r = await client.slskdDownload(
-        f.username,
-        files.map((x) => ({ filename: x.filename, size: x.size })),
-      );
-      state.downloads.reload();
-      toast({
-        tone: r.failed > 0 ? 'warning' : 'success',
-        title: r.failed > 0 ? `slskd queued ${formatCount(r.queued)} of ${plural(files.length, 'file')}` : `Asked ${f.username} for ${plural(r.queued, 'file')}`,
-        body: r.failed > 0 ? 'The others were already queued, or slskd could not ask for them.' : 'They arrive in Downloads, and join your library when they finish.',
-        action: { label: 'Show downloads', run: () => navigate({ view: 'soulseek', tab: 'downloads' }) },
-      });
-    } catch (e) {
-      toast({ tone: 'error', title: 'slskd could not start the download', body: message(e) });
-    } finally {
-      setAsking(null);
-    }
+    setAsking((a) => new Set(a).add(key));
+    const ask = async () => {
+      try {
+        const r = await client.slskdDownload(
+          f.username,
+          files.map((x) => ({ filename: x.filename, size: x.size })),
+        );
+        state.downloads.reload();
+        toast({
+          tone: r.failed > 0 ? 'warning' : 'success',
+          title: r.failed > 0 ? `slskd queued ${formatCount(r.queued)} of ${plural(files.length, 'file')}` : `Asked ${f.username} for ${plural(r.queued, 'file')}`,
+          body: r.failed > 0 ? 'The others were already queued, or slskd could not ask for them.' : 'They arrive in Downloads, and join your library when they finish.',
+          action: { label: 'Show downloads', run: () => navigate({ view: 'soulseek', tab: 'downloads' }) },
+        });
+      } catch (e) {
+        toast({ tone: 'error', title: 'slskd could not start the download', body: message(e) });
+      } finally {
+        setAsking((a) => {
+          const next = new Set(a);
+          next.delete(key);
+          return next;
+        });
+      }
+    };
+    queue.current = queue.current.then(ask, ask);
   };
 
   const searching = results?.state === 'searching';
@@ -332,8 +349,10 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
       {search && results ? (
         <div className="sk-summary" aria-live="polite">
           <span>
-            {searching
-              ? `Searching for “${results.text || search.text}”: ${plural(results.responses, 'person', 'people')} answered so far.`
+            {searching && stuck
+              ? `slskd has not finished the search for “${results.text || search.text}”. Try searching again, or look at slskd’s web page.`
+              : searching
+              ? `Searching for “${results.text || search.text}”: ${plural(results.responses, 'person', 'people')} answered so far. The results appear when the search ends.`
               : results.state === 'failed'
                 ? `The search for “${results.text || search.text}” failed in slskd.`
                 : `${plural(folders.length + results.moreFolders, 'folder')} for “${results.text || search.text}”, from ${plural(results.responses, 'person', 'people')}.`}
@@ -353,7 +372,7 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
           <p className="sk-unverified faint">Formats, quality and sizes are what other people’s clients report. SONORA checks every file when it arrives.</p>
           <div className="sk-results">
             {folders.map((f) => (
-              <FolderBlock key={`${f.username}\n${f.directory}`} f={f} transfers={transfers} onDownload={(ff, files) => void download(ff, files)} busy={asking === `${f.username}\n${f.directory}`} />
+              <FolderBlock key={`${f.username}\n${f.directory}`} f={f} transfers={transfers} onDownload={download} busy={asking.has(`${f.username}\n${f.directory}`)} />
             ))}
           </div>
         </>

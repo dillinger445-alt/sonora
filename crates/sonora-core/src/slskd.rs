@@ -378,7 +378,10 @@ fn status_error(r: &Response) -> SlskdError {
             "slskd_unauthorized",
             "slskd did not accept the API key. Check that the key in slskd.yml matches the one saved here, that its cidr setting includes this computer, and that slskd was restarted after the change.",
         ),
-        403 => SlskdError::new("slskd_forbidden", "slskd refused the request. Give the API key the readwrite role in slskd.yml."),
+        403 => SlskdError::new(
+            "slskd_forbidden",
+            "slskd refused the request. A slskd running as a relay agent does not search or download: enter the address of the main slskd. Otherwise give the key the readwrite role in slskd.yml.",
+        ),
         404 => SlskdError::new("not_found", "slskd no longer has that. It may have been removed in slskd."),
         409 => SlskdError::new("slskd_offline", "slskd is not connected to Soulseek right now. Check its connection in slskd's web interface."),
         429 => SlskdError::new("slskd_busy", "slskd is busy with another request. Try again in a moment."),
@@ -445,6 +448,10 @@ impl Slskd {
         http.send(&req).map_err(|e| match e {
             NetError::NoCurl(m) => SlskdError::new("slskd_failed", m),
             NetError::Unreachable(_) => SlskdError::new("slskd_unreachable", format!("SONORA could not reach slskd at {base}. Is slskd running?")),
+            NetError::Certificate(_) => SlskdError::new(
+                "slskd_certificate",
+                "SONORA could not check slskd's https certificate. slskd makes a new certificate each time it starts, which no system trusts: use http:// for slskd on this computer, or give slskd a certificate your system trusts.",
+            ),
             NetError::TimedOut => SlskdError::new("slskd_unreachable", format!("slskd at {base} did not answer in time.")),
             NetError::Failed(m) => SlskdError::new("slskd_failed", format!("The request to slskd failed ({m}).")),
         })
@@ -452,11 +459,25 @@ impl Slskd {
 
     /// Sends a request and turns error answers into errors.
     fn call(&self, app: &App, method: &'static str, path: &str, body: Option<Value>) -> Result<Response, SlskdError> {
-        let r = self.send(app, method, path, body)?;
+        let r = self.send_patiently(app, method, path, body)?;
         if (200..300).contains(&r.status) || r.status == 304 {
             Ok(r)
         } else {
             Err(status_error(&r))
+        }
+    }
+
+    /// Sends a request, waiting a moment and asking again while slskd says
+    /// it is busy (it takes one search and two download requests at a time).
+    fn send_patiently(&self, app: &App, method: &'static str, path: &str, body: Option<Value>) -> Result<Response, SlskdError> {
+        let mut attempt = 0;
+        loop {
+            let r = self.send(app, method, path, body.clone())?;
+            if r.status != 429 || attempt >= 4 {
+                return Ok(r);
+            }
+            attempt += 1;
+            std::thread::sleep(Duration::from_millis(500 * attempt));
         }
     }
 
@@ -498,18 +519,22 @@ impl Slskd {
         let v = Self::json(&self.call(app, "GET", &format!("searches/{id}?includeResponses=true"), None)?)?;
         let flags = v.get("state").and_then(Value::as_str).unwrap_or("");
         let has = |f: &str| flags.split(',').any(|p| p.trim() == f);
-        let state = if has("Errored") {
+        // slskd stores a search's responses only once it has ended: until
+        // `endedAt` is there it reports how many people answered (and for a
+        // moment "Completed" with no responses yet).
+        let ended = v.get("endedAt").is_some_and(|e| !e.is_null());
+        let state = if !ended {
+            "searching"
+        } else if has("Errored") {
             "failed"
         } else if has("Cancelled") {
             "stopped"
-        } else if has("Completed") || v.get("isComplete").and_then(Value::as_bool) == Some(true) {
-            "done"
         } else {
-            "searching"
+            "done"
         };
-        let mut responses = v.get("responses").and_then(Value::as_array).cloned().unwrap_or_default();
-        let response_count = v.get("responseCount").and_then(Value::as_i64).unwrap_or(responses.len() as i64);
-        if responses.is_empty() && response_count > 0 {
+        let response_count = v.get("responseCount").and_then(Value::as_i64).unwrap_or(0);
+        let mut responses = if ended { v.get("responses").and_then(Value::as_array).cloned().unwrap_or_default() } else { Vec::new() };
+        if ended && responses.is_empty() && response_count > 0 {
             // Versions of slskd that send responses only on their own.
             let r = Self::json(&self.call(app, "GET", &format!("searches/{id}/responses"), None)?)?;
             responses = r.as_array().cloned().unwrap_or_default();
@@ -576,7 +601,7 @@ impl Slskd {
     /// Asks slskd to download these files (remote path and size) from one user.
     pub fn download(&self, app: &App, username: &str, files: &[(String, i64)]) -> Result<Value, SlskdError> {
         let list = Value::Array(files.iter().map(|(f, s)| obj! { "filename" => f.as_str(), "size" => *s }).collect());
-        let r = self.send(app, "POST", &format!("transfers/downloads/{}", net::path_segment(username)), Some(list))?;
+        let r = self.send_patiently(app, "POST", &format!("transfers/downloads/{}", net::path_segment(username)), Some(list))?;
         if r.status == 404 || r.status == 405 {
             // Versions of slskd that take downloads only in batches.
             let body = obj! {

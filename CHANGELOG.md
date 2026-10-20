@@ -21,8 +21,9 @@ written for the people using SONORA.
   in docs/SOULSEEK.md.
 - **Downloads from any Soulseek client** can join the library: choose the
   folder where it saves finished downloads, and each finished file is added
-  and checked, at once or after you review it. SONORA only reads that
-  folder; it never moves, renames or deletes anything there.
+  and checked, at once or after you review it. Music already in the
+  folder when you choose it is left alone unless you add it. SONORA only
+  reads that folder; it never moves, renames or deletes anything there.
 - A track's analysis and details show when it came from Soulseek.
 
 ## 0.2.1

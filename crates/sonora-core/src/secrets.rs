@@ -280,7 +280,11 @@ mod keychain {
                             return Err("the keychain item could not be read".into());
                         }
                         let len = CFDataGetLength(result.0).max(0) as usize;
-                        let bytes = std::slice::from_raw_parts(CFDataGetBytePtr(result.0), len);
+                        let ptr = CFDataGetBytePtr(result.0);
+                        if len == 0 || ptr.is_null() {
+                            return Ok(Some(String::new()));
+                        }
+                        let bytes = std::slice::from_raw_parts(ptr, len);
                         String::from_utf8(bytes.to_vec()).map(Some).map_err(|_| "the keychain item could not be read".into())
                     }
                 }

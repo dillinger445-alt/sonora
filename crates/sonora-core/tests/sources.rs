@@ -101,9 +101,6 @@ fn finished_downloads_join_the_library_with_their_source() {
     let song = e.downloads.join("Some User/An Album/01 Song.wav");
     let partial = e.downloads.join("incomplete/02 Partial.wav");
     let fresh = e.downloads.join("03 Fresh.wav");
-    write(&song, 1, OLD);
-    write(&partial, 2, OLD);
-    write(&fresh, 3, Duration::ZERO);
     let app = open(&e);
 
     // Nothing happens before the lawful-use notice is accepted.
@@ -115,6 +112,11 @@ fn finished_downloads_join_the_library_with_their_source() {
     assert_eq!(call_err(&app, "sources.configure", &sonora_json::obj! { "folder" => e.data.to_string_lossy().to_string() }.to_string_compact()), "invalid_params");
     let st = configure(&app, &e.downloads, false);
     assert_eq!(st.get("watching").and_then(Value::as_bool), Some(true));
+
+    // Downloads arrive after the folder was chosen.
+    write(&song, 1, OLD);
+    write(&partial, 2, OLD);
+    write(&fresh, 3, Duration::ZERO);
 
     // The first look only notes the files; the partial download is never one.
     let r = call(&app, "sources.check", "");
@@ -158,11 +160,11 @@ fn finished_downloads_join_the_library_with_their_source() {
 #[test]
 fn review_holds_downloads_until_the_person_chooses() {
     let e = env("review");
-    write(&e.downloads.join("keep.wav"), 11, OLD);
-    write(&e.downloads.join("skip.wav"), 12, OLD);
     let app = open(&e);
     call(&app, "sources.accept", "");
     configure(&app, &e.downloads, true);
+    write(&e.downloads.join("keep.wav"), 11, OLD);
+    write(&e.downloads.join("skip.wav"), 12, OLD);
     call(&app, "sources.check", "");
     let r = call(&app, "sources.check", "");
     assert_eq!((found(&r, "held"), found(&r, "imported")), (2, 0), "{}", r.to_string_compact());
@@ -190,23 +192,69 @@ fn review_holds_downloads_until_the_person_chooses() {
 }
 
 #[test]
+fn files_already_there_stay_out_until_added() {
+    let e = env("existing");
+    // The folder already holds music when it is chosen (another client's
+    // older downloads, say), and a partial download.
+    write(&e.downloads.join("Older/old.wav"), 31, OLD);
+    write(&e.downloads.join("incomplete/part.wav"), 32, OLD);
+    let app = open(&e);
+    call(&app, "sources.accept", "");
+    let st = configure(&app, &e.downloads, false);
+    assert_eq!(st.get("existing").and_then(Value::as_i64), Some(1), "{}", st.to_string_compact());
+    for _ in 0..2 {
+        let r = call(&app, "sources.check", "");
+        assert_eq!((found(&r, "imported"), found(&r, "settling")), (0, 0), "{}", r.to_string_compact());
+    }
+    wait_idle(&app);
+    assert!(names(&app).is_empty(), "nothing added on its own");
+
+    // A new download still joins; the older file waits until the person adds it.
+    write(&e.downloads.join("new.wav"), 33, OLD);
+    call(&app, "sources.check", "");
+    call(&app, "sources.check", "");
+    wait_idle(&app);
+    assert_eq!(names(&app), vec!["new.wav".to_string()]);
+    let r = call(&app, "sources.addExisting", "");
+    assert_eq!(r.get("added").and_then(Value::as_i64), Some(1));
+    wait_idle(&app);
+    assert_eq!(names(&app), vec!["new.wav".to_string(), "old.wav".to_string()]);
+    let detail = call(&app, "tracks.get", &format!(r#"{{"id": {}, "visuals": false}}"#, id_of(&app, "old.wav")));
+    assert_eq!(detail.get("origin").map(|o| s(o, "source")), Some("soulseek"), "added from the download folder on request");
+    assert_eq!(call(&app, "sources.status", "").get("existing").and_then(Value::as_i64), Some(0));
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
 fn files_already_in_the_library_only_get_their_source() {
     let e = env("inside");
-    // The downloads land inside a library folder.
+    // The download folder is inside a library folder.
     let inside = e.music.join("From Soulseek");
-    write(&inside.join("a.wav"), 21, OLD);
+    write(&inside.join("before.wav"), 21, OLD);
     let app = open(&e);
-    call(&app, "library.import", &sonora_json::obj! { "paths" => vec![e.music.to_string_lossy().to_string()] }.to_string_compact());
+    let import = sonora_json::obj! { "paths" => vec![e.music.to_string_lossy().to_string()] }.to_string_compact();
+    call(&app, "library.import", &import);
     wait_idle(&app);
-    assert_eq!(names(&app), vec!["a.wav".to_string()]);
     call(&app, "sources.accept", "");
-    configure(&app, &inside, false);
+    let st = configure(&app, &inside, false);
+    assert_eq!(st.get("existing").and_then(Value::as_i64), Some(0), "library tracks are not offered again");
+
+    // A download that arrives later, and that a library rescan adds first.
+    write(&inside.join("after.wav"), 22, OLD);
+    call(&app, "library.import", &import);
+    wait_idle(&app);
+    assert_eq!(names(&app), vec!["after.wav".to_string(), "before.wav".to_string()]);
     let r = call(&app, "sources.check", "");
     assert_eq!(found(&r, "imported"), 0);
     wait_idle(&app);
-    assert_eq!(names(&app), vec!["a.wav".to_string()], "no second copy");
-    let detail = call(&app, "tracks.get", &format!(r#"{{"id": {}, "visuals": false}}"#, id_of(&app, "a.wav")));
-    assert_eq!(detail.get("origin").map(|o| s(o, "source")), Some("soulseek"));
+    assert_eq!(names(&app), vec!["after.wav".to_string(), "before.wav".to_string()], "no second copy");
+    let origin = |name: &str| {
+        let d = call(&app, "tracks.get", &format!(r#"{{"id": {}, "visuals": false}}"#, id_of(&app, name)));
+        d.get("origin").map(|o| s(o, "source").to_string()).unwrap_or_default()
+    };
+    assert_eq!(origin("after.wav"), "soulseek");
+    assert_eq!(origin("before.wav"), "", "music that was there before is not marked as a download");
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }

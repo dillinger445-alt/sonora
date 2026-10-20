@@ -629,6 +629,8 @@ export interface SourcesStatus {
   error: string | null;
   /** Files seen at the last look that are not finished yet. */
   settling: number;
+  /** Audio files that were in the folder when it was chosen and are not in the library: they stay out unless added. */
+  existing: number;
   counts: SourceCounts;
 }
 

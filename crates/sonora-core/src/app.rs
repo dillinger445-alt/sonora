@@ -173,7 +173,10 @@ impl App {
         let started = std::time::Instant::now();
         let result = api::dispatch(self, method, &params);
         if let Err(e) = &result {
-            if e.code != "not_found" && e.code != "invalid_params" && e.code != "busy" {
+            if e.code.starts_with("slskd_") {
+                // slskd's answers can name other Soulseek users: only the code is kept.
+                logging::log_fields("warn", "api", "slskd request failed", obj! { "method" => method, "code" => e.code.clone() });
+            } else if e.code != "not_found" && e.code != "invalid_params" && e.code != "busy" {
                 logging::log_fields("warn", "api", &e.message, obj! { "method" => method, "code" => e.code.clone() });
             }
         }

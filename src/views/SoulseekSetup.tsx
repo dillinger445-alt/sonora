@@ -22,9 +22,13 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const STORE_NAME = { keychain: 'your keychain', 'credential-manager': 'Windows Credential Manager', file: 'SONORA’s data folder' } as const;
 
-/** The lines to add to slskd.yml for SONORA's key. */
-export function yamlFor(key: string, local: boolean): string {
-  return ['web:', '  authentication:', '    api_keys:', '      sonora:', `        key: ${key}`, '        role: readwrite', ...(local ? ['        cidr: 127.0.0.1/32,::1/128'] : [])].join('\n');
+/**
+ * The lines to add to slskd.yml for SONORA's key. No `cidr` line: slskd in
+ * Docker sees requests from Docker's own address, and slskd.yml's
+ * `web.ip_address` is the place to keep its web page to this computer.
+ */
+export function yamlFor(key: string): string {
+  return ['web:', '  authentication:', '    api_keys:', '      sonora:', `        key: ${key}`, '        role: readwrite'].join('\n');
 }
 
 export function SoulseekSetup({ state }: { state: SoulseekState }) {
@@ -134,6 +138,17 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
     }
   };
 
+  const addExisting = () =>
+    run('existing', async () => {
+      try {
+        const r = await client.sourcesAddExisting();
+        state.sources.reload();
+        toast({ tone: 'success', title: src.review ? `${plural(r.added, 'file')} waiting for your review in Downloads` : `Adding ${plural(r.added, 'file')} to the library` });
+      } catch (e) {
+        toast({ tone: 'error', title: 'Could not add the files', body: message(e) });
+      }
+    });
+
   const checkNow = () =>
     run('check', async () => {
       try {
@@ -189,10 +204,10 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
               Add these lines to slskd.yml (merge them into its <span className="sk-code">web</span> section if it has one), save the file and restart slskd.
             </p>
             <pre className="sk-yaml selectable" aria-label="Lines for slskd.yml">
-              {yamlFor(newKey, status.local)}
+              {yamlFor(newKey)}
             </pre>
             <div className="sk-key-actions">
-              <Button size="sm" icon={LuCopy} onClick={() => void copy(yamlFor(newKey, status.local))}>
+              <Button size="sm" icon={LuCopy} onClick={() => void copy(yamlFor(newKey))}>
                 Copy lines
               </Button>
               <Button size="sm" variant="primary" busy={state.testing} onClick={() => void state.test()}>
@@ -252,9 +267,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
           description={
             status.local
               ? 'Usually http://localhost:5030.'
-              : url.startsWith('https://')
-                ? 'slskd is on another computer.'
-                : 'slskd is on another computer. Over http:// the key travels unencrypted on your network: use https:// or keep slskd on this computer.'
+              : 'slskd is on another computer. Over http:// the key travels unencrypted on your network, and slskd’s own https certificate changes each time it starts, so SONORA cannot check it. Keep slskd on this computer, or give it a certificate your system trusts and use https://.'
           }
         >
           <form
@@ -344,6 +357,16 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
             </Button>
           ) : null}
         </Row>
+        {src.folder && src.existing > 0 ? (
+          <Row
+            label="Files that were already there"
+            description={`${plural(src.existing, 'audio file')} not in your library ${src.existing === 1 ? 'was' : 'were'} in this folder before you chose it. ${src.existing === 1 ? 'It stays' : 'They stay'} out of your library, unmarked, unless you add ${src.existing === 1 ? 'it' : 'them'}.`}
+          >
+            <Button size="sm" busy={busy === 'existing'} onClick={() => void addExisting()}>
+              {src.existing === 1 ? 'Add it' : 'Add them'}
+            </Button>
+          </Row>
+        ) : null}
         {suggestions.map((f) => (
           <Row key={f} label="slskd’s folder on this computer" description={<span className="selectable mono-path">{f}</span>}>
             <Button size="sm" busy={busy === 'folder'} onClick={() => void setFolder(f)}>

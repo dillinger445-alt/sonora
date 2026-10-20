@@ -985,7 +985,7 @@ test('Soulseek: search through slskd, download, and the files join the library w
     await page.getByRole('button', { name: 'Make a key' }).click();
     const yaml = page.getByLabel('Lines for slskd.yml');
     await expect(yaml).toContainText('role: readwrite');
-    await expect(yaml).toContainText('cidr: 127.0.0.1/32,::1/128');
+    await expect(yaml).not.toContainText('cidr');
     const key = /key: (\S+)/.exec(await yaml.innerText())?.[1] ?? '';
     expect(key).toMatch(/^[A-Za-z0-9]{32}$/);
     slskd.key = key;

@@ -168,18 +168,17 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
     }
   }, [client]);
 
-  // Ask slskd how it is doing when the page opens. After that, only when
-  // asked: a key just made is not in slskd.yml yet.
-  const checked = useRef(false);
+  // Ask slskd how it is doing once, when the page opens with slskd set up.
+  // After that only when asked: a key just made is not in slskd.yml yet.
+  const opened = useRef(false);
   useEffect(() => {
-    if (!accepted || !keySaved) {
-      setConnection(null);
-      return;
-    }
-    if (checked.current) return;
-    checked.current = true;
-    void test();
-  }, [accepted, keySaved, test]);
+    if (opened.current || !sources.data || !slskd.data) return;
+    opened.current = true;
+    if (sources.data.accepted && slskd.data.keySaved) void test();
+  }, [sources.data, slskd.data, test]);
+  useEffect(() => {
+    if (!keySaved) setConnection(null);
+  }, [keySaved]);
 
   const accept = async () => {
     setAccepting(true);

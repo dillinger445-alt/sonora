@@ -279,7 +279,7 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 244 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads and slskd, API
+npm run test:rust          # 245 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads and slskd, API
 npm run test:unit          # 38 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
 npm run build && npm run test:e2e   # 25 Playwright tests: real interface + real core on a generated corpus
@@ -288,8 +288,8 @@ npm run build && npm run test:e2e   # 25 Playwright tests: real interface + real
 A few Rust tests depend on the system: on macOS and Windows one moves a
 file to the system Trash or Recycle Bin, on Linux one makes the trash
 unusable to check that a file that stays keeps its place in a scan, and
-Unix systems check symlink loops. So macOS and Linux run 244 and Windows
-243. On Windows, CI also runs a test that turns the Recycle Bin off for the
+Unix systems check symlink loops. So macOS and Linux run 245 and Windows
+244. On Windows, CI also runs a test that turns the Recycle Bin off for the
 drive for a moment, to check that Move to Recycle Bin never deletes a file
 for good, and on macOS and Windows a test that stores, changes and removes
 a secret in the real keychain or Credential Manager. slskd is never

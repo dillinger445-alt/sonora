@@ -22,6 +22,9 @@ struct State {
     unreachable: bool,
     /// The size of the downloaded file once it "finished".
     finished: Option<i64>,
+    /// Looks at the search so far: slskd stores the responses only once the
+    /// search has ended, after a moment of "Completed" without them.
+    search_looks: usize,
 }
 
 #[derive(Default)]
@@ -60,25 +63,32 @@ impl Http for FakeSlskd {
                 },
             ),
             ("POST", "searches") => json(200, obj! { "id" => SEARCH_ID, "searchText" => "artist song", "state" => "InProgress" }),
-            ("GET", p) if p == format!("searches/{SEARCH_ID}?includeResponses=true") => json(
-                200,
-                obj! {
-                    "id" => SEARCH_ID,
-                    "searchText" => "artist song",
-                    "state" => "Completed, TimedOut",
-                    "responseCount" => 2,
-                    "responses" => Value::Array(vec![
-                        obj! {
-                            "username" => "sharer", "hasFreeUploadSlot" => true, "queueLength" => 0, "uploadSpeed" => 1_500_000,
-                            "files" => Value::Array(vec![result_file("@@abc\\Music\\Artist - Album\\01 Song.flac", st.finished.unwrap_or(1_234_567))]),
-                        },
-                        obj! {
-                            "username" => "other", "hasFreeUploadSlot" => false, "queueLength" => 4, "uploadSpeed" => 100_000,
-                            "files" => Value::Array(vec![result_file("mp3s\\Artist\\01 Song.mp3", 5_000_000)]),
-                        },
-                    ]),
-                },
-            ),
+            ("GET", p) if p == format!("searches/{SEARCH_ID}?includeResponses=true") => {
+                st.search_looks += 1;
+                let mut v = obj! { "id" => SEARCH_ID, "searchText" => "artist song", "responseCount" => 2 };
+                match st.search_looks {
+                    1 => v.set("state", "InProgress"),
+                    2 => v.set("state", "Completed, TimedOut"),
+                    _ => {
+                        v.set("state", "Completed, TimedOut");
+                        v.set("endedAt", "2026-10-20T10:00:15.5Z");
+                        v.set(
+                            "responses",
+                            Value::Array(vec![
+                                obj! {
+                                    "username" => "sharer", "hasFreeUploadSlot" => true, "queueLength" => 0, "uploadSpeed" => 1_500_000,
+                                    "files" => Value::Array(vec![result_file("@@abc\\Music\\Artist - Album\\01 Song.flac", st.finished.unwrap_or(1_234_567)), result_file("@@abc\\Music\\Artist - Album\\cover.jpg", 50_000)]),
+                                },
+                                obj! {
+                                    "username" => "other", "hasFreeUploadSlot" => false, "queueLength" => 4, "uploadSpeed" => 100_000,
+                                    "files" => Value::Array(vec![result_file("mp3s\\Artist\\01 Song.mp3", 5_000_000)]),
+                                },
+                            ]),
+                        );
+                    }
+                }
+                json(200, v)
+            }
             ("PUT", p) if p == format!("searches/{SEARCH_ID}") => Response { status: 200, body: String::new() },
             ("POST", "transfers/downloads/sharer") => json(201, obj! { "enqueued" => Value::Array(vec![obj! { "id" => TRANSFER_ID }]), "failed" => Value::Array(vec![]) }),
             ("POST", p) if p.starts_with("transfers/downloads/") => Response { status: 500, body: "\"User nobody appears to be offline\"".into() },
@@ -206,6 +216,9 @@ fn search_download_and_find_the_track() {
     let db = std::fs::read(e.data.join("sonora.db")).unwrap();
     assert!(!db.windows(KEY.len()).any(|w| w == KEY.as_bytes()), "the API key is in the database");
 
+    // slskd's download folder, chosen while it is empty.
+    call(&app, "sources.configure", &obj! { "folder" => e.downloads.to_string_lossy().to_string() });
+
     // Search: the words go to slskd; the results come back grouped, lossless only.
     assert_eq!(call_err(&app, "slskd.search", &obj! { "text" => "  " }).0, "invalid_params");
     let r = call(&app, "slskd.search", &obj! { "text" => "artist song" });
@@ -213,6 +226,13 @@ fn search_download_and_find_the_track() {
     let body = fake.state.lock().unwrap().requests.last().unwrap().2.clone().unwrap();
     assert_eq!(sonora_json::parse(&body).unwrap().get("searchText").and_then(Value::as_str), Some("artist song"));
     assert_eq!(call_err(&app, "slskd.results", &obj! { "id" => "../application" }).0, "invalid_params");
+    // Until slskd has stored the responses, the search is still on, even
+    // when slskd already says "Completed".
+    for _ in 0..2 {
+        let res = call(&app, "slskd.results", &obj! { "id" => SEARCH_ID });
+        assert_eq!((s(&res, "state"), res.get("responses").and_then(Value::as_i64)), ("searching", Some(2)), "{}", res.to_string_compact());
+        assert_eq!(res.get("folders").and_then(Value::as_array).map(Vec::len), Some(0));
+    }
     let res = call(&app, "slskd.results", &obj! { "id" => SEARCH_ID });
     assert_eq!(s(&res, "state"), "done");
     let folders = res.get("folders").and_then(Value::as_array).unwrap();
@@ -235,6 +255,11 @@ fn search_download_and_find_the_track() {
     let (code, message) = call_err(&app, "slskd.download", &obj! { "username" => "nobody", "files" => Value::Array(vec![obj! { "filename" => "x\\y.flac", "size" => 1 }]) });
     assert_eq!(code, "slskd_failed");
     assert!(message.contains("appears to be offline"), "{message}");
+    // The log keeps that slskd failed, never what it said: its answers can
+    // name other users. Nor the key.
+    let log = std::fs::read_to_string(e.data.join("logs").join("sonora.log")).unwrap_or_default();
+    assert!(log.contains("slskd request failed"), "{log}");
+    assert!(!log.contains("nobody") && !log.contains("offline") && !log.contains(KEY), "{log}");
 
     let list = call(&app, "slskd.downloads", &obj! {});
     let item = &list.get("downloads").and_then(Value::as_array).unwrap()[0];
@@ -245,7 +270,6 @@ fn search_download_and_find_the_track() {
     let local = e.downloads.join("Artist - Album").join("01 Song.flac");
     let size = write_download(&local);
     fake.state.lock().unwrap().finished = Some(size);
-    call(&app, "sources.configure", &obj! { "folder" => e.downloads.to_string_lossy().to_string() });
     call(&app, "sources.check", &obj! {});
     call(&app, "sources.check", &obj! {});
     wait_idle(&app);
