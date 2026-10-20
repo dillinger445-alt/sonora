@@ -4,6 +4,15 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.3.2
+
+### Fixed
+
+- **Dialogs on a Mac.** Every dialog opened with an empty box: the window
+  only darkened, and Esc closed it. So **Set up Soulseek…**, updating to a
+  new version, and the questions SONORA asks before removing or changing
+  something could not be used. They show again. Windows was not affected.
+
 ## 0.3.1
 
 ### New
