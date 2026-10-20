@@ -597,7 +597,8 @@ mod tests {
         let result = move_to_trash(&f);
         reg(&["delete", &key, "/v", "NukeOnDelete", "/f"]);
         assert_eq!(std::fs::read(&f).ok().as_deref(), Some(&b"audio"[..]), "the file must stay where it was: {result:?}");
-        assert!(result.is_err());
+        // Refused by the progress sink, not by some other failure.
+        assert!(result.as_ref().is_err_and(|e| e.contains("could not put it in the Recycle Bin")), "{result:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
