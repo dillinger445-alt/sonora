@@ -4,7 +4,7 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
-## Unreleased
+## 0.3.0
 
 ### New
 
@@ -25,11 +25,6 @@ written for the people using SONORA.
   folder when you choose it is left alone unless you add it. SONORA only
   reads that folder; it never moves, renames or deletes anything there.
 - A track's analysis and details show when it came from Soulseek.
-
-## 0.2.1
-
-### New
-
 - **Move to Trash**: for files you no longer want. In the details panel,
   the selection bar and a track's page (or **⌘⌫** on a Mac), it moves the
   audio file to the Trash (the Recycle Bin on Windows) and takes its track
