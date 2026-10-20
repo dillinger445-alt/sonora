@@ -12,6 +12,8 @@ written for the people using SONORA.
   only darkened, and Esc closed it. So **Set up Soulseek…**, updating to a
   new version, and the questions SONORA asks before removing or changing
   something could not be used. They show again. Windows was not affected.
+- **The path of slskd's settings file** on the Soulseek page breaks inside
+  its column instead of running over the text next to it.
 
 ## 0.3.1
 
