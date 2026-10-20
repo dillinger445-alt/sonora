@@ -1,7 +1,7 @@
 {
   "name": "sonora",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "SONORA — professional audio quality analyzer for DJs and listeners",
   "type": "module",
   "engines": {
