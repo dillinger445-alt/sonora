@@ -290,9 +290,9 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 
 ```sh
 npm run test:rust          # 277 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, API
-npm run test:unit          # 44 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, release notes and the release script)
+npm run test:unit          # 48 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, copying to the clipboard, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 28 Playwright tests: real interface + real core on a generated corpus, in Chromium and (one check) in WebKit
+npm run build && npm run test:e2e   # 29 Playwright tests: real interface + real core on a generated corpus, in Chromium and (two checks) in WebKit
 ```
 
 A few Rust tests depend on the system: on macOS and Windows one moves a
