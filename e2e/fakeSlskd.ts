@@ -6,9 +6,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { basename, dirname, join } from 'node:path';
 
 export interface SharedFile {
   username: string;
@@ -18,6 +19,24 @@ export interface SharedFile {
   sampleRate?: number;
   bitRate?: number;
   length?: number;
+  /** A local file whose bytes the "other user" sends (previews and downloads of it). */
+  source?: string;
+}
+
+/** Where slskd keeps a partial download: <incomplete>/<user>/<remote folders>/<name>, each part made safe (as on Linux). */
+export function incompletePath(root: string, username: string, filename: string): string {
+  const safe = (seg: string) => {
+    const s = seg.replace(/[\0/\\]/g, '_');
+    return s === '.' || s === '..' ? '_' : s;
+  };
+  const local = filename.replace(/\\/g, '/');
+  const unrooted = local
+    .replace(/^[a-zA-Z]:\/?/, '')
+    .replace(/^\/\/[^/]+\/?/, '')
+    .replace(/^@@[a-zA-Z0-9]{5,}\/?/, '');
+  const parts = unrooted.split('/').filter(Boolean);
+  const name = safe(local.split('/').pop() ?? '');
+  return join(root, safe(username), ...parts.slice(0, -1).map(safe), name);
 }
 
 interface FakeTransfer {
@@ -30,6 +49,12 @@ interface FakeTransfer {
   endedAt: string | null;
   bytesTransferred: number;
   placeInQueue: number | null;
+  batchId?: string;
+  /** The batch's folder (inside the download folder), for previews. */
+  destination?: string;
+  removed?: boolean;
+  /** Where it resumed from. */
+  offset?: number;
 }
 
 export interface FakeSlskd {
@@ -54,6 +79,11 @@ const directory = (filename: string) => filename.slice(0, Math.max(filename.last
 export interface FakeOptions {
   port?: number;
   config?: string;
+  /** slskd's folders: where finished and partial downloads go (files with a `source` are "received" there). */
+  downloads?: string;
+  incomplete?: string;
+  /** Bytes "received" every 50 ms. */
+  rate?: number;
 }
 
 /** A value from the slskd.yml SONORA writes (single-quoted scalars). */
@@ -74,6 +104,46 @@ export async function startFakeSlskd(shared: SharedFile[], options: FakeOptions 
     };
   };
   const started = new Map<string, { text: string; at: number }>();
+
+  const stops = new Map<string, () => void>();
+  /** "Receives" a shared file into the partial file, from what is there on, as slskd resumes. */
+  const receive = (t: FakeTransfer) => {
+    const file = fake.shared.find((f) => f.username === t.username && f.filename === t.filename);
+    if (!file?.source || !options.incomplete || !options.downloads) return;
+    const data = readFileSync(file.source);
+    const partial = incompletePath(options.incomplete, t.username, t.filename);
+    mkdirSync(dirname(partial), { recursive: true });
+    let pos = existsSync(partial) ? statSync(partial).size : 0;
+    t.offset = pos;
+    let stopped = false;
+    stops.set(t.id, () => {
+      stopped = true;
+    });
+    const step = () => {
+      if (stopped) {
+        if (!t.state.startsWith('Completed')) t.state = 'Completed, Cancelled';
+        return;
+      }
+      t.state = 'InProgress';
+      t.placeInQueue = null;
+      const n = Math.min(options.rate ?? 64 * 1024, data.length - pos);
+      appendFileSync(partial, data.subarray(pos, pos + n));
+      pos += n;
+      t.bytesTransferred = pos;
+      if (pos < data.length) {
+        setTimeout(step, 50);
+        return;
+      }
+      const dir = join(options.downloads ?? '', t.destination ?? 'received');
+      mkdirSync(dir, { recursive: true });
+      renameSync(partial, join(dir, basename(partial)));
+      t.state = 'Completed, Succeeded';
+      t.endedAt = new Date().toISOString();
+    };
+    setTimeout(step, 150);
+  };
+  const busy = (username: string, filename: string) => fake.transfers.some((x) => x.username === username && x.filename === filename && !x.removed && !x.state.startsWith('Completed'));
+  const listed = () => fake.transfers.filter((x) => !x.removed);
 
   const send = (res: ServerResponse, status: number, body?: unknown) => {
     res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -144,6 +214,46 @@ export async function startFakeSlskd(shared: SharedFile[], options: FakeOptions 
           responses: ended && url.searchParams.get('includeResponses') === 'true' ? responses : [],
         });
       }
+      if (method === 'GET' && path === 'options') {
+        return send(res, 200, {
+          directories: { downloads: options.downloads ?? '', incomplete: options.incomplete ?? '' },
+          transfers: { download: { retry: { partial: 'resume' } } },
+        });
+      }
+      if (method === 'POST' && path === 'transfers/downloads/batches') {
+        const b = JSON.parse(body) as { id: string; username: string; files: { filename: string; size: number }[]; options?: { destination?: string } };
+        const f = b.files[0];
+        if (!f) return send(res, 400);
+        if (busy(b.username, f.filename)) return send(res, 200, { batch: {}, failures: [{ filename: f.filename, message: 'already in progress' }] });
+        const t: FakeTransfer = {
+          id: randomUUID(),
+          username: b.username,
+          filename: f.filename,
+          size: f.size,
+          state: 'Queued, Remotely',
+          requestedAt: new Date().toISOString(),
+          endedAt: null,
+          bytesTransferred: 0,
+          placeInQueue: 1,
+          batchId: b.id,
+          destination: b.options?.destination,
+        };
+        fake.transfers.push(t);
+        receive(t);
+        return send(res, 201, { batch: { id: b.id, transfers: [t] }, failures: [] });
+      }
+      const one = /^transfers\/downloads\/([^/]+)\/([0-9a-f-]{36})$/.exec(path);
+      if (method === 'GET' && one) {
+        const t = listed().find((x) => x.id === one[2]);
+        return t ? send(res, 200, t) : send(res, 404);
+      }
+      const user = /^transfers\/downloads\/([^/]+)$/.exec(path);
+      if (method === 'GET' && user && user[1] !== 'batches') {
+        const username = decodeURIComponent(user[1] ?? '');
+        const mine = listed().filter((x) => x.username === username);
+        if (mine.length === 0) return send(res, 404);
+        return send(res, 200, { username, directories: [{ directory: 'x', fileCount: mine.length, files: mine }] });
+      }
       if (method === 'POST' && path.startsWith('transfers/downloads/')) {
         const username = decodeURIComponent(path.slice('transfers/downloads/'.length));
         const files = JSON.parse(body) as { filename: string; size: number }[];
@@ -160,17 +270,18 @@ export async function startFakeSlskd(shared: SharedFile[], options: FakeOptions 
             placeInQueue: i + 2,
           };
           fake.transfers.push(t);
+          receive(t);
           return t;
         });
         return send(res, 201, { enqueued, failed: [] });
       }
       if (method === 'GET' && path === 'transfers/downloads') {
-        const users = [...new Set(fake.transfers.map((t) => t.username))];
+        const users = [...new Set(listed().map((t) => t.username))];
         return send(
           res,
           200,
           users.map((username) => {
-            const mine = fake.transfers.filter((t) => t.username === username);
+            const mine = listed().filter((t) => t.username === username);
             const dirs = [...new Set(mine.map((t) => directory(t.filename)))];
             return {
               username,
@@ -191,7 +302,9 @@ export async function startFakeSlskd(shared: SharedFile[], options: FakeOptions 
       if (method === 'DELETE' && cancel) {
         const t = fake.transfers.find((x) => x.id === cancel);
         if (!t) return send(res, 404);
+        stops.get(t.id)?.();
         if (!t.state.startsWith('Completed')) t.state = 'Completed, Cancelled';
+        if (url.searchParams.get('remove') === 'true') t.removed = true;
         return send(res, 204);
       }
       return send(res, 404);

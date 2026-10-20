@@ -132,6 +132,7 @@ export function createHttpBridge(base = ''): Bridge {
       return Promise.resolve();
     },
     mediaUrl: (prepared: PreparedPlayback) => `${base}/api/audio?path=${encodeURIComponent(prepared.path)}`,
+    previewUrl: (id: number) => `${base}/api/preview?id=${id}`,
     reveal: async (path: string) => {
       await call('system.reveal', { path });
     },

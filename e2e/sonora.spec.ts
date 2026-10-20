@@ -8,7 +8,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startFakeSlskd } from './fakeSlskd.ts';
+import { incompletePath, startFakeSlskd } from './fakeSlskd.ts';
 import { DATA, LIBRARY, MANAGED_SLSKD_PORT, MUSIC } from './paths.ts';
 
 test.describe.configure({ mode: 'serial' });
@@ -30,6 +30,23 @@ async function waitIdle(page: Page, timeoutMs = 120_000): Promise<void> {
       { timeout: timeoutMs, intervals: [250, 500, 1000] },
     )
     .toBe(true);
+}
+
+/** Calls the core API the way the interface does. */
+async function api<T>(page: Page, method: string, params: unknown = {}): Promise<T> {
+  return page.evaluate(
+    async ({ method, params }) => {
+      const r = await fetch('/api/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sonora-Client': 'e2e' },
+        body: JSON.stringify({ method, params }),
+      });
+      const j = (await r.json()) as { ok: boolean; result: unknown; error?: { message: string } };
+      if (!j.ok) throw new Error(j.error?.message ?? method);
+      return j.result;
+    },
+    { method, params },
+  ) as Promise<T>;
 }
 
 function rows(page: Page) {
@@ -1104,6 +1121,84 @@ test('Soulseek: one button sets slskd up, a failed step can be tried again, and 
     await expect(page.getByText('Repaired: slskd has SONORA’s key again')).toBeVisible();
     expect(readFileSync(config, 'utf8')).toMatch(/^ {8}key: '[A-Za-z0-9]{16,}'$/m);
     await expect(page.locator('.view-sub')).toContainText('Signed in to Soulseek as e2e-dj', { timeout: 15_000 });
+  } finally {
+    await slskd.close();
+  }
+});
+
+test('Soulseek previews play while the file arrives, are never downloads, queue up, and leave nothing behind', async ({ page }) => {
+  // A stand-in slskd that "receives" files a piece at a time into its
+  // folder for partial downloads, as slskd does. Nothing reaches Soulseek.
+  const root = join(DATA, 'preview-slskd');
+  rmSync(root, { recursive: true, force: true });
+  const downloads = join(root, 'downloads');
+  const incomplete = join(root, 'incomplete');
+  mkdirSync(downloads, { recursive: true });
+  mkdirSync(incomplete, { recursive: true });
+  const album = '@@shared\\Music\\Afterhours';
+  const first = `${album}\\01 First Light.flac`;
+  const second = `${album}\\02 Tape Hiss.wav`;
+  const flacSource = join(MUSIC, 'clean_master.flac');
+  const wavSource = join(MUSIC, 'clean_master_16bit.wav');
+  const slskd = await startFakeSlskd(
+    [
+      { username: 'night-owl', filename: first, size: statSync(flacSource).size, bitDepth: 16, sampleRate: 44100, length: 20, source: flacSource },
+      { username: 'night-owl', filename: second, size: statSync(wavSource).size, bitDepth: 16, sampleRate: 44100, length: 20, source: wavSource },
+      { username: 'night-owl', filename: `${album}\\03 Radio Edit.mp3`, size: 400_000, bitRate: 320, length: 10 },
+    ],
+    { downloads, incomplete, rate: 24 * 1024 },
+  );
+  slskd.key = 'e2e-preview-key-0123456789';
+  try {
+    await page.goto('/#/soulseek');
+    const accept = page.getByRole('button', { name: 'Accept and continue' });
+    if (await accept.isVisible()) await accept.click();
+    await api(page, 'slskd.configure', { url: slskd.url, apiKey: slskd.key });
+    const tracksBefore = (await api<{ total: number }>(page, 'library.query', { limit: 1 })).total;
+
+    await page.getByRole('tab', { name: 'Search' }).click();
+    await page.getByRole('searchbox', { name: 'Search Soulseek' }).fill('afterhours');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByRole('radio', { name: 'All formats' }).click();
+    const folder = page.getByRole('region', { name: 'Afterhours from night-owl' });
+    await expect(folder.getByText('01 First Light.flac', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/A preview plays a file while it arrives/)).toBeVisible();
+    // MP3s cannot be previewed, and say why.
+    await expect(folder.getByRole('button', { name: /^MP3 cannot be previewed/ })).toBeDisabled();
+
+    // Play: the player shows the preview and plays before the file has all arrived.
+    await folder.getByRole('button', { name: 'Preview 01 First Light.flac' }).click();
+    const player = page.getByRole('region', { name: 'Player' });
+    await expect(player.getByText('Preview', { exact: true })).toBeVisible();
+    await expect(player.getByText('01 First Light.flac')).toBeVisible();
+    await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => Number(await player.getByRole('slider', { name: 'Position' }).getAttribute('aria-valuenow')), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+    const t1 = slskd.transfers.find((t) => t.filename === first);
+    expect(t1?.bytesTransferred ?? 0).toBeLessThan(t1?.size ?? 0);
+    expect(t1?.destination).toMatch(/^\.sonora-preview\//);
+    await expect(folder.getByRole('row', { name: /01 First Light\.flac/ })).toContainText(/Playing|Arriving as it plays/);
+
+    // A preview is not a download: slskd got no download request, and the Downloads list stays empty.
+    expect(slskd.transfers.filter((t) => !t.batchId)).toHaveLength(0);
+    expect((await api<{ downloads: unknown[] }>(page, 'slskd.downloads')).downloads).toHaveLength(0);
+
+    // Queue the WAV, then go on to it: the first preview stops and leaves nothing.
+    await folder.getByRole('button', { name: 'Add 02 Tape Hiss.wav to the preview queue' }).click();
+    const queue = page.getByRole('region', { name: 'Preview queue' });
+    await expect(queue).toContainText('02 Tape Hiss.wav');
+    await player.getByRole('button', { name: /^Next preview/ }).click();
+    await expect(player.getByText('02 Tape Hiss.wav')).toBeVisible();
+    await expect(queue).toHaveCount(0);
+    await expect.poll(() => slskd.transfers.find((t) => t.filename === first)?.removed ?? false, { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => existsSync(incompletePath(incomplete, 'night-owl', first)), { timeout: 15_000 }).toBe(false);
+    await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 15_000 });
+
+    // Closing the player stops the second one too. Nothing was added to the library or kept.
+    await player.getByRole('button', { name: 'Close the player' }).click();
+    await expect.poll(() => slskd.transfers.filter((t) => !t.removed).length, { timeout: 15_000 }).toBe(0);
+    await expect.poll(() => existsSync(incompletePath(incomplete, 'night-owl', second)), { timeout: 15_000 }).toBe(false);
+    expect(existsSync(join(downloads, '.sonora-preview'))).toBe(false);
+    expect((await api<{ total: number }>(page, 'library.query', { limit: 1 })).total).toBe(tracksBefore);
   } finally {
     await slskd.close();
   }

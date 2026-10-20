@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import { LuCopy, LuExternalLink, LuFolderOpen, LuKeyRound, LuRefreshCw, LuShieldCheck } from 'react-icons/lu';
 import { Button } from '../components/Button.tsx';
-import { Switch } from '../components/Controls.tsx';
+import { Segmented, Switch } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
 import { formatDate, formatRelative, plural } from '../lib/format.ts';
 import { isAbsolutePath } from '../lib/paths.ts';
@@ -33,7 +33,7 @@ export function yamlFor(key: string): string {
 }
 
 export function SoulseekSetup({ state }: { state: SoulseekState }) {
-  const { client, bridge } = useCore();
+  const { client, bridge, settings, saveSettings } = useCore();
   const toast = useToast();
   const [confirm, dialogs] = useConfirm();
   const status = state.slskd.data;
@@ -170,7 +170,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
   const suggestions = status.defaultFolders.filter((f) => f !== src.folder);
   const windows = bridge.platform === 'windows';
   const m = state.managed.data;
-  const run = m?.setup ?? null;
+  const setupRun = m?.setup ?? null;
   // SONORA runs slskd here: the manual steps are only for looking things up.
   const managed = !!m?.supported && m.configured;
   const showManual = !m?.supported || manual || (!m.configured && status.keySaved) || (managed && manual);
@@ -178,8 +178,10 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
 
   return (
     <div className="settings sk-setup">
-      {m?.supported && run && (run.active || run.error || run.finished) ? <SetupProgress run={run} others={m.others} onChanged={state.managed.reload} /> : null}
-      {m?.supported && !m.configured && !run?.active ? <SetupCard onStart={() => setDialog('setup')} onManual={() => setManual(true)} /> : null}
+      {m?.supported && setupRun && (setupRun.active || setupRun.error || setupRun.finished) ? (
+        <SetupProgress run={setupRun} others={m.others} onChanged={state.managed.reload} />
+      ) : null}
+      {m?.supported && !m.configured && !setupRun?.active ? <SetupCard onStart={() => setDialog('setup')} onManual={() => setManual(true)} /> : null}
       {m && managed ? <ManagedPanel m={m} state={state} onUpdate={() => setDialog('update')} /> : null}
       {m?.supported ? (
         <SetupDialog open={dialog != null} update={dialog === 'update'} onClose={() => setDialog(null)} onStarted={() => state.managed.reload()} />
@@ -419,6 +421,38 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
             </Button>
           </Row>
         ) : null}
+      </Group>
+
+      <Group
+        title="Previews"
+        description="A preview asks slskd for the file and plays it as it arrives. It reads only so far ahead of what plays, stops fetching when you stop listening, and keeps nothing."
+      >
+        <Row label="Read ahead" description="How much a preview fetches beyond what is playing. More rides out a slow connection; less fetches less of what you may not listen to.">
+          <Segmented
+            label="Read ahead"
+            size="sm"
+            value={String(settings?.previewAhead ?? 60)}
+            onChange={(v) => void saveSettings({ previewAhead: Number(v) }).catch((e: unknown) => toast({ tone: 'error', title: 'Could not save the setting', body: message(e) }))}
+            options={[
+              { value: '30', label: '30 s' },
+              { value: '60', label: '1 min' },
+              { value: '120', label: '2 min' },
+            ]}
+          />
+        </Row>
+        <Row label="Space for previews" description="The most disk space a preview’s decoded audio may take. Previews longer than this stop where it runs out.">
+          <Segmented
+            label="Space for previews"
+            size="sm"
+            value={String(settings?.previewCacheMb ?? 1024)}
+            onChange={(v) => void saveSettings({ previewCacheMb: Number(v) }).catch((e: unknown) => toast({ tone: 'error', title: 'Could not save the setting', body: message(e) }))}
+            options={[
+              { value: '512', label: '512 MB' },
+              { value: '1024', label: '1 GB' },
+              { value: '2048', label: '2 GB' },
+            ]}
+          />
+        </Row>
       </Group>
 
       <Group title="Notice" description={src.acceptedAt ? `Accepted ${formatDate(src.acceptedAt)}.` : undefined}>

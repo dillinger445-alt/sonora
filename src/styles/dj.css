@@ -943,6 +943,33 @@
   pointer-events: none;
 }
 
+/* A preview: how much has arrived so far (seeking stays within it). */
+.seek-arrived {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 3px;
+  margin-top: -1px;
+  background: var(--c-text-off);
+  pointer-events: none;
+}
+
+.player-title.is-static:hover {
+  text-decoration: none;
+}
+
+.player-badge {
+  padding: 0 4px;
+  border: 1px solid var(--c-line-strong);
+  border-radius: var(--r-ctl);
+  color: var(--c-text-2);
+  font-size: 11px;
+}
+
+.player-dj.is-hidden {
+  display: none;
+}
+
 .seek-head {
   position: absolute;
   top: -3px;

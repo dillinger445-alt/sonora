@@ -7,7 +7,7 @@ use super::sniff::read_up_to;
 use super::{ChecksumStatus, DecodeStats, PcmSource, SampleKind, StreamInfo};
 use crate::error::AnalysisError;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 pub enum OpenError {
@@ -89,8 +89,15 @@ fn corrupt(msg: &str) -> OpenError {
 pub fn parse_header(path: &Path) -> Result<WavHeader, OpenError> {
     let mut f = File::open(path)?;
     let file_len = f.metadata()?.len();
+    parse_header_from(&mut f, file_len, false)
+}
+
+/// Parses the chunk structure from any reader of a stream `file_len` bytes
+/// long. With `stop_at_audio`, chunks after the audio are not looked at (a
+/// file still arriving has not got them yet).
+pub fn parse_header_from<R: Read + Seek>(f: &mut R, file_len: u64, stop_at_audio: bool) -> Result<WavHeader, OpenError> {
     let mut hdr = [0u8; 12];
-    if read_up_to(&mut f, &mut hdr)? < 12 {
+    if read_up_to(f, &mut hdr)? < 12 {
         return Err(corrupt("file too short for a WAVE header"));
     }
     let rf64 = &hdr[0..4] == b"RF64" || &hdr[0..4] == b"BW64";
@@ -106,7 +113,7 @@ pub fn parse_header(path: &Path) -> Result<WavHeader, OpenError> {
     let mut chunk_hdr = [0u8; 8];
     while pos + 8 <= file_len {
         f.seek(SeekFrom::Start(pos))?;
-        if read_up_to(&mut f, &mut chunk_hdr)? < 8 {
+        if read_up_to(f, &mut chunk_hdr)? < 8 {
             break;
         }
         let id = [chunk_hdr[0], chunk_hdr[1], chunk_hdr[2], chunk_hdr[3]];
@@ -115,7 +122,7 @@ pub fn parse_header(path: &Path) -> Result<WavHeader, OpenError> {
         match &id {
             b"ds64" => {
                 let mut b = vec![0u8; (size32 as usize).min(64)];
-                read_up_to(&mut f, &mut b)?;
+                read_up_to(f, &mut b)?;
                 if b.len() >= 16 {
                     ds64_data = Some(u64le(&b[8..16]));
                 }
@@ -125,7 +132,7 @@ pub fn parse_header(path: &Path) -> Result<WavHeader, OpenError> {
                     return Err(corrupt("invalid fmt chunk size"));
                 }
                 let mut b = vec![0u8; size32 as usize];
-                if read_up_to(&mut f, &mut b)? < size32 as usize {
+                if read_up_to(f, &mut b)? < size32 as usize {
                     return Err(corrupt("truncated fmt chunk"));
                 }
                 fmt = Some(b);
@@ -139,14 +146,14 @@ pub fn parse_header(path: &Path) -> Result<WavHeader, OpenError> {
                 };
                 data = Some((body, declared, placeholder));
                 // Metadata chunks may follow the data; keep scanning when sizes are sane.
-                if placeholder {
+                if placeholder || (stop_at_audio && fmt.is_some()) {
                     break;
                 }
             }
             b"LIST" => {
                 if (4..1 << 20).contains(&size32) {
                     let mut b = vec![0u8; size32 as usize];
-                    let n = read_up_to(&mut f, &mut b)?;
+                    let n = read_up_to(f, &mut b)?;
                     b.truncate(n);
                     if b.len() >= 4 && &b[0..4] == b"INFO" {
                         info_tags = parse_info_list(&b[4..]);
@@ -250,7 +257,7 @@ fn parse_info_list(b: &[u8]) -> Vec<(String, String)> {
 }
 
 pub struct WavSource {
-    reader: BufReader<File>,
+    reader: BufReader<Box<dyn super::ReadSeek>>,
     info: StreamInfo,
     enc: PcmEncoding,
     block_align: usize,
@@ -262,12 +269,18 @@ pub struct WavSource {
 
 impl WavSource {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let h = parse_header(path)?;
+        let f = File::open(path)?;
+        let len = f.metadata()?.len();
+        Self::open_reader(Box::new(f), len, false)
+    }
+
+    /// Decodes from any reader of a stream `len` bytes long (see [`parse_header_from`]).
+    pub fn open_reader(mut f: Box<dyn super::ReadSeek>, len: u64, stop_at_audio: bool) -> Result<Self, OpenError> {
+        let h = parse_header_from(&mut f, len, stop_at_audio)?;
         let enc = match h.encoding {
             Some(e) => e,
             None => return Err(OpenError::NotNative(h)),
         };
-        let mut f = File::open(path)?;
         f.seek(SeekFrom::Start(h.data_offset))?;
         let kind = if enc.is_float() { SampleKind::Float } else { SampleKind::Int };
         let bits = if enc.is_float() { enc.container_bits() } else { h.valid_bits.unwrap_or(h.bits_per_sample.min(enc.container_bits())) };

@@ -53,6 +53,8 @@ pub struct App {
     pub secrets: Arc<dyn crate::secrets::SecretStore>,
     /// slskd set up and run by SONORA (macOS).
     pub service: Arc<crate::slskd_service::Service>,
+    /// Soulseek files being listened to before they are downloaded.
+    pub previews: Arc<crate::preview::Previews>,
 }
 
 impl App {
@@ -109,6 +111,7 @@ impl App {
             slskd: crate::slskd::Slskd::default(),
             secrets,
             service,
+            previews: Arc::new(crate::preview::Previews::default()),
         });
         crate::sources::Watcher::start(&app);
         // SONORA's own slskd (when it set one up) runs while SONORA does, and
@@ -120,6 +123,8 @@ impl App {
                     if let Err(e) = app2.service.ensure(&app2) {
                         logging::log_fields("warn", "slskd", "could not start slskd", obj! { "error" => e });
                     }
+                    // What previews left when SONORA quit during them.
+                    crate::preview::recover(&app2);
                 }
             });
         }
@@ -218,6 +223,7 @@ impl App {
         self.exporter.cancel();
         self.syncer.cancel();
         self.discogs.cancel();
+        self.previews.stop_all();
         self.scans.shutdown(Duration::from_secs(5));
         self.service.on_quit(self);
         logging::log("info", "app", "core stopped");

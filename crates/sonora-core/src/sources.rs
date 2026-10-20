@@ -145,6 +145,10 @@ fn is_partial(path: &Path, root: &Path) -> bool {
     if folders.first().is_some_and(|f| matches!(f.as_str(), "incomplete" | "incomplete downloads" | "temp" | "tmp")) {
         return true;
     }
+    // A Soulseek preview that arrived whole: never part of the library.
+    if folders.first().is_some_and(|f| f == crate::preview::PREVIEW_DIR) {
+        return true;
+    }
     let nicotine = name.strip_prefix("incomplete").is_some_and(|rest| rest.len() > 32 && rest.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit));
     nicotine || [".part", ".partial", ".tmp", ".incomplete", ".crdownload", ".download"].iter().any(|s| name.ends_with(s))
 }

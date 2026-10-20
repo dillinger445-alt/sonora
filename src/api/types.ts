@@ -797,6 +797,39 @@ export interface SearchResults {
   hiddenFiles: number;
 }
 
+/** A Soulseek file being listened to before it is downloaded (`preview.*`). */
+export interface PreviewSession {
+  id: number;
+  username: string;
+  filename: string;
+  name: string;
+  size: number;
+  /** For the person: connecting, queued, buffering, ready (playable), reconnecting, unavailable, failed, stopped. */
+  state: 'connecting' | 'queued' | 'buffering' | 'ready' | 'reconnecting' | 'unavailable' | 'failed' | 'stopped';
+  /** The transfer behind it: paused means enough is read ahead. */
+  transfer: 'connecting' | 'queued' | 'downloading' | 'paused' | 'complete' | 'reconnecting' | 'failed' | 'stopped';
+  /** Enough has arrived to start playing. */
+  ready: boolean;
+  /** Place in the other user's queue. */
+  queue: number | null;
+  /** Bytes of the file on this computer so far. */
+  received: number;
+  /** How much can be played so far. */
+  decodedSeconds: number | null;
+  totalSeconds: number | null;
+  rate: number;
+  channels: number;
+  /** A download of the same file was already under way: the preview listens along. */
+  followsDownload: boolean;
+  /** Download was chosen while listening: the download carries on from what the preview fetched. */
+  handedOver: boolean;
+  /** The preview cache is full: the preview stops here. */
+  limitReached: boolean;
+  /** No more of the file will come (the transfer was stopped elsewhere, say). */
+  endsEarly: boolean;
+  error: string | null;
+}
+
 export type TransferState = 'requested' | 'queued' | 'waiting' | 'starting' | 'downloading' | 'done' | 'failed' | 'cancelled';
 
 /** One of slskd's downloads (`slskd.downloads`). */
@@ -1094,6 +1127,8 @@ export interface CoreEvents {
   'sources.imported': { source: 'soulseek'; added: number; failed: number; first: boolean };
   /** SONORA's setup of slskd moved on (or stopped). */
   'slskd.setup': SetupRun | null;
+  /** A preview's transfer or decoding moved on. */
+  'preview.changed': PreviewSession;
 }
 
 export type CoreEventName = keyof CoreEvents;

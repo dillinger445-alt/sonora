@@ -9,6 +9,7 @@
 //! - `GET /api/audio?path=…` → a file the core prepared for playback
 //!   (`playback.prepare`), with HTTP range support for seeking. Other paths
 //!   are refused, like the desktop app's private `sonora:` scheme.
+//! - `GET /api/preview?id=…` → a Soulseek preview as it arrives (`preview.start`).
 //!
 //! Development only: it listens on 127.0.0.1, rejects cross-origin and
 //! foreign-Host requests, and is never part of the desktop build.
@@ -264,6 +265,57 @@ fn handle_audio(stream: &mut TcpStream, req: &Request, playable: &Playable) {
     }
 }
 
+/// A Soulseek preview: the WAV the core decodes as the file arrives
+/// (`/api/preview?id=…`). Ranges not there yet wait, as in the desktop app.
+fn handle_preview(stream: &mut TcpStream, app: &Arc<App>, req: &Request) {
+    use sonora_core::preview::ReadError;
+    const CHUNK: u64 = 2 * 1024 * 1024;
+    let query = req.path.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let Some(id) = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|v| v.parse::<u64>().ok()) else {
+        respond(stream, "404 Not Found", "text/plain", b"no such preview", "");
+        return;
+    };
+    let wait = Duration::from_secs(600);
+    let (start, want) = match req.header("range").and_then(|h| h.trim().strip_prefix("bytes=")).and_then(|r| r.split_once('-')) {
+        Some((a, b)) if !a.trim().is_empty() => {
+            let Ok(a) = a.trim().parse::<u64>() else {
+                respond(stream, "416 Range Not Satisfiable", "text/plain", b"", "");
+                return;
+            };
+            let want = b.trim().parse::<u64>().ok().and_then(|b| b.checked_sub(a)).map(|n| n + 1).unwrap_or(CHUNK);
+            (a, want.min(CHUNK))
+        }
+        Some((_, b)) => {
+            let n = b.trim().parse::<u64>().unwrap_or(0);
+            match app.previews.read(id, 0, 1, wait) {
+                Ok(c) => (c.total.saturating_sub(n), n.min(CHUNK)),
+                Err(_) => {
+                    respond(stream, "503 Service Unavailable", "text/plain", b"the preview ended", "");
+                    return;
+                }
+            }
+        }
+        None => (0, CHUNK),
+    };
+    match app.previews.read(id, start, want, wait) {
+        Ok(c) => {
+            let end = c.start + c.bytes.len() as u64 - 1;
+            let head = format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{end}/{}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n",
+                c.bytes.len(),
+                c.start,
+                c.total
+            );
+            if stream.write_all(head.as_bytes()).is_ok() {
+                let _ = stream.write_all(&c.bytes);
+            }
+        }
+        Err(ReadError::Unsatisfiable(total)) => respond(stream, "416 Range Not Satisfiable", "text/plain", b"", &format!("Content-Range: bytes */{total}\r\n")),
+        Err(ReadError::NotFound) => respond(stream, "404 Not Found", "text/plain", b"no such preview", ""),
+        Err(ReadError::Failed(m)) => respond(stream, "503 Service Unavailable", "text/plain", m.as_bytes(), ""),
+    }
+}
+
 fn handle_events(mut stream: TcpStream, app: &Arc<App>) {
     let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n";
     if stream.write_all(head.as_bytes()).is_err() {
@@ -350,6 +402,10 @@ fn main() {
                 ("GET", "/api/audio") => {
                     let _ = stream.set_read_timeout(None);
                     handle_audio(&mut stream, &req, &playable)
+                }
+                ("GET", "/api/preview") => {
+                    let _ = stream.set_read_timeout(None);
+                    handle_preview(&mut stream, &app, &req)
                 }
                 ("GET", "/api/events") => {
                     let _ = stream.set_read_timeout(None);

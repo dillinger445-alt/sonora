@@ -21,7 +21,7 @@ import { SoulseekSetup } from './SoulseekSetup.tsx';
 
 /** The notice accepted before anything here works (also shown in the setup). */
 export const LAWFUL_USE =
-  'SONORA is for music you have the right to download and use. If you use it with Soulseek or another network, you are responsible for making sure each download, copy and use is lawful where you live and allowed by that network’s terms. SONORA does not own, host or license music found on other networks, and it never shares your files.';
+  'SONORA is for music you have the right to download and use. If you use it with Soulseek or another network, you are responsible for making sure each download, preview, copy and use is lawful where you live and allowed by that network’s terms. SONORA does not own, host or license music found on other networks, and it never shares your files.';
 
 export const SEARCHES_SEEN = 'Other Soulseek users see what you search for, along with your Soulseek user name. What slskd shares is up to its own settings.';
 

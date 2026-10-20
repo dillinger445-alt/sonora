@@ -20,6 +20,11 @@ pub mod wavstream;
 use crate::error::AnalysisError;
 use std::path::Path;
 
+/// Something decoders can read from: a file, or audio still arriving (a
+/// reader that waits for the bytes it is asked for).
+pub trait ReadSeek: std::io::Read + std::io::Seek + Send {}
+impl<T: std::io::Read + std::io::Seek + Send> ReadSeek for T {}
+
 pub use sniff::Container;
 pub use tools::ToolPaths;
 

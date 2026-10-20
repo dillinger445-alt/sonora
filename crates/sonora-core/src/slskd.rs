@@ -633,7 +633,8 @@ impl Slskd {
             let username = user.get("username").and_then(Value::as_str).unwrap_or("");
             for dir in user.get("directories").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
                 for t in dir.get("files").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
-                    if let Some(t) = Transfer::from_json(username, t) {
+                    // Previews are not downloads.
+                    if let Some(t) = Transfer::from_json(username, t).filter(|t| !app.previews.is_hidden(&t.id)) {
                         items.push(t);
                     }
                 }
@@ -698,6 +699,180 @@ impl Slskd {
     /// Takes finished downloads off slskd's list. The files stay where they are.
     pub fn clear_finished(&self, app: &App) -> Result<(), SlskdError> {
         self.call(app, "DELETE", "transfers/downloads/all/completed", None).map(|_| ())
+    }
+}
+
+/// What SONORA needs from slskd's settings (`GET options`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Options {
+    pub downloads: PathBuf,
+    pub incomplete: PathBuf,
+    /// slskd resumes partial downloads (its default) rather than starting them over.
+    pub resumes: bool,
+}
+
+/// One download, as `GET transfers/downloads/{user}/{id}` describes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransferInfo {
+    pub id: String,
+    pub filename: String,
+    pub size: i64,
+    /// slskd's flags ("InProgress", "Completed, Succeeded"…).
+    pub flags: String,
+    pub state: &'static str,
+    pub bytes: i64,
+    pub position: Option<i64>,
+    pub batch: Option<String>,
+    pub detail: Option<String>,
+}
+
+impl TransferInfo {
+    fn from_json(t: &Value) -> Option<TransferInfo> {
+        let flags = t.get("state").and_then(Value::as_str).unwrap_or("").to_string();
+        let state = transfer_state(&flags);
+        Some(TransferInfo {
+            id: t.get("id").and_then(Value::as_str).filter(|i| is_guid(i))?.to_string(),
+            filename: t.get("filename").and_then(Value::as_str).unwrap_or("").to_string(),
+            size: t.get("size").and_then(Value::as_i64).unwrap_or(0),
+            state,
+            bytes: t.get("bytesTransferred").and_then(Value::as_i64).unwrap_or(0),
+            position: t.get("placeInQueue").and_then(Value::as_i64),
+            batch: t.get("batchId").and_then(Value::as_str).map(str::to_string),
+            detail: if state == "failed" { Some(failure(&flags, t.get("exception").and_then(Value::as_str))) } else { None },
+            flags,
+        })
+    }
+
+    pub fn active(&self) -> bool {
+        !matches!(self.state, "done" | "failed" | "cancelled")
+    }
+
+    /// The other user turned it down: asking again does not help.
+    pub fn rejected(&self) -> bool {
+        self.flags.split(',').any(|f| f.trim() == "Rejected")
+    }
+}
+
+/// A random identifier in the form slskd takes (a version 4 GUID).
+pub fn new_guid() -> String {
+    let mut b = crate::secrets::random_bytes(16).unwrap_or_else(|_| {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        t.to_le_bytes().to_vec()
+    });
+    b.resize(16, 0);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
+impl Slskd {
+    /// Where slskd keeps downloads, finished and partial, and whether it resumes them.
+    pub fn options(&self, app: &App) -> Result<Options, SlskdError> {
+        let v = Self::json(&self.call(app, "GET", "options", None)?)?;
+        let dirs = v.get("directories");
+        let dir = |k: &str| dirs.and_then(|d| d.get(k)).and_then(Value::as_str).filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+        let partial = v
+            .get("transfers")
+            .and_then(|t| t.get("download"))
+            .and_then(|d| d.get("retry"))
+            .and_then(|r| r.get("partial"))
+            .and_then(Value::as_str)
+            .unwrap_or("resume");
+        Ok(Options {
+            downloads: dir("downloads").ok_or_else(|| SlskdError::new("slskd_failed", "slskd did not say where it keeps downloads."))?,
+            incomplete: dir("incomplete").ok_or_else(|| SlskdError::new("slskd_failed", "slskd did not say where it keeps partial downloads."))?,
+            resumes: partial.eq_ignore_ascii_case("resume"),
+        })
+    }
+
+    /// Asks slskd for one file as a batch of its own that lands in
+    /// `destination` (relative to slskd's download folder). The transfer's
+    /// id, once slskd has it.
+    pub fn enqueue_batch(&self, app: &App, batch: &str, username: &str, filename: &str, size: i64, destination: &str) -> Result<Option<String>, SlskdError> {
+        let body = obj! {
+            "id" => batch,
+            "username" => username,
+            "files" => Value::Array(vec![obj! { "filename" => filename, "size" => size }]),
+            "options" => obj! { "destination" => destination },
+        };
+        let r = self.send_patiently(app, "POST", "transfers/downloads/batches", Some(body))?;
+        if r.status == 404 && error_text(&r.body).is_empty() {
+            return Err(SlskdError::new("slskd_too_old", "This slskd cannot keep previews apart from downloads. Update slskd to 0.24 or newer."));
+        }
+        if !(200..300).contains(&r.status) {
+            let t = error_text(&r.body);
+            return Err(match r.status {
+                404 | 500 if !t.is_empty() => SlskdError::new("slskd_failed", t),
+                _ => status_error(&r),
+            });
+        }
+        let v = sonora_json::parse(&r.body).unwrap_or(Value::Null);
+        if let Some(f) = v.get("failures").and_then(Value::as_array).and_then(|a| a.first()) {
+            let m = f.get("message").and_then(Value::as_str).unwrap_or("slskd did not queue it");
+            return Err(SlskdError::new("slskd_failed", error_text(m)));
+        }
+        let id = v
+            .get("batch")
+            .and_then(|b| b.get("transfers"))
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(|t| t.get("filename").and_then(Value::as_str) == Some(filename)))
+            .and_then(|t| t.get("id"))
+            .and_then(Value::as_str)
+            .filter(|i| is_guid(i))
+            .map(str::to_string);
+        Ok(id)
+    }
+
+    /// One user's downloads (`None` when slskd has none from them).
+    pub fn user_transfers(&self, app: &App, username: &str) -> Result<Vec<TransferInfo>, SlskdError> {
+        let r = self.send_patiently(app, "GET", &format!("transfers/downloads/{}", net::path_segment(username)), None)?;
+        if r.status == 404 {
+            return Ok(Vec::new());
+        }
+        if !(200..300).contains(&r.status) {
+            return Err(status_error(&r));
+        }
+        let v = Self::json(&r)?;
+        let mut out = Vec::new();
+        for dir in v.get("directories").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+            for t in dir.get("files").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+                if let Some(t) = TransferInfo::from_json(t) {
+                    out.push(t);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// One download (`None` when slskd no longer has it).
+    pub fn transfer(&self, app: &App, username: &str, id: &str) -> Result<Option<TransferInfo>, SlskdError> {
+        if !is_guid(id) {
+            return Err(SlskdError::new("invalid_params", "id must be a slskd transfer id"));
+        }
+        let r = self.send_patiently(app, "GET", &format!("transfers/downloads/{}/{id}", net::path_segment(username)), None)?;
+        if r.status == 404 {
+            return Ok(None);
+        }
+        if !(200..300).contains(&r.status) {
+            return Err(status_error(&r));
+        }
+        Ok(TransferInfo::from_json(&Self::json(&r)?))
+    }
+
+    /// Cancels a download and, with `remove`, takes it off slskd's list.
+    /// One that is not there any more is not an error.
+    pub fn cancel_transfer(&self, app: &App, username: &str, id: &str, remove: bool) -> Result<(), SlskdError> {
+        if !is_guid(id) {
+            return Err(SlskdError::new("invalid_params", "id must be a slskd transfer id"));
+        }
+        let q = if remove { "?remove=true" } else { "" };
+        let r = self.send_patiently(app, "DELETE", &format!("transfers/downloads/{}/{id}{q}", net::path_segment(username)), None)?;
+        if (200..300).contains(&r.status) || r.status == 404 {
+            Ok(())
+        } else {
+            Err(status_error(&r))
+        }
     }
 }
 

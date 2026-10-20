@@ -83,9 +83,74 @@ fn plain(status: StatusCode) -> Response<Vec<u8>> {
     Response::builder().status(status).body(Vec::new()).unwrap_or_default()
 }
 
+/// `bytes=a-b` / `bytes=a-` / `bytes=-n` without knowing the length yet:
+/// (first byte, bytes wanted) or, for a suffix, `Err(n)`.
+fn open_range(value: &str) -> Option<Result<(u64, u64), u64>> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    let (a, b) = spec.split(',').next()?.trim().split_once('-')?;
+    let (a, b) = (a.trim(), b.trim());
+    if a.is_empty() {
+        return b.parse().ok().map(Err);
+    }
+    let start: u64 = a.parse().ok()?;
+    let want = if b.is_empty() { AUDIO_CHUNK } else { b.parse::<u64>().ok()?.checked_sub(start)? + 1 };
+    Some(Ok((start, want.min(AUDIO_CHUNK))))
+}
+
+/// Answers the audio element for a Soulseek preview (`p<id>`): the WAV the
+/// core decodes as the file arrives. A range that has not arrived yet waits
+/// (the element shows it is buffering) until it does or the preview ends.
+fn serve_preview(app: &AppHandle, id: &str, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    use sonora_core::preview::ReadError;
+    let Some(id) = id.strip_prefix('p').and_then(|n| n.parse::<u64>().ok()) else { return plain(StatusCode::NOT_FOUND) };
+    let Some(shell) = app.try_state::<Shell>() else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
+    let Ok(core) = &shell.core else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
+    let wait = std::time::Duration::from_secs(600);
+    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).and_then(open_range);
+    let (start, want) = match range {
+        Some(Ok(r)) => r,
+        Some(Err(suffix)) => match core.previews.read(id, 0, 1, wait) {
+            Ok(c) => (c.total.saturating_sub(suffix), suffix.min(AUDIO_CHUNK)),
+            Err(_) => return plain(StatusCode::SERVICE_UNAVAILABLE),
+        },
+        None => (0, if request.method() == tauri::http::Method::HEAD { 1 } else { AUDIO_CHUNK }),
+    };
+    match core.previews.read(id, start, want, wait) {
+        Ok(c) if request.method() == tauri::http::Method::HEAD => Response::builder()
+            .header(header::CONTENT_TYPE, "audio/wav")
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_LENGTH, c.total.to_string())
+            .body(Vec::new())
+            .unwrap_or_default(),
+        Ok(c) => {
+            let end = c.start + c.bytes.len() as u64 - 1;
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_TYPE, "audio/wav")
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CACHE_CONTROL, "no-store")
+                .header(header::CONTENT_LENGTH, c.bytes.len().to_string())
+                .header(header::CONTENT_RANGE, format!("bytes {}-{end}/{}", c.start, c.total))
+                .body(c.bytes)
+                .unwrap_or_default()
+        }
+        Err(ReadError::Unsatisfiable(total)) => Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+            .body(Vec::new())
+            .unwrap_or_default(),
+        Err(ReadError::NotFound) => plain(StatusCode::NOT_FOUND),
+        Err(ReadError::Failed(_)) => plain(StatusCode::SERVICE_UNAVAILABLE),
+    }
+}
+
 /// Answers one request of the audio element (range requests for seeking).
-fn serve_audio(files: &AudioFiles, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+fn serve_audio(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let id = request.uri().path().trim_start_matches('/');
+    if id.starts_with('p') {
+        return serve_preview(app, id, request);
+    }
+    let files = app.state::<AudioFiles>();
     let Some((path, mime)) = files.get(id) else { return plain(StatusCode::NOT_FOUND) };
     let Ok(mut file) = std::fs::File::open(&path) else { return plain(StatusCode::NOT_FOUND) };
     let Ok(len) = file.metadata().map(|m| m.len()) else { return plain(StatusCode::INTERNAL_SERVER_ERROR) };
@@ -310,7 +375,7 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol(AUDIO_SCHEME, |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             // Reading a chunk is quick, but never on the thread that asked.
-            std::thread::spawn(move || responder.respond(serve_audio(&app.state::<AudioFiles>(), &request)));
+            std::thread::spawn(move || responder.respond(serve_audio(&app, &request)));
         })
         .invoke_handler(tauri::generate_handler![sonora_call, prepare_update])
         .setup(|app| {
@@ -333,7 +398,16 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_range;
+    use super::{open_range, parse_range, AUDIO_CHUNK};
+
+    #[test]
+    fn preview_ranges() {
+        assert_eq!(open_range("bytes=0-"), Some(Ok((0, AUDIO_CHUNK))));
+        assert_eq!(open_range("bytes=10-19"), Some(Ok((10, 10))));
+        assert_eq!(open_range("bytes=-128"), Some(Err(128)));
+        assert_eq!(open_range("bytes=5-1"), None);
+        assert_eq!(open_range("items=0-"), None);
+    }
 
     #[test]
     fn ranges() {
