@@ -288,9 +288,143 @@ pub fn replace_scalar(text: &str, path: &[&str], value: &str) -> Option<String> 
     Some(out)
 }
 
+/// The key a line starts with (not a list item), unquoted.
+fn key_text(t: &str) -> Option<String> {
+    if t == "-" || t.starts_with("- ") {
+        return None;
+    }
+    if let Some(q) = t.chars().next().filter(|c| *c == '\'' || *c == '"') {
+        let end = t[1..].find(q)? + 1;
+        return t[end + 1..].starts_with(':').then(|| t[1..end].to_string());
+    }
+    let c = t.find(':')?;
+    let rest = &t[c + 1..];
+    (rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')).then(|| t[..c].trim().to_string())
+}
+
+/// The line (0-based) the key at `path` is written on (the last one, when a
+/// key is repeated, as [`Node::get`] reads it).
+fn key_line(text: &str, path: &[&str]) -> Option<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let indent_of = |l: &str| l.len() - l.trim_start().len();
+    let meaningful = |l: &str| !strip_comment(l).trim().is_empty();
+    let (mut lo, mut hi) = (0, lines.len());
+    let mut parent: Option<usize> = None;
+    let mut at = None;
+    for key in path {
+        let want = normalize_key(key);
+        // The keys of a block are at the indentation of its first line.
+        let first = (lo..hi).find(|&i| meaningful(lines[i]))?;
+        let ind = indent_of(lines[first]);
+        if parent.is_some_and(|p| ind <= p) {
+            return None;
+        }
+        let mut found = None;
+        for (i, l) in lines.iter().enumerate().take(hi).skip(lo) {
+            if meaningful(l) && indent_of(l) == ind && key_text(strip_comment(l).trim_start()).is_some_and(|k| normalize_key(&k) == want) {
+                found = Some(i);
+            }
+        }
+        let i = found?;
+        // Its block: the lines after it that are indented further.
+        hi = (i + 1..hi).find(|&j| meaningful(lines[j]) && indent_of(lines[j]) <= ind).unwrap_or(hi);
+        lo = i + 1;
+        parent = Some(ind);
+        at = Some(i);
+    }
+    at
+}
+
+/// Replaces the list at `path` (written inline, `[]`, or as `- item` lines
+/// below its key) with `items`, each quoted with [`quote`], keeping the
+/// key's indentation and everything else in the file. `None` when the file
+/// has no such key.
+pub fn replace_list(text: &str, path: &[&str], items: &[String]) -> Option<String> {
+    let line = key_line(text, path)?;
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let key = *lines.get(line)?;
+    let ending = if key.ends_with("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let body = key.trim_end_matches(['\r', '\n']);
+    let indent = body.len() - body.trim_start().len();
+    let t = body.trim_start();
+    let key_end = if t.starts_with('\'') || t.starts_with('"') {
+        let q = t.chars().next()?;
+        t[1..].find(q).map(|e| e + 2)?
+    } else {
+        t.find(':')?
+    };
+    // The lines of the old list: more indented than the key, or items at its
+    // indentation; blank lines and comments in between go with them.
+    let mut end = line + 1;
+    while end < lines.len() {
+        let l = lines[end].trim_end_matches(['\r', '\n']);
+        let lt = l.trim_start();
+        let li = l.len() - lt.len();
+        if lt.is_empty() || lt.starts_with('#') || li > indent || (li == indent && (lt == "-" || lt.starts_with("- "))) {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    // Trailing blank lines and comments stay where they were.
+    while end > line + 1 {
+        let lt = lines[end - 1].trim();
+        if lt.is_empty() || lt.starts_with('#') {
+            end -= 1;
+        } else {
+            break;
+        }
+    }
+    let pad = &body[..indent];
+    let mut out = String::with_capacity(text.len());
+    for l in &lines[..line] {
+        out.push_str(l);
+    }
+    out.push_str(pad);
+    out.push_str(&t[..key_end]);
+    if items.is_empty() {
+        out.push_str(": []");
+        out.push_str(ending);
+    } else {
+        out.push(':');
+        out.push_str(ending);
+        for i in items {
+            out.push_str(pad);
+            out.push_str("  - ");
+            out.push_str(&quote(i));
+            out.push_str(ending);
+        }
+    }
+    for l in &lines[end..] {
+        out.push_str(l);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_are_replaced_and_nothing_else() {
+        let text = "soulseek:\n  username: dj\nshares:\n  directories:\n    - '/a'\n    - /b # second\n\n  filters: ['x']\nweb:\n  port: 5030\n";
+        let out = replace_list(text, &["shares", "directories"], &["/c".to_string()]).unwrap();
+        assert_eq!(out, "soulseek:\n  username: dj\nshares:\n  directories:\n    - '/c'\n\n  filters: ['x']\nweb:\n  port: 5030\n");
+        assert_eq!(parse(&out).strings_at(&["shares", "directories"]), vec!["/c".to_string()]);
+        assert_eq!(parse(&out).strings_at(&["shares", "filters"]), vec!["x".to_string()]);
+        let none = replace_list(&out, &["shares", "directories"], &[]).unwrap();
+        assert!(none.contains("  directories: []\n\n  filters"), "{none}");
+        let back = replace_list(&none, &["shares", "directories"], &["/a".to_string(), "it's".to_string()]).unwrap();
+        assert_eq!(parse(&back).strings_at(&["shares", "directories"]), vec!["/a".to_string(), "it's".to_string()]);
+        // Items written at the key's own indentation.
+        let compact = "shares:\n  directories:\n  - /a\n  - /b\nweb: {}\n";
+        assert_eq!(replace_list(compact, &["shares", "directories"], &[]).unwrap(), "shares:\n  directories: []\nweb: {}\n");
+        assert!(replace_list(text, &["shares", "nothing"], &[]).is_none());
+    }
 
     const SAMPLE: &str = "# slskd settings, written by SONORA's setup script.\n\
 soulseek:\n  username: 'dj ''night'''\n  password: \"p#ss \\\"x\\\"\" # a comment\n\

@@ -347,6 +347,8 @@ export interface Settings {
   slskdUrl: string;
   /** slskd set up by SONORA runs in the background from login on, or only while SONORA is open. */
   slskdBackground: boolean;
+  /** SONORA's slskd was stopped by the person and stays stopped until started. */
+  slskdStopped: boolean;
   /** How far a Soulseek preview reads ahead of what plays, in seconds. */
   previewAhead: number;
   /** Most disk space previews use at a time, in megabytes. */
@@ -706,6 +708,8 @@ export interface ManagedSlskd {
   /** slskd's newest log file (or its log folder). */
   log: string | null;
   background: boolean;
+  /** The person stopped it: it stays stopped (at login too) until started. */
+  stopped: boolean;
   agent: { installed: boolean; loaded: boolean; running: boolean; pid: number | null; lastExit: number | null };
   username: string | null;
   downloads: string | null;
