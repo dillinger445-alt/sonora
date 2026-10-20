@@ -572,6 +572,33 @@ fn a_wav_previews_too_and_a_new_preview_stops_the_last_one() {
 }
 
 #[test]
+fn an_aiff_previews_too_its_big_endian_samples_served_as_they_are() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("aiff");
+    let app = &e.app;
+    let name = "@@abcde\\Music\\Night Drive\\05 Reel.aiff";
+    let tmp = e.root.join("reel.aiff");
+    let samples: Vec<f32> = (0..44_100u64 * 6 * 2).map(|i| sample(i / 2, (i % 2) as usize) as f32 / 32768.0).collect();
+    let mut w = sonora_engine::export::writer::PcmWriter::create(&tmp, sonora_engine::export::writer::PcmContainer::Aiff, 44_100, 2, 16, None, None).unwrap();
+    w.set_dither(false);
+    w.write(&samples).unwrap();
+    w.finish().unwrap();
+    let size = share(&e, name, std::fs::read(&tmp).unwrap());
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => name, "size" => size }).get("id").and_then(Value::as_i64).unwrap();
+    wait_for("the AIFF", 20, || status(app, id).get("ready").and_then(Value::as_bool) == Some(true));
+    let st = status(app, id);
+    assert_eq!(st.get("totalSeconds").and_then(Value::as_f64), Some(6.0), "the length comes from the header");
+    for frame in [0u64, 100, 44_100] {
+        let c = app.previews.read(id as u64, 44 + 4 * frame, 4, Duration::from_secs(10)).unwrap();
+        assert_eq!(i16::from_le_bytes([c.bytes[0], c.bytes[1]]), sample(frame, 0), "left, frame {frame}");
+        assert_eq!(i16::from_le_bytes([c.bytes[2], c.bytes[3]]), sample(frame, 1), "right, frame {frame}");
+    }
+    call(app, "preview.stop", &obj! { "id" => id });
+    wait_for("cleaned up", 20, || !partial(&e, name).exists());
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
 fn what_previews_left_when_sonora_quit_is_removed_at_the_next_start() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("recover");
