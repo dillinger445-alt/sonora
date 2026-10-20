@@ -130,8 +130,12 @@ function Shell() {
     if (!desktop) return;
     const onMenu = (e: MouseEvent) => {
       if (e.defaultPrevented || isTextEntry(e.target)) return;
+      // On selected text (for Copy): the click must land on the selection itself.
       const selected = window.getSelection();
-      if (selected && !selected.isCollapsed && selected.toString().trim()) return;
+      if (selected && !selected.isCollapsed && selected.rangeCount > 0) {
+        const on = Array.from(selected.getRangeAt(0).getClientRects()).some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom);
+        if (on) return;
+      }
       e.preventDefault();
     };
     window.addEventListener('contextmenu', onMenu);

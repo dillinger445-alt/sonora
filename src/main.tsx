@@ -14,7 +14,21 @@ createBridge().then(
     root.render(
       <StrictMode>
         {/* The last resort: a window that cannot show anything says so. */}
-        <ErrorBoundary what="SONORA">
+        <ErrorBoundary
+          what="SONORA"
+          fallback={(error) => (
+            <div className="view-error" role="alert">
+              <h1 className="view-error-title">SONORA ran into a problem</h1>
+              <p className="view-error-body selectable">{error.message || 'Something unexpected happened.'}</p>
+              <p className="faint">Your library and your files are not affected. Reloading the window starts the interface again.</p>
+              <div className="view-error-actions">
+                <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+                  <span className="btn-label">Reload the window</span>
+                </button>
+              </div>
+            </div>
+          )}
+        >
           <App bridge={bridge} />
         </ErrorBoundary>
       </StrictMode>,

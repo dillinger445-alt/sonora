@@ -12,7 +12,7 @@ written for the people using SONORA.
   the selection bar and a track's page (or **⌘⌫** on a Mac), it moves the
   audio file to the Trash (the Recycle Bin on Windows) and takes its track
   out of the library. It asks first, and you can put the file back from the
-  Trash.
+  Trash. Files on a drive that is not connected are left alone.
 - **Bring back** in Folders returns the tracks you removed from a folder.
 - **A menu for every track**: right-click a track in the library or in a
   playlist (or press Shift+F10) to play it, open its analysis, show it in
@@ -60,9 +60,10 @@ written for the people using SONORA.
   removes a track, the arrow keys keep moving through the tracks.
 - Right-clicking no longer shows the window's own Back and Reload menu,
   which could change the screen or reset the window.
-- On Windows, Move to Recycle Bin leaves files on USB sticks, memory cards
-  and network drives where they are and says so: those drives have no
-  Recycle Bin, and Windows would delete the files for good.
+- On Windows, Move to Recycle Bin never deletes a file for good. Files on
+  USB sticks, memory cards and network drives, or on a drive whose Recycle
+  Bin is turned off or too small for them, stay where they are, and SONORA
+  says so.
 - The update window warns when installing would stop a USB send.
 - Comparing similar recordings no longer fails when tracks are removed
   during the comparison.

@@ -237,8 +237,13 @@ fn rescan_skips_unchanged_reanalyzes_changed_relinks_moved_and_flags_missing() {
     let _ = std::fs::remove_dir_all(&e.root);
 }
 
+/// The trash tests point XDG_DATA_HOME (process-wide) at a folder of their
+/// own: one at a time.
+static TRASH_ENV: Mutex<()> = Mutex::new(());
+
 #[test]
 fn trashing_moves_files_and_takes_their_tracks_out() {
+    let _env = TRASH_ENV.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("trash");
     // Elsewhere than macOS and Windows, the freedesktop trash: kept in this
     // test's folder. (The system Trash and Recycle Bin are used as they are.)
@@ -273,6 +278,112 @@ fn trashing_moves_files_and_takes_their_tracks_out() {
         wait_idle(&app);
         assert_eq!(rows(&app, "null").len(), 2);
     }
+
+    // A folder that is not there (a disconnected drive) is not a deleted
+    // file: the track stays, and the answer says why.
+    let away = e.root.join("Unplugged");
+    std::fs::create_dir_all(&away).unwrap();
+    write(&away.join("d.wav"), 44, 8.0);
+    import(&app, &away.join("d.wav"));
+    let d = rows(&app, "null").iter().find(|r| s(r, "fileName") == "d.wav").and_then(|r| r.get("id").and_then(Value::as_i64)).unwrap();
+    std::fs::rename(&away, e.root.join("Unplugged elsewhere")).unwrap();
+    let r = call(&app, "tracks.trash", &format!(r#"{{"ids": [{d}]}}"#));
+    assert_eq!((int(&r, "trashed"), int(&r, "removed")), (0, 0), "{}", r.to_string_compact());
+    let failed = r.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
+    assert_eq!(failed.len(), 1);
+    assert!(s(&failed[0], "error").contains("not available"), "{}", r.to_string_compact());
+    assert!(rows(&app, "null").iter().any(|r| s(r, "fileName") == "d.wav"), "the track stays");
+    std::fs::rename(e.root.join("Unplugged elsewhere"), &away).unwrap();
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+/// A file that cannot go to the Trash keeps its place in a running scan.
+#[cfg(not(any(target_os = "macos", windows)))]
+#[test]
+fn a_file_that_stays_keeps_its_place_in_the_scan() {
+    let _env = TRASH_ENV.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("trash-queue");
+    // A trash that cannot be made: a path under a file.
+    std::fs::write(e.root.join("not a folder"), b"x").unwrap();
+    std::env::set_var("XDG_DATA_HOME", e.root.join("not a folder/xdg"));
+    for i in 0..5 {
+        write(&e.music.join(format!("w{i}.wav")), 500 + i, 12.0);
+    }
+    let app = open(&e);
+    call(&app, "settings.update", r#"{"values": {"workers": 1}}"#);
+    call(&app, "library.import", &sonora_json::obj! { "paths" => vec![e.music.to_string_lossy().to_string()] }.to_string_compact());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let st = call(&app, "scan.status", "");
+        if s(&st, "state") == "running" && int(&st, "completed") >= 1 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no file finished: {}", st.to_string_compact());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    call(&app, "scan.pause", "");
+    while int(&call(&app, "scan.status", ""), "running") > 0 {
+        assert!(Instant::now() < deadline, "the running file did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let before = call(&app, "scan.status", "");
+    let waiting = rows(&app, r#"{"statuses": ["pending"]}"#);
+    let id = waiting[0].get("id").and_then(Value::as_i64).unwrap();
+    let r = call(&app, "tracks.trash", &format!(r#"{{"ids": [{id}]}}"#));
+    assert_eq!((int(&r, "trashed"), int(&r, "removed")), (0, 0), "{}", r.to_string_compact());
+    // Still waiting in the same scan, which ends with every file analysed.
+    let after = call(&app, "scan.status", "");
+    assert_eq!((int(&after, "total"), int(&after, "pending")), (int(&before, "total"), int(&before, "pending")), "{}", after.to_string_compact());
+    call(&app, "scan.resume", "");
+    wait_idle(&app);
+    assert_eq!(rows(&app, r#"{"statuses": ["done"]}"#).len(), 5);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+/// Folders inside folders: a file removed from the library stays out while
+/// any library folder still covers it.
+#[test]
+fn nested_folders_keep_removed_tracks_out() {
+    let e = env("nested");
+    let techno = e.music.join("Sets/Techno");
+    write(&e.music.join("top.wav"), 61, 8.0);
+    write(&techno.join("one.wav"), 62, 8.0);
+    write(&techno.join("two.wav"), 63, 8.0);
+    let app = open(&e);
+    // The inner folder first: its tracks belong to it.
+    import(&app, &techno);
+    import(&app, &e.music);
+    assert_eq!(rows(&app, "null").len(), 3);
+    let folder_id = |path: &Path| {
+        call(&app, "folders.list", "")
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| s(f, "path") == path.to_string_lossy())
+            .and_then(|f| f.get("id").and_then(Value::as_i64))
+            .unwrap()
+    };
+    let names = || {
+        let mut n: Vec<String> = rows(&app, "null").iter().map(|r| s(r, "fileName").to_string()).collect();
+        n.sort();
+        n
+    };
+    let one = rows(&app, "null").iter().find(|r| s(r, "fileName") == "one.wav").and_then(|r| r.get("id").and_then(Value::as_i64)).unwrap();
+    call(&app, "tracks.remove", &format!(r#"{{"ids": [{one}]}}"#));
+
+    // The inner folder stops being watched; the outer one still covers the
+    // removed file, so its rescans leave it out.
+    call(&app, "folders.remove", &format!(r#"{{"id": {}}}"#, folder_id(&techno)));
+    call(&app, "folders.rescan", "{}");
+    wait_idle(&app);
+    assert_eq!(names(), vec!["top.wav".to_string(), "two.wav".to_string()]);
+    // Bring back on the outer folder returns it.
+    let back = call(&app, "folders.bringBack", &format!(r#"{{"id": {}}}"#, folder_id(&e.music)));
+    assert_eq!(back.get("count").and_then(Value::as_i64), Some(1));
+    wait_idle(&app);
+    assert_eq!(names().len(), 3);
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }

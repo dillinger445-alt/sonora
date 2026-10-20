@@ -25,6 +25,11 @@ export interface TrackMenuOptions {
   onTrash: (ids: number[], what?: string) => void;
   /** Inside a playlist: taking the tracks out of it. */
   takeOut?: { name: string; run: (ids: number[]) => void };
+  /**
+   * Which table the menu opens in, for the keys it shows: in a playlist the
+   * delete key takes tracks out of it (and does nothing in a smart one).
+   */
+  context: 'library' | 'playlist';
 }
 
 export function trackMenuItems(o: TrackMenuOptions): (MenuAction | MenuSeparator)[] {
@@ -47,7 +52,9 @@ export function trackMenuItems(o: TrackMenuOptions): (MenuAction | MenuSeparator
     items.push({ kind: 'separator', id: 's1' });
   }
   const takeOut = o.takeOut;
-  if (takeOut) items.push({ id: 'take-out', label: `Take out of “${takeOut.name}”`, icon: LuListMinus, onSelect: () => takeOut.run(ids) });
+  const deleteKey = mac ? '⌫' : 'Del';
+  const inLibrary = o.context === 'library';
+  if (takeOut) items.push({ id: 'take-out', label: `Take out of “${takeOut.name}”`, icon: LuListMinus, hint: deleteKey, onSelect: () => takeOut.run(ids) });
   items.push(
     { id: 'edit', label: 'Edit BPM, key and genre…', icon: LuPencil, onSelect: () => actions.editDj({ ids, row: one ? row : undefined }) },
     { id: 'export', label: 'Export for DJ software…', icon: LuUsb, disabled: one && row.missing, onSelect: () => actions.exportDj(ids) },
@@ -64,7 +71,7 @@ export function trackMenuItems(o: TrackMenuOptions): (MenuAction | MenuSeparator
       id: 'remove',
       label: one ? 'Remove from library…' : `Remove ${plural(ids.length, 'track')} from the library…`,
       icon: LuListX,
-      hint: mac ? '⌫' : 'Del',
+      hint: inLibrary ? deleteKey : undefined,
       danger: true,
       onSelect: () => o.onRemove(ids, what),
     },
@@ -72,7 +79,7 @@ export function trackMenuItems(o: TrackMenuOptions): (MenuAction | MenuSeparator
       id: 'trash',
       label: one ? `Move to ${actions.trashName}…` : `Move ${plural(ids.length, 'file')} to the ${actions.trashName}…`,
       icon: LuTrash2,
-      hint: mac ? '⌘⌫' : undefined,
+      hint: inLibrary && mac ? '⌘⌫' : undefined,
       danger: true,
       disabled: one && row.missing,
       onSelect: () => o.onTrash(ids, what),

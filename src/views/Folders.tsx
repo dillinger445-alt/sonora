@@ -26,11 +26,17 @@ export function FoldersView() {
       body: (
         <>
           <p>SONORA stops watching the folder: it is no longer rescanned for new and changed files.</p>
-          <p className="faint">Nothing on disk is deleted.</p>
+          {f.tracks > 0 ? (
+            <p>
+              Its tracks stay in the library unless you tick the option below. Removing them also removes their analysis, tempo, key and genre corrections and their places
+              in playlists, and cannot be undone.
+            </p>
+          ) : null}
+          <p className="faint">The files on disk stay where they are.</p>
         </>
       ),
       confirmLabel: 'Remove folder',
-      option: f.tracks > 0 ? { label: `Also remove its ${plural(f.tracks, 'track')}, with their results, from the library`, defaultValue: true } : undefined,
+      option: f.tracks > 0 ? { label: `Also remove its ${plural(f.tracks, 'track')} from the library`, defaultValue: false } : undefined,
     });
     if (!confirmed) return;
     try {

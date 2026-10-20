@@ -212,6 +212,7 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
         onPlay: () => togglePlay(row),
         onRemove: (x, what) => void removeTracks(x, what),
         onTrash: (x, what) => void trashTracks(x, what),
+        context: 'library',
       }),
     [actions, bridge.platform, playingId, playingNow, togglePlay, removeTracks, trashTracks],
   );

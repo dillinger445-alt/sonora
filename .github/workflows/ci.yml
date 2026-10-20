@@ -66,6 +66,19 @@ jobs:
           if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk test-output.txt; fi
           exit "$status"
 
+      # Move to Recycle Bin must never delete a file for good: with the
+      # Recycle Bin turned off for the drive, the file has to stay. The test
+      # changes the runner's Recycle Bin setting for a moment, so it only
+      # runs here.
+      - name: Recycle Bin safety (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          set +e
+          cargo test -p sonora-core --lib --locked -- --ignored --exact trash::tests::windows_never_deletes_what_it_cannot_recycle 2>&1 | tee recycle-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk recycle-output.txt; fi
+          exit "$status"
+
       - name: Lint
         if: runner.os == 'Linux'
         run: |

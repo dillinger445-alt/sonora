@@ -666,6 +666,7 @@ function TracksView({ node }: { node: PlaylistNode }) {
         onRemove: (x, what) => void removeFromLibrary('remove', x, what),
         onTrash: (x, what) => void removeFromLibrary('trash', x, what),
         takeOut: editable ? { name: node.name, run: remove } : undefined,
+        context: 'playlist',
       }),
     [actions, bridge.platform, playingId, playingNow, togglePlay, removeFromLibrary, editable, node.name, remove],
   );

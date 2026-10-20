@@ -233,6 +233,12 @@ pub fn import_paths(db: &Db, paths: &[PathBuf], opts: &ImportOptions, cancel: &A
                 let c = db.write();
                 c.transaction(|tx| {
                     for cand in batch.iter() {
+                        // Removed while this walk was under way (the list read
+                        // before it started does not have it): left out too.
+                        if tx.query_row("SELECT 1 FROM removed_files WHERE path = ?", params![path_str(&cand.path)], |r| r.i64(0))?.is_some() {
+                            report.skipped_removed += 1;
+                            continue;
+                        }
                         match index_candidate(tx, cand, Some(folder_id), opts) {
                             Ok((o, restored)) => record(report, o, restored),
                             Err(StoreError::Io(e)) => report.errors.push(format!("{}: {e}", cand.path.display())),
@@ -960,11 +966,18 @@ pub fn remove_folder(c: &Connection, id: i64, remove_tracks_too: bool) -> Result
         if remove_tracks_too {
             n = tx.execute("DELETE FROM tracks WHERE folder_id = ?", params![id])? as u64;
         }
-        // A folder that is no longer watched has nothing to leave out; adding
-        // it again imports everything in it.
+        // A folder that is no longer watched has nothing to leave out, and
+        // adding it again imports everything in it; but a file another library
+        // folder still covers (a folder inside it, or around it) stays out.
         if let Some(path) = tx.query_row("SELECT path FROM folders WHERE id = ?", params![id], |r| r.text(0))? {
             let pattern = format!("{}%", under_pattern(Path::new(&path)));
-            tx.execute("DELETE FROM removed_files WHERE path LIKE ? ESCAPE '\\'", params![pattern])?;
+            let others = tx.query("SELECT path FROM folders WHERE id != ?", params![id], |r| r.text(0))?;
+            let excluded = tx.query("SELECT path FROM removed_files WHERE path LIKE ? ESCAPE '\\'", params![pattern], |r| r.text(0))?;
+            for file in excluded {
+                if !others.iter().any(|o| Path::new(&file).starts_with(o)) {
+                    tx.execute("DELETE FROM removed_files WHERE path = ?", params![file])?;
+                }
+            }
         }
         tx.execute("DELETE FROM folders WHERE id = ?", params![id])?;
         Ok::<u64, StoreError>(n)

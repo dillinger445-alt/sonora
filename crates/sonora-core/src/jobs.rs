@@ -338,8 +338,10 @@ impl ScanManager {
             if busy > 0 {
                 return Ok(None);
             }
-            // The folder goes, so there is nothing for its rescans to leave out.
-            n = self.remove_locked(&mut st, &free, false)?;
+            // Remembered as removed; the folder's own exclusions then go with
+            // it, except files another library folder still covers, whose
+            // rescans must leave them out too.
+            n = self.remove_locked(&mut st, &free, true)?;
         }
         library::remove_folder(&self.shared.db.write(), id, false)?;
         drop(st);
@@ -367,11 +369,11 @@ impl ScanManager {
         // Under the state lock: leave out tracks being analysed, and take the
         // others out of the scan's queue so no worker starts on a file that
         // is about to go.
-        let (rows, busy) = {
+        let (rows, busy, dequeued, kind) = {
             let mut st = lock(&self.shared.state);
             let (free, busy) = split_busy(&st, ids);
-            self.dequeue_locked(&mut st, &free)?;
-            (library::get_tracks(&self.shared.db.read(), &free)?, busy)
+            let dequeued = self.dequeue_locked(&mut st, &free)?;
+            (library::get_tracks(&self.shared.db.read(), &free)?, busy, dequeued, st.kind.clone())
         };
         // Moving can take a while (a USB stick, a network share): without the
         // lock, so analysis and status calls carry on meanwhile.
@@ -379,9 +381,20 @@ impl ScanManager {
         let mut gone = Vec::new();
         for r in &rows {
             let p = Path::new(&r.path);
-            if std::fs::symlink_metadata(p).is_err() {
-                gone.push(r.id);
-                continue;
+            match std::fs::symlink_metadata(p) {
+                Ok(_) => {}
+                // Deleted elsewhere already: the track just leaves the library.
+                // Its folder must be there, though: a disconnected drive hides
+                // files that still exist.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && (r.missing_since.is_some() || p.parent().is_some_and(Path::is_dir)) => {
+                    gone.push(r.id);
+                    continue;
+                }
+                Err(_) => {
+                    let folder = p.parent().map(|f| f.display().to_string()).unwrap_or_default();
+                    out.failed.push((r.id, r.display_title(), format!("its folder {folder} is not available (is the drive connected?)")));
+                    continue;
+                }
             }
             match crate::trash::move_to_trash(p) {
                 Ok(()) => {
@@ -390,6 +403,11 @@ impl ScanManager {
                 }
                 Err(e) => out.failed.push((r.id, r.display_title(), e)),
             }
+        }
+        // Tracks whose files stayed go back into the queue they were taken out of.
+        let stayed: Vec<i64> = dequeued.iter().copied().filter(|id| out.failed.iter().any(|f| f.0 == *id)).collect();
+        if !stayed.is_empty() {
+            enqueue(&self.shared, &kind, &stayed, &[], 0);
         }
         let mut st = lock(&self.shared.state);
         // A track queued again and started meanwhile keeps its row until its
@@ -406,27 +424,29 @@ impl ScanManager {
     }
 
     /// Takes tracks out of the running scan's queue (not ones being
-    /// analysed); returns how many were waiting in it.
-    fn dequeue_locked(&self, st: &mut RunState, ids: &[i64]) -> Result<i64, StoreError> {
-        let Some(scan_id) = st.scan_id else { return Ok(0) };
+    /// analysed); returns the ones that were waiting in it.
+    fn dequeue_locked(&self, st: &mut RunState, ids: &[i64]) -> Result<Vec<i64>, StoreError> {
+        let Some(scan_id) = st.scan_id else { return Ok(Vec::new()) };
         if ids.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let c = self.shared.db.write();
-        let mut dequeued = 0i64;
+        let mut dequeued = Vec::new();
         for chunk in ids.chunks(500) {
             let marks = vec!["?"; chunk.len()].join(",");
             let mut p = vec![SqlValue::Int(scan_id)];
             p.extend(chunk.iter().map(|&i| SqlValue::Int(i)));
-            let sql = format!("DELETE FROM scan_items WHERE scan_id = ? AND outcome = 'queued' AND track_id IN ({marks})");
-            dequeued += c.execute(&sql, &library::as_params(&p))? as i64;
+            let waiting = c.query(&format!("SELECT track_id FROM scan_items WHERE scan_id = ? AND outcome = 'queued' AND track_id IN ({marks})"), &library::as_params(&p), |r| r.i64(0))?;
+            c.execute(&format!("DELETE FROM scan_items WHERE scan_id = ? AND outcome = 'queued' AND track_id IN ({marks})"), &library::as_params(&p))?;
+            dequeued.extend(waiting);
         }
-        if dequeued > 0 {
-            c.execute("UPDATE scans SET total = MAX(0, total - ?) WHERE id = ?", params![dequeued, scan_id])?;
-            st.total = (st.total - dequeued).max(0);
+        let n = dequeued.len() as i64;
+        if n > 0 {
+            c.execute("UPDATE scans SET total = MAX(0, total - ?) WHERE id = ?", params![n, scan_id])?;
+            st.total = (st.total - n).max(0);
         }
         drop(c);
-        if dequeued > 0 {
+        if n > 0 {
             emit_progress(&self.shared, st, true);
         }
         Ok(dequeued)

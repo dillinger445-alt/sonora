@@ -180,20 +180,28 @@ export function useTrackActions(): TrackActions {
       try {
         const r = await client.trash(ids);
         const gone = r.removed - r.trashed;
-        const missing = gone > 0 ? `${plural(gone, 'track')} whose file${gone === 1 ? ' was' : 's were'} already gone left the library too.` : undefined;
+        const others = r.trashed > 0 || r.failed.length > 0;
+        const missing =
+          gone <= 0
+            ? undefined
+            : others
+              ? `${plural(gone, 'track')} whose file${gone === 1 ? ' was' : 's were'} already gone left the library too.`
+              : `${gone === 1 ? 'Its file was' : 'Their files were'} already gone from ${gone === 1 ? 'its folder' : 'their folders'}.`;
         const busy = r.busy > 0 ? `${plural(r.busy, 'track')} being analyzed right now ${r.busy === 1 ? 'was' : 'were'} left alone.` : undefined;
         if (r.failed.length === 0) {
           toast({
             tone: busy ? 'warning' : 'success',
             title: r.trashed ? `Moved ${plural(r.trashed, 'file')} to the ${trashName}` : `Removed ${plural(r.removed, 'track')} from the library`,
-            body: [r.trashed ? missing : undefined, busy].filter(Boolean).join(' ') || undefined,
+            body: [missing, busy].filter(Boolean).join(' ') || undefined,
           });
         } else {
           const first = r.failed[0];
+          // The reasons come from the system and may end with a full stop.
+          const reason = first ? `${first.title}: ${first.error.replace(/[.\s]+$/, '')}` : '';
           toast({
             tone: 'warning',
             title: r.trashed ? `Moved ${formatCount(r.trashed)} of ${plural(ids.length, 'file')} to the ${trashName}` : `Could not move ${one ? 'the file' : 'the files'} to the ${trashName}`,
-            body: `${first ? `${first.title}: ${first.error}` : ''}${r.failed.length > 1 ? ` (and ${plural(r.failed.length - 1, 'more')})` : ''}. ${r.failed.length === 1 ? 'It stays' : 'They stay'} in the library.`,
+            body: `${reason}${r.failed.length > 1 ? ` (and ${plural(r.failed.length - 1, 'more')})` : ''}. ${r.failed.length === 1 ? 'It stays' : 'They stay'} in the library.${missing ? ` ${missing}` : ''}`,
             timeout: 12000,
           });
         }

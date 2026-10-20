@@ -263,16 +263,20 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 225 Rust tests on macOS: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, API
+npm run test:rust          # 226 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, API
 npm run test:unit          # 38 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
 npm run build && npm run test:e2e   # 24 Playwright tests: real interface + real core on a generated corpus
 ```
 
-One Rust test runs only on macOS and Windows (a file moved to the system
-Trash or Recycle Bin) and one only on Unix (symlink loops), so Windows and
-Linux run 224. The FFmpeg-based checks are skipped with a note when FFmpeg
-is not installed.
+A few Rust tests depend on the system: on macOS and Windows one moves a
+file to the system Trash or Recycle Bin, on Linux one makes the trash
+unusable to check that a file that stays keeps its place in a scan, and
+Unix systems check symlink loops. So macOS and Linux run 226 and Windows
+225. On Windows, CI also runs a test that turns the Recycle Bin off for the
+drive for a moment, to check that Move to Recycle Bin never deletes a file
+for good. The FFmpeg-based checks are skipped with a note when FFmpeg is
+not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
 A = 440 Hz, a channel with inverted polarity, tempo changes, and noise and
