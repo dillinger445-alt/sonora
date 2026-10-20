@@ -1116,6 +1116,13 @@ test('Soulseek: one button sets slskd up, a failed step can be tried again, and 
     const intro = panel.locator('.settings-desc');
     await expect(intro).toContainText('slskd.yml');
     expect(await intro.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    // The password of slskd's web page, from slskd.yml, goes to the clipboard.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await panel.getByRole('button', { name: 'Copy web password' }).click();
+    await expect(page.getByText('Copied slskd’s web password')).toBeVisible();
+    const webPassword = /^ {4}password: '([^']+)'$/m.exec(readFileSync(config, 'utf8'))?.[1];
+    expect(webPassword).toBeTruthy();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(webPassword);
     await expect(page.getByText(downloads, { exact: true })).toBeVisible();
     expect(readFileSync(config, 'utf8')).toContain(`downloads: '${downloads}'`);
 
