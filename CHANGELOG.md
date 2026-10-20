@@ -4,6 +4,22 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## Unreleased
+
+### Fixed
+
+- **slskd's API key no longer goes missing after an update on a Mac.** The
+  keychain used to tie the key to the exact build of SONORA that saved it,
+  so every update (and every build of your own) made macOS ask whether
+  SONORA may use the key, and a missed or declined dialog left the Soulseek
+  page saying "No key yet". The key is now saved so that every build of
+  SONORA can read it without asking; a key you already have is saved again
+  that way the first time it is read. The key is in slskd.yml as plain text
+  anyway, so this keeps it exactly as private as slskd does.
+- When the key cannot be read, the Soulseek setup page now says why and
+  what to do (choose **Always Allow** in macOS's dialog, try again, or
+  replace the key) instead of claiming there is no key.
+
 ## 0.3.0
 
 ### New
