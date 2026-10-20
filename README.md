@@ -51,7 +51,9 @@ Discogs token) to Discogs, nothing else. Soulseek searches and downloads
 go through slskd, the Soulseek client you install and run: SONORA sends it
 your search words and the files you choose, slskd does the networking with
 your account and sharing settings, and SONORA never shares anything itself.
-slskd's API key stays in the macOS keychain or Windows Credential Manager.
+slskd's API key stays in the macOS keychain or Windows Credential Manager
+(readable by programs running under your account, as `slskd.yml`, which
+holds the same key, already is).
 The desktop build's content-security policy blocks remote content. Your
 audio files are read, never modified: tempo, key and genre corrections stay
 in SONORA's library, and exports write new files without replacing any.

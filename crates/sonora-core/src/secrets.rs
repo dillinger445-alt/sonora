@@ -2,6 +2,16 @@
 //! operating system: the login keychain on macOS, Credential Manager on
 //! Windows. Never in the library database, the logs or error messages.
 //!
+//! On macOS the item is saved so that any program running as the person
+//! can read it without macOS asking first (what Keychain Access calls
+//! "Allow all applications to access this item"). The keychain's usual
+//! setting ties an item to the exact build that saved it, and a build
+//! without a Developer ID signature counts as a new program every time it
+//! is built: each update then asks "SONORA wants to use your confidential
+//! information", and a missed or declined dialog makes the key look lost.
+//! The key is in slskd.yml as plain text anyway, so this setting keeps it
+//! exactly as private as slskd does.
+//!
 //! Elsewhere (Linux, which SONORA is only developed on) and when
 //! `SONORA_SECRET_STORE=file` is set (tests), a file in the data folder
 //! that only the person's account can read stands in.
@@ -148,6 +158,14 @@ pub fn random_key(len: usize) -> Result<String, String> {
 #[cfg(target_os = "macos")]
 mod keychain {
     //! The login keychain, through the Security framework's item API.
+    //!
+    //! Items are added with an access object whose "decrypt" rule names no
+    //! application, which the keychain reads as "any application": the
+    //! same thing `security add-generic-password -A` and Keychain Access's
+    //! "Allow all applications to access this item" do. Without it the rule
+    //! names the build that saved the item, and every other build (an
+    //! update, a development build, a build with a different signature)
+    //! makes macOS ask before each read. See the module documentation.
 
     use std::ffi::c_void;
     use std::ptr;
@@ -155,6 +173,12 @@ mod keychain {
     type CFTypeRef = *const c_void;
     type CFIndex = isize;
     type OSStatus = i32;
+    /// `SecKeychainPromptSelector`: flags for the dialog an access rule
+    /// shows, a 16-bit option set.
+    type PromptSelector = u16;
+    /// `kSecKeychainPromptRequirePassphase`: the dialog asks for the
+    /// keychain's password instead of just confirming.
+    const PROMPT_REQUIRE_PASSPHRASE: PromptSelector = 0x0001;
 
     /// Only the address of these structures is used.
     #[repr(C)]
@@ -172,6 +196,8 @@ mod keychain {
         fn CFDataCreate(allocator: CFTypeRef, bytes: *const u8, length: CFIndex) -> CFTypeRef;
         fn CFDataGetLength(data: CFTypeRef) -> CFIndex;
         fn CFDataGetBytePtr(data: CFTypeRef) -> *const u8;
+        fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
+        fn CFArrayGetValueAtIndex(array: CFTypeRef, index: CFIndex) -> CFTypeRef;
         fn CFGetTypeID(cf: CFTypeRef) -> usize;
         fn CFDataGetTypeID() -> usize;
         fn CFRelease(cf: CFTypeRef);
@@ -184,14 +210,23 @@ mod keychain {
         static kSecAttrService: CFTypeRef;
         static kSecAttrAccount: CFTypeRef;
         static kSecAttrLabel: CFTypeRef;
+        static kSecAttrAccess: CFTypeRef;
         static kSecValueData: CFTypeRef;
         static kSecReturnData: CFTypeRef;
         static kSecMatchLimit: CFTypeRef;
         static kSecMatchLimitOne: CFTypeRef;
+        static kSecACLAuthorizationDecrypt: CFTypeRef;
         fn SecItemAdd(attributes: CFTypeRef, result: *mut CFTypeRef) -> OSStatus;
         fn SecItemCopyMatching(query: CFTypeRef, result: *mut CFTypeRef) -> OSStatus;
-        fn SecItemUpdate(query: CFTypeRef, changes: CFTypeRef) -> OSStatus;
         fn SecItemDelete(query: CFTypeRef) -> OSStatus;
+        // The access (ACL) API of the file-based keychain. Deprecated since
+        // macOS 10.10 in favour of the data-protection keychain, which an
+        // app needs a provisioning profile to use; still the API behind
+        // `security` and Keychain Access.
+        fn SecAccessCreate(descriptor: CFTypeRef, trusted_list: CFTypeRef, access: *mut CFTypeRef) -> OSStatus;
+        fn SecAccessCopyMatchingACLList(access: CFTypeRef, authorization_tag: CFTypeRef) -> CFTypeRef;
+        fn SecACLCopyContents(acl: CFTypeRef, application_list: *mut CFTypeRef, description: *mut CFTypeRef, prompt_selector: *mut PromptSelector) -> OSStatus;
+        fn SecACLSetContents(acl: CFTypeRef, application_list: CFTypeRef, description: CFTypeRef, prompt_selector: PromptSelector) -> OSStatus;
     }
 
     const UTF8: u32 = 0x0800_0100;
@@ -243,8 +278,58 @@ mod keychain {
             -128 => "access to the keychain was declined".into(),
             -25293 => "the keychain could not confirm access".into(),
             -25291 => "no keychain is available".into(),
+            -25299 => "the keychain already has an item by this name".into(),
             s => format!("the keychain reported error {s}"),
         }
+    }
+
+    /// The access for a new item: its reading rules name no application,
+    /// which the keychain takes as "any application", so no build of SONORA
+    /// (or an update that is signed differently) makes macOS ask first.
+    /// `None` when the keychain would not make one; the item then gets the
+    /// keychain's default access, which names this build only.
+    fn open_access(label: &Owned) -> Option<Owned> {
+        let mut access: CFTypeRef = ptr::null();
+        // SAFETY: the descriptor is a valid CFString; a null trusted list
+        // stands for the calling application; `access` receives a +1 object.
+        if unsafe { SecAccessCreate(label.0, ptr::null(), &mut access) } != 0 || access.is_null() {
+            return None;
+        }
+        let access = Owned(access);
+        // SAFETY: `access` is valid and the tag is a constant CFString; the
+        // array (+1, or null) holds the rules that govern reading the secret.
+        let rules = unsafe { SecAccessCopyMatchingACLList(access.0, kSecACLAuthorizationDecrypt) };
+        if rules.is_null() {
+            return None;
+        }
+        let rules = Owned(rules);
+        // SAFETY: `rules` is a valid array; its elements are borrowed from it.
+        let count = unsafe { CFArrayGetCount(rules.0) };
+        for i in 0..count {
+            // SAFETY: `i` is within the array.
+            let rule = unsafe { CFArrayGetValueAtIndex(rules.0, i) };
+            if rule.is_null() {
+                return None;
+            }
+            let mut applications: CFTypeRef = ptr::null();
+            let mut description: CFTypeRef = ptr::null();
+            let mut prompt: PromptSelector = 0;
+            // SAFETY: `rule` is a valid ACL object; the out-parameters receive
+            // +1 objects (or null) and the rule's prompt flags.
+            if unsafe { SecACLCopyContents(rule, &mut applications, &mut description, &mut prompt) } != 0 {
+                return None;
+            }
+            let _applications = Owned(applications);
+            let description = Owned(description);
+            let description = if description.0.is_null() { label.0 } else { description.0 };
+            // SAFETY: `rule` and `description` are valid; a null application
+            // list means any application, and the dialog that could still be
+            // shown is the plain confirmation, not the password one.
+            if unsafe { SecACLSetContents(rule, ptr::null(), description, prompt & !PROMPT_REQUIRE_PASSPHRASE) } != 0 {
+                return None;
+            }
+        }
+        Some(access)
     }
 
     pub struct Keychain {
@@ -293,28 +378,28 @@ mod keychain {
             }
         }
 
+        /// Replaces the item rather than updating it: changing an item that
+        /// another build saved makes macOS ask first, and only a new item
+        /// gets the open access from [`open_access`]. Removing an item
+        /// never asks.
         fn set(&self, name: &str, value: &str) -> Result<(), String> {
+            super::SecretStore::delete(self, name)?;
             let secret = data(value.as_bytes())?;
+            let label = string(&format!("{} ({})", self.service, name))?;
+            let access = open_access(&label);
             // SAFETY: constants as above.
-            let change = unsafe { [(kSecValueData, secret.0)] };
-            let changes = dict(&change)?;
-            // SAFETY: both dictionaries are valid.
-            let status = self.with_item(name, &[], |q| unsafe { SecItemUpdate(q.0, changes.0) })?;
-            match status {
-                0 => Ok(()),
-                NOT_FOUND => {
-                    let label = string(&format!("{} ({})", self.service, name))?;
-                    // SAFETY: constants as above.
-                    let extra = unsafe { [(kSecValueData, secret.0), (kSecAttrLabel, label.0)] };
-                    // SAFETY: the attributes dictionary is valid; no result is requested.
-                    let status = self.with_item(name, &extra, |q| unsafe { SecItemAdd(q.0, ptr::null_mut()) })?;
-                    if status == 0 {
-                        Ok(())
-                    } else {
-                        Err(describe(status))
-                    }
-                }
-                s => Err(describe(s)),
+            let mut extra = unsafe { vec![(kSecValueData, secret.0), (kSecAttrLabel, label.0)] };
+            if let Some(a) = &access {
+                // SAFETY: constant as above.
+                extra.push(unsafe { (kSecAttrAccess, a.0) });
+            }
+            // SAFETY: the attributes dictionary is valid, and `secret`, `label`
+            // and `access` outlive the call; no result is requested.
+            let status = self.with_item(name, &extra, |q| unsafe { SecItemAdd(q.0, ptr::null_mut()) })?;
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(describe(status))
             }
         }
 
@@ -513,6 +598,11 @@ mod tests {
         assert_eq!(s.get(&name).unwrap(), None);
         s.set(&name, "first value").unwrap();
         assert_eq!(s.get(&name).unwrap().as_deref(), Some("first value"));
+        // On macOS another program reads the item without a dialog (see the
+        // module documentation). With the keychain's default access,
+        // `security` would wait for the person to allow it instead.
+        #[cfg(target_os = "macos")]
+        assert_eq!(security_reads(&name).as_deref(), Some("first value"), "`security` could not read the item without a dialog");
         s.set(&name, "second value, ünïcode").unwrap();
         assert_eq!(s.get(&name).unwrap().as_deref(), Some("second value, ünïcode"));
         s.delete(&name).unwrap();
@@ -520,5 +610,37 @@ mod tests {
         s.delete(&name).unwrap();
         eprintln!("store: {}", s.label());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What `security find-generic-password -w` prints for SONORA's item,
+    /// or `None` when it fails or waits (for a dialog) longer than 20 s.
+    #[cfg(target_os = "macos")]
+    fn security_reads(name: &str) -> Option<String> {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let mut child = Command::new("security")
+            .args(["find-generic-password", "-s", SERVICE, "-a", name, "-w"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        }
+        let out = child.wait_with_output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).trim_end_matches(['\r', '\n']).to_string())
     }
 }

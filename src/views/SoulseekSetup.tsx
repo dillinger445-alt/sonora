@@ -217,7 +217,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
           </div>
         ) : null}
         {status.keySaved && !newKey && !pasting ? (
-          <Row label="Key saved" description={status.keyError ? <span className="t-amber">{status.keyError}</span> : `Kept in ${STORE_NAME[status.keyStore]}.`}>
+          <Row label="Key saved" description={`Kept in ${STORE_NAME[status.keyStore]}.`}>
             <Button size="sm" onClick={() => setPasting(true)}>
               Replace
             </Button>
@@ -226,7 +226,32 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
             </Button>
           </Row>
         ) : null}
-        {!status.keySaved || pasting ? (
+        {status.keyError && !newKey && !pasting ? (
+          <Row
+            label="The key could not be read"
+            description={
+              <>
+                <span className="t-amber">{status.keyError}</span>
+                <span className="sk-block">
+                  {status.keyStore === 'keychain'
+                    ? 'If macOS asked whether SONORA may use your keychain, choose Always Allow and try again. Otherwise replace the key with the one in slskd.yml, or make a new one.'
+                    : 'Try again, or replace the key with the one in slskd.yml, or make a new one.'}
+                </span>
+              </>
+            }
+          >
+            <Button size="sm" icon={LuRefreshCw} onClick={() => state.slskd.reload()}>
+              Try again
+            </Button>
+            <Button size="sm" onClick={() => setPasting(true)}>
+              Replace
+            </Button>
+            <Button size="sm" variant="ghost" className="is-danger-text" onClick={() => void removeKey()}>
+              Remove
+            </Button>
+          </Row>
+        ) : null}
+        {(!status.keySaved && !status.keyError) || pasting ? (
           <Row
             label={pasting || status.keySaved ? 'Use a different key' : 'No key yet'}
             description="Make a new key, or paste one that is already in slskd.yml (16 to 255 characters)."

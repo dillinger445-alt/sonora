@@ -392,6 +392,37 @@ fn status_error(r: &Response) -> SlskdError {
     }
 }
 
+/// A key the keychain saved for SONORA 0.3 or earlier is tied to the build
+/// that saved it, and macOS asks before every other build may read it (see
+/// `secrets.rs`). Saved again once, it is not. The library remembers that
+/// this was done; if saving fails, the key stays as it is and the next
+/// launch tries again.
+fn resave_once(app: &App, key: &str) {
+    if app.secrets.label() != "keychain" {
+        return;
+    }
+    let done = app.db.read().query_row("SELECT value FROM meta WHERE key = ?", crate::params![RESAVED], |r| r.text(0)).ok().flatten().is_some();
+    if done {
+        return;
+    }
+    match app.secrets.set(KEY_NAME, key) {
+        Ok(()) => {
+            crate::logging::log("info", "slskd", "saved the API key again so that every build of SONORA can read it");
+            note_resaved(app);
+        }
+        Err(e) => crate::logging::log("warn", "slskd", &format!("could not save the API key again: {e}")),
+    }
+}
+
+/// The `meta` key that says the API key was saved by this version or later.
+const RESAVED: &str = "secret_store_open_access";
+
+fn note_resaved(app: &App) {
+    if let Err(e) = app.db.write().execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", crate::params![RESAVED, "1"]) {
+        crate::logging::log("warn", "slskd", &format!("could not note that the API key was saved: {e}"));
+    }
+}
+
 impl Slskd {
     /// Replaces the network access (tests).
     pub fn set_http(&self, h: Arc<dyn Http>) {
@@ -403,6 +434,9 @@ impl Slskd {
         let mut k = lock(&self.key);
         if k.is_none() {
             let stored = app.secrets.get(KEY_NAME).map_err(|e| SlskdError::new("secret_store", format!("The API key could not be read: {e}")))?;
+            if let Some(key) = &stored {
+                resave_once(app, key);
+            }
             *k = Some(stored);
         }
         Ok(k.clone().flatten())
@@ -416,6 +450,9 @@ impl Slskd {
         };
         saved.map_err(|e| SlskdError::new("secret_store", format!("The API key could not be saved: {e}")))?;
         *lock(&self.key) = Some(key.map(str::to_string));
+        if key.is_some() {
+            note_resaved(app);
+        }
         Ok(())
     }
 

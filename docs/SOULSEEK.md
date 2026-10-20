@@ -106,7 +106,11 @@ the notice, and go through **Setup**:
    the lines inside it rather than a second one. Save the file, restart
    slskd, and choose **I restarted slskd: test**. A key you already have
    can be pasted instead. SONORA keeps the key in the macOS keychain or in
-   Windows Credential Manager, never in its library or its logs.
+   Windows Credential Manager, never in its library or its logs. On a Mac
+   it is saved so that every build of SONORA can read it without macOS
+   asking first (what Keychain Access calls "Allow all applications to
+   access this item"); like `slskd.yml`, which holds the same key as plain
+   text, it is readable by programs running under your account.
 
    To let only this computer use the key, you can add
    `cidr: 127.0.0.1/32,::1/128` under `role`. Leave it out when slskd runs
@@ -259,8 +263,13 @@ being written by another program, are taken once they settle.
 file is no longer shared, or that person only uploads to some users. Try
 another folder from the results.
 
-**macOS asks whether SONORA may use the keychain**: after an update that
-changed how SONORA is signed, macOS asks once; choose **Always Allow**.
+**macOS asks whether SONORA may use the keychain**: a key saved by SONORA
+0.3.0 or earlier is tied to the exact build that saved it, so the first
+launch of a newer version asks once; choose **Always Allow**. SONORA then
+saves the key again so that no later build asks. If you declined, or the
+dialog went unnoticed and the Setup tab says the key could not be read,
+choose **Try again** (the dialog returns) or **Replace** the key with the
+one in `slskd.yml`.
 
 ## Limits
 
