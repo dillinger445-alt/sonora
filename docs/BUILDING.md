@@ -286,7 +286,7 @@ requests and on demand:
 | --- | --- |
 | `rust` | `cargo test --workspace --locked` on Ubuntu, macOS and Windows (FFmpeg from apt and Homebrew; Windows deliberately without FFmpeg), plus `cargo clippy -D warnings` on Ubuntu; on macOS and Windows a round trip through the real keychain or Credential Manager, and on Windows the Recycle Bin safety test |
 | `frontend` | Type-check, unit tests and production build of the interface |
-| `e2e` | Builds the interface and runs the Playwright tests against the dev bridge (which generates its audio corpus); uploads the report on failure |
+| `e2e` | Builds the interface and runs the Playwright tests against the dev bridge (which generates its audio corpus) in Chromium, then the checks for WebKit; uploads the report on failure |
 | `desktop` | After `rust` and `frontend` pass: bundles for macOS Apple silicon (`macos-15`), macOS Intel (`macos-15-intel`) and Windows x64, each with its FFmpeg; uploads the `.dmg`, the `.app` (as `.tar.gz`), the `.msi` and the NSIS `.exe` as workflow artifacts |
 
 No `package-lock.json` or `src-tauri/Cargo.lock` is committed yet, so CI
