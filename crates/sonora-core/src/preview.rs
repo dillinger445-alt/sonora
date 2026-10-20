@@ -150,6 +150,41 @@ pub fn incomplete_path(root: &Path, username: &str, filename: &str, windows: boo
     Some(p)
 }
 
+/// Where a finished download of `filename` is: slskd puts it in a folder
+/// named after the one it came from, in its download folder; otherwise a
+/// file with that name and size a few folders down.
+fn find_finished(root: &Path, filename: &str, name: &str, size: u64, windows: bool) -> Option<PathBuf> {
+    let local = filename.replace('\\', "/");
+    let parent = local.rsplit('/').nth(1).filter(|p| !p.is_empty() && !p.starts_with("@@"));
+    let want = safe_segment(name, windows);
+    let fits = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() == size);
+    if let Some(dir) = parent {
+        let p = root.join(safe_segment(dir, windows)).join(&want);
+        if fits(&p) {
+            return Some(p);
+        }
+    }
+    let mut stack = vec![(root.to_path_buf(), 0)];
+    let mut seen = 0;
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > 20_000 {
+                return None;
+            }
+            let p = e.path();
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() && depth < 3 && e.file_name() != PREVIEW_DIR {
+                stack.push((p, depth + 1));
+            } else if ft.is_file() && e.file_name().to_string_lossy() == want && fits(&p) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 /// Looks for the partial file under the user's folder when it is not where
 /// slskd usually puts it (another slskd version, say): a file with that name.
 fn find_partial(root: &Path, username: &str, name: &str, windows: bool) -> Option<PathBuf> {
@@ -204,6 +239,8 @@ struct St {
     /// The partial file was there before the preview (an earlier download's): it stays.
     preexisting: bool,
     preview_dir: Option<PathBuf>,
+    /// slskd's folder for finished downloads.
+    downloads_root: Option<PathBuf>,
     final_path: Option<PathBuf>,
     resumes: bool,
     /// Bytes of the file on disk.
@@ -652,6 +689,7 @@ fn pump(app: &Arc<App>, s: &Arc<Session>) {
             st.incomplete = Some(partial);
             st.incomplete_root = Some(o.incomplete.clone());
             st.preview_dir = Some(o.downloads.join(PREVIEW_DIR).join(s.id.to_string()));
+            st.downloads_root = Some(o.downloads.clone());
             st.resumes = o.resumes;
         }
         Err(e) => {
@@ -807,10 +845,16 @@ fn on_transfer(app: &App, s: &Arc<Session>, t: &TransferInfo, backoff: &mut Opti
                 let mut st = lock(&s.st);
                 st.transfer = None;
                 st.source_complete = true;
-                // A preview's file moved into its own folder; a followed download's elsewhere.
+                // A preview's file moved into its own folder; a followed
+                // download's into the download folder.
                 if st.final_path.is_none() {
                     if let Some(dir) = st.preview_dir.clone() {
                         st.final_path = std::fs::read_dir(&dir).ok().and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.is_file()));
+                    }
+                }
+                if st.final_path.is_none() && !st.incomplete.as_ref().is_some_and(|p| p.exists()) {
+                    if let Some(root) = st.downloads_root.clone() {
+                        st.final_path = find_finished(&root, &s.filename, &s.name, s.size, cfg!(windows));
                     }
                 }
             }
@@ -883,8 +927,30 @@ fn update_received(s: &Session, windows: bool) -> u64 {
     };
     let Some(mut path) = path else { return 0 };
     if !path.exists() {
-        // Not where slskd usually puts it: look for it under the user's folder.
-        if let Some(root) = root {
+        let (complete, downloads) = {
+            let st = lock(&s.st);
+            (st.source_complete, st.downloads_root.clone())
+        };
+        if complete {
+            // Finished and moved: into the download folder (a followed download).
+            match downloads.and_then(|d| find_finished(&d, &s.filename, &s.name, s.size, windows)) {
+                Some(found) => {
+                    lock(&s.st).final_path = Some(found.clone());
+                    path = found;
+                }
+                None => {
+                    // Gone: the preview ends where its audio does.
+                    let mut st = lock(&s.st);
+                    if !st.source_dead {
+                        st.source_dead = true;
+                        drop(st);
+                        s.notify();
+                    }
+                    return lock(&s.st).received;
+                }
+            }
+        } else if let Some(root) = root {
+            // Not where slskd usually puts it: look for it under the user's folder.
             if let Some(found) = find_partial(&root, &s.username, &s.name, windows) {
                 lock(&s.st).incomplete = Some(found.clone());
                 path = found;
@@ -1323,6 +1389,26 @@ mod tests {
         if !cfg!(windows) {
             assert_eq!(incomplete_path(root, "u", "x\\a:b?.flac", false).unwrap(), root.join("u/x/a:b?.flac"));
         }
+    }
+
+    #[test]
+    fn a_finished_download_is_found_where_slskd_puts_it() {
+        let root = std::env::temp_dir().join(format!("sonora-finished-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Night Drive")).unwrap();
+        std::fs::write(root.join("Night Drive").join("01 Lights.flac"), [0u8; 10]).unwrap();
+        let name = "@@abcde\\Music\\Night Drive\\01 Lights.flac";
+        assert_eq!(find_finished(&root, name, "01 Lights.flac", 10, false), Some(root.join("Night Drive").join("01 Lights.flac")));
+        assert_eq!(find_finished(&root, name, "01 Lights.flac", 11, false), None, "another size is another file");
+        // Elsewhere in the folder (another slskd, or a destination of its own).
+        std::fs::create_dir_all(root.join("elsewhere").join("deeper")).unwrap();
+        std::fs::write(root.join("elsewhere").join("deeper").join("02 Glow.flac"), [0u8; 7]).unwrap();
+        assert_eq!(find_finished(&root, "x\\y\\02 Glow.flac", "02 Glow.flac", 7, false), Some(root.join("elsewhere").join("deeper").join("02 Glow.flac")));
+        // Never a preview's own folder.
+        std::fs::create_dir_all(root.join(PREVIEW_DIR).join("1")).unwrap();
+        std::fs::write(root.join(PREVIEW_DIR).join("1").join("03 Hum.flac"), [0u8; 5]).unwrap();
+        assert_eq!(find_finished(&root, "x\\03 Hum.flac", "03 Hum.flac", 5, false), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
