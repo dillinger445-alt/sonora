@@ -56,8 +56,8 @@ your computer with your account: SONORA sends it your search words and the
 files you choose, slskd does the networking with your account and sharing
 settings, and SONORA never shares anything itself. slskd's API key stays in
 the macOS keychain or Windows Credential Manager; the slskd SONORA sets up
-answers only on your computer and shares nothing unless you choose a
-folder. A preview keeps nothing once it stops.
+has its web page and API on your computer only and shares nothing unless
+you choose a folder. A preview keeps nothing once it stops.
 The desktop build's content-security policy blocks remote content. Your
 audio files are read, never modified: tempo, key and genre corrections stay
 in SONORA's library, and exports write new files without replacing any.
@@ -289,7 +289,7 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 271 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, API
+npm run test:rust          # 277 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, API
 npm run test:unit          # 44 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
 npm run build && npm run test:e2e   # 27 Playwright tests: real interface + real core on a generated corpus
@@ -298,8 +298,8 @@ npm run build && npm run test:e2e   # 27 Playwright tests: real interface + real
 A few Rust tests depend on the system: on macOS and Windows one moves a
 file to the system Trash or Recycle Bin, on Linux one makes the trash
 unusable to check that a file that stays keeps its place in a scan, and
-Unix systems check symlink loops. So macOS and Linux run 271 and Windows
-270. On Windows, CI also runs a test that turns the Recycle Bin off for the
+Unix systems check symlink loops. So macOS and Linux run 277 and Windows
+276. On Windows, CI also runs a test that turns the Recycle Bin off for the
 drive for a moment, to check that Move to Recycle Bin never deletes a file
 for good; on macOS and Windows a test that stores, changes and removes
 a secret in the real keychain or Credential Manager; and on macOS a test

@@ -117,18 +117,25 @@ while it is empty. Nothing else is ever deleted.
 If slskd ran on this Mac before (from a folder on the Desktop such as
 `~/Desktop/slskd`, or with slskd's own default settings), the setup screen
 fills in the user name, download folder and shared folder from its
-`slskd.yml`. Leave the password empty to keep the one there. That folder
-stays as it is; once SONORA's slskd works, you can delete it. Start an old
-slskd by hand only after stopping SONORA's (or SONORA says another slskd is
-in the way).
+`slskd.yml`; reading the one on the Desktop, macOS may ask whether SONORA
+may use the Desktop folder. Leave the password empty to keep the one there.
+That folder stays as it is; once SONORA's slskd works, you can delete it.
+Start an old slskd by hand only after stopping SONORA's (or SONORA says
+another slskd is in the way).
 
 Running the setup again, or **Update slskd…**, updates the same setup in
-place: the same folder, the same key, the same launch agent.
+place: the same folder, the same key, the same launch agent. In
+`slskd.yml` it changes only the account, the download folder, the shared
+folder if you changed it (turning sharing off shares nothing), slskd's web
+page on this Mac only and SONORA's key; everything else you set there
+stays.
 
 ## slskd in the background
 
 Once slskd is set up, the Setup tab shows how it is doing (running, signed
 in as whom, or what is wrong) with **Restart** and **Stop** (or **Start**).
+**Stop** lasts: slskd stays stopped, also when SONORA opens and when you
+log in, until you choose **Start**.
 
 - **Run slskd in the background** (on unless you turn it off): slskd starts
   when you log in and again if it stops, whether SONORA is open or not, so
@@ -144,9 +151,10 @@ in as whom, or what is wrong) with **Restart** and **Stop** (or **Start**).
 - When SONORA opens, when you open its Soulseek page, and every 20 seconds
   while SONORA runs, it checks that slskd is running and starts it if not,
   unless you stopped it or turned it off.
-- After your Mac wakes from sleep, SONORA asks slskd to sign in to
-  Soulseek again at once. After the network drops, slskd tries again by
-  itself, at least every five minutes; **Try now** asks at once.
+- When your Mac wakes from sleep while SONORA is open, SONORA asks slskd to
+  sign in to Soulseek again at once. Otherwise, and after the network
+  drops, slskd tries again by itself, at least every five minutes; **Try
+  now** asks at once.
 
 ### When something is wrong
 
@@ -180,7 +188,8 @@ folder (`app-<version>`) stays too.
 
 **Turn off** stops slskd and removes its launch agent: slskd no longer
 starts when you log in or when SONORA opens. slskd's folder, its settings
-and your downloads stay where they are, and **Start** brings it back. To
+and your downloads stay where they are (SONORA says where), and **Start**
+brings it back. To
 remove slskd completely, turn it off, then delete
 `~/Library/Application Support/app.sonora.analyzer/slskd/`. It holds slskd
 itself, its settings (with your Soulseek password), its log and its partial
@@ -337,11 +346,14 @@ slskd's list, deletes the partial file the preview made and deletes its
 cache. If the whole file arrived during the preview, slskd saved it in a
 hidden `.sonora-preview` folder in the download folder; SONORA deletes that
 too. A partial file that was there before the preview (from a download that
-stopped, say) is never deleted. If SONORA quits in the middle of a preview,
-it cleans up the next time it opens. A preview is never added to your
-library, never analysed, never listed under Downloads and never shared:
-SONORA's folder watching skips `.sonora-preview`, and slskd shares only the
-folders in its settings.
+stopped, say) is never deleted, and neither is any other file, even one
+with the same name. A file that turns out not to be playable (not the
+format its name says, say) is not fetched any further. If SONORA quits in
+the middle of a preview, it cancels the transfer on the way out, and
+deletes what is left the next time it opens. A preview is never added to
+your library, never analysed, never listed under Downloads and never
+shared: SONORA's folder watching skips `.sonora-preview`, and slskd shares
+only the folders in its settings.
 
 **Space.** The decoded audio of one preview takes at most **Space for
 previews** (512 MB, 1 GB or 2 GB; 1 GB unless you change it), in SONORA's
@@ -350,7 +362,10 @@ longer than that stops where the space runs out, and says so.
 
 **Download while listening.** **Download** in the player downloads the file
 for real: slskd carries on from what the preview fetched, and the file
-joins your library and is checked when it finishes, like any download.
+joins your library and is checked when it finishes, like any download. If
+all of the file had arrived already, slskd fetches it again for the
+download, and the preview's copy goes when the preview stops. If slskd
+does not take the download, the preview goes on fetching by itself.
 
 **A queue of previews.** The ＋ beside a result adds it to the preview
 queue, shown above the results: **Play next**, take one out, **Clear**, or
@@ -429,17 +444,22 @@ have it.
   decoded audio, in SONORA's cache folder, deleted when it stops.
 - **slskd set up by SONORA**: your Soulseek password and slskd's web
   password are in `slskd.yml`, which only your user account can read
-  (permissions 0600). slskd reads its account from that file; SONORA keeps
-  no other copy, never shows the password and never writes it to its log.
-  The launch agent holds no password.
+  (permissions 0600), and in its dated backups next to it, which only your
+  account can read too. slskd reads its account from that file; SONORA
+  keeps no other copy, never shows the Soulseek password and never writes
+  it to its log. The launch agent holds no password. **Copy web password**
+  puts slskd's web password on the clipboard when you ask, for its login
+  page.
 - **Does not keep**: anything about other users. User names appear in
   search results, downloads and previews while SONORA shows them, taken
   from slskd each time. When slskd reports a problem, SONORA's log notes
   only that a request failed, not slskd's message, which can name other
   users.
 - Nothing goes anywhere but slskd (and GitHub for slskd itself). SONORA's
-  requests go through the system's `curl`, straight to slskd's address,
-  which SONORA's own slskd answers only on this computer.
+  requests go through the system's `curl`, straight to slskd's address.
+  SONORA's own slskd has its web page and API on this computer only; like
+  any Soulseek client, it takes connections from other Soulseek users on
+  its Soulseek port.
 
 ## Soulseek's rules
 
