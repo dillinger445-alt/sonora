@@ -80,6 +80,8 @@ pub struct AgentState {
     pub loaded: bool,
     pub pid: Option<u32>,
     pub last_exit: Option<i32>,
+    /// The signal that ended its last run (9 when the system killed it).
+    pub last_signal: Option<i32>,
 }
 
 /// A running slskd process.
@@ -110,6 +112,9 @@ pub trait System: Send + Sync {
     /// Starts slskd (again, when `restart`).
     fn kickstart(&self, restart: bool) -> Result<(), String>;
     fn agent(&self) -> AgentState;
+    /// The file carries macOS's mark for files downloaded from the internet
+    /// (which Gatekeeper checks before it lets a program run).
+    fn quarantined(&self, path: &Path) -> bool;
     /// Every running slskd.
     fn processes(&self) -> Vec<Process>;
     fn app_running(&self, name: &str) -> bool;
@@ -206,7 +211,11 @@ pub fn parse_launchctl_print(text: &str) -> AgentState {
         if let Some(v) = t.strip_prefix("pid = ") {
             s.pid = v.trim().parse().ok();
         } else if let Some(v) = t.strip_prefix("last exit code = ") {
-            s.last_exit = v.trim().parse().ok();
+            // "0", "78: EX_CONFIG" or "(never exited)".
+            s.last_exit = v.split(':').next().and_then(|n| n.trim().parse().ok());
+        } else if let Some(v) = t.strip_prefix("last terminating signal = ") {
+            // "Killed: 9".
+            s.last_signal = v.rsplit(':').next().and_then(|n| n.trim().parse().ok());
         }
     }
     s
@@ -277,6 +286,10 @@ impl System for MacSystem {
         }
     }
 
+    fn quarantined(&self, path: &Path) -> bool {
+        run("/usr/bin/xattr", &["-p", "com.apple.quarantine", &path.to_string_lossy()]).is_ok()
+    }
+
     fn processes(&self) -> Vec<Process> {
         let Ok(text) = run("/bin/ps", &["-axww", "-o", "pid=,comm="]) else { return Vec::new() };
         text.lines()
@@ -329,6 +342,10 @@ pub struct TestState {
     pub processes: Vec<Process>,
     pub soulseek_qt: bool,
     pub fetch_error: Option<String>,
+    /// The installed program carries the quarantine mark, and "macOS"
+    /// kills it whenever it starts.
+    pub quarantined: bool,
+    last_signal: Option<i32>,
     command: Vec<String>,
     child: Option<std::process::Child>,
 }
@@ -356,6 +373,16 @@ impl TestSystem {
 
     fn note(&self, call: String) {
         lock(&self.state).calls.push(call);
+    }
+
+    /// A quarantined program is killed as it starts (as macOS may do).
+    fn blocked(&self) -> bool {
+        let mut st = lock(&self.state);
+        if st.quarantined {
+            st.running = false;
+            st.last_signal = Some(9);
+        }
+        st.quarantined
     }
 
     fn start_child(&self) -> Result<(), String> {
@@ -438,6 +465,9 @@ impl System for TestSystem {
         }
         let run_at_load = std::fs::read_to_string(plist).map(|t| t.contains("<key>RunAtLoad</key>\n\t<true/>")).unwrap_or(false);
         if run_at_load {
+            if self.blocked() {
+                return Ok(());
+            }
             lock(&self.state).running = true;
             if self.spawn {
                 self.start_child()?;
@@ -462,6 +492,9 @@ impl System for TestSystem {
         if !lock(&self.state).loaded {
             return Err("not loaded".into());
         }
+        if self.blocked() {
+            return Ok(());
+        }
         if self.spawn {
             if restart {
                 self.stop_child();
@@ -483,10 +516,14 @@ impl System for TestSystem {
                 }
             }
             let pid = st.child.as_ref().map(std::process::Child::id);
-            return AgentState { loaded: st.loaded, pid, last_exit: st.last_exit };
+            return AgentState { loaded: st.loaded, pid, last_exit: st.last_exit, last_signal: st.last_signal };
         }
         let st = lock(&self.state);
-        AgentState { loaded: st.loaded, pid: if st.running { Some(4242) } else { None }, last_exit: st.last_exit }
+        AgentState { loaded: st.loaded, pid: if st.running { Some(4242) } else { None }, last_exit: st.last_exit, last_signal: st.last_signal }
+    }
+
+    fn quarantined(&self, _path: &Path) -> bool {
+        lock(&self.state).quarantined
     }
 
     fn processes(&self) -> Vec<Process> {
@@ -979,12 +1016,30 @@ pub struct Service {
     /// The person stopped slskd: SONORA does not start it again by itself
     /// until they start it (or SONORA opens again).
     stopped: AtomicBool,
+    /// SONORA is quitting: the watcher stops.
+    quitting: AtomicBool,
 }
 
 impl Default for Service {
     fn default() -> Self {
-        Service { system: Mutex::new(Arc::new(MacSystem)), run: Mutex::new(Run::default()), cancel: AtomicBool::new(false), stopped: AtomicBool::new(false) }
+        Service {
+            system: Mutex::new(Arc::new(MacSystem)),
+            run: Mutex::new(Run::default()),
+            cancel: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
+            quitting: AtomicBool::new(false),
+        }
     }
+}
+
+/// How often SONORA looks at its slskd while it runs.
+const WATCH_EVERY: Duration = Duration::from_secs(20);
+
+/// Whether the computer slept between two looks: the wall clock moved on
+/// further than the time that passed while it was awake (`Instant` does
+/// not count sleep). `wall` is None when the clock went back.
+pub fn slept(awake: Duration, wall: Option<Duration>) -> bool {
+    wall.is_some_and(|w| w > awake + Duration::from_secs(30))
 }
 
 /// What installing the launch agent did.
@@ -1474,6 +1529,9 @@ impl Service {
         let old = std::fs::read_to_string(&plist_path).ok();
         let changed = old.as_deref() != Some(text.as_str());
         let sys = self.system();
+        // launchd opens the error log before it starts slskd, and does not
+        // start it when the log's folder is missing.
+        std::fs::create_dir_all(&layout.logs).map_err(|e| format!("{} could not be made: {e}", layout.logs.display()))?;
         if changed {
             if old.is_some() && sys.agent().loaded {
                 sys.unload()?;
@@ -1529,7 +1587,14 @@ impl Service {
                 Err(_) => {}
             }
             let agent = sys.agent();
-            if agent.loaded && agent.pid.is_none() && agent.last_exit.is_some_and(|c| c != 0) {
+            if agent.loaded && agent.pid.is_none() && (agent.last_exit.is_some_and(|c| c != 0) || agent.last_signal.is_some()) {
+                if sys.quarantined(&layout.binary(&version)) {
+                    // SONORA's own download carries no such mark; this one came from elsewhere.
+                    return fail(
+                        "macOS stopped slskd: it is marked as downloaded from the internet, and Apple does not know its developer. In System Settings, open Privacy & Security and choose Open Anyway for slskd, then try again. SONORA does not change macOS's security settings itself.",
+                        "gatekeeper",
+                    );
+                }
                 let errors = tail(&layout.service_log(), err_len, 4096);
                 let last: Vec<&str> = errors.lines().filter(|l| !l.trim().is_empty()).rev().take(3).collect();
                 let detail = last.into_iter().rev().collect::<Vec<_>>().join(" ");
@@ -1589,8 +1654,17 @@ impl Service {
 
     /// Makes sure SONORA's slskd runs (when it was set up here): loads the
     /// launch agent if it is not, starts slskd if it stopped. Quick; never
-    /// asks the person anything.
+    /// asks the person anything. slskd stays off when the person stopped it,
+    /// or turned it off (its launch agent is gone).
     pub fn ensure(&self, app: &App) -> Result<(), String> {
+        if !self.layout(app).plist().is_some_and(|p| p.is_file()) {
+            return Ok(());
+        }
+        self.run_agent(app)
+    }
+
+    /// Installs (or updates) the launch agent and starts slskd if it is not running.
+    fn run_agent(&self, app: &App) -> Result<(), String> {
         if !self.configured(app) || lock(&self.run).active || self.stopped.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -1613,6 +1687,7 @@ impl Service {
 
     /// When SONORA quits: slskd keeps running only in the background mode.
     pub fn on_quit(&self, app: &App) {
+        self.quitting.store(true, Ordering::Relaxed);
         if self.configured(app) && !app.settings().slskd_background && self.system().agent().pid.is_some() {
             let _ = self.system().unload();
         }
@@ -1626,7 +1701,7 @@ impl Service {
         match what {
             "start" => {
                 self.stopped.store(false, Ordering::Relaxed);
-                self.ensure(app)
+                self.run_agent(app)
             }
             "stop" => {
                 self.stopped.store(true, Ordering::Relaxed);
@@ -1637,7 +1712,7 @@ impl Service {
                 if sys.agent().loaded {
                     sys.kickstart(true)
                 } else {
-                    self.ensure(app)
+                    self.run_agent(app)
                 }
             }
             _ => Err(format!("unknown action {what}")),
@@ -1650,9 +1725,11 @@ impl Service {
         s.slskd_background = on;
         s.save(&app.db.write()).map_err(|e| e.to_string())?;
         *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
-        if self.configured(app) {
+        // Turned off (no launch agent): it stays off; the choice applies when it is started.
+        let layout = self.layout(app);
+        if self.configured(app) && layout.plist().is_some_and(|p| p.is_file()) {
             if let Some(version) = self.installed_version(app) {
-                self.install_agent(&self.layout(app), &version, on)?;
+                self.install_agent(&layout, &version, on)?;
                 self.ensure(app)?;
             }
         }
@@ -1775,6 +1852,84 @@ impl Service {
     pub fn web_password(&self, app: &App) -> Option<String> {
         read_found(&self.layout(app).config).and_then(|f| f.web_password)
     }
+
+    /// Looks after SONORA's slskd while SONORA runs (on its own thread):
+    /// starts it again when it stopped, unless the person stopped it or
+    /// turned it off, and when the computer wakes from sleep asks slskd to
+    /// sign in again at once rather than after its own wait between
+    /// attempts, which grows to five minutes. Never asks the person
+    /// anything, and does nothing where SONORA did not set slskd up.
+    pub fn watch(&self, app: &std::sync::Weak<App>) {
+        let mut last = (Instant::now(), SystemTime::now());
+        let mut since_look = Duration::ZERO;
+        let pause = |d: Duration| {
+            let until = Instant::now() + d;
+            while Instant::now() < until {
+                if self.quitting.load(Ordering::Relaxed) {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            true
+        };
+        loop {
+            if !pause(Duration::from_millis(500)) {
+                return;
+            }
+            // Sleep shows as a jump of the wall clock between two short looks.
+            let now = (Instant::now(), SystemTime::now());
+            let woke = slept(now.0 - last.0, now.1.duration_since(last.1).ok());
+            since_look += now.0 - last.0;
+            last = now;
+            if !woke && since_look < WATCH_EVERY {
+                continue;
+            }
+            since_look = Duration::ZERO;
+            // SONORA's core is gone (a test that is over, say): so is the watcher.
+            let Some(app) = app.upgrade() else { return };
+            let app = &*app;
+            if !self.configured(app) || crate::sources::accepted_at(&app.db.read()).is_none() {
+                continue;
+            }
+            if woke {
+                logging::log("info", "slskd", "the computer woke from sleep");
+                // The network may need a few seconds after waking.
+                if !pause(Duration::from_secs(5)) {
+                    return;
+                }
+                last = (Instant::now(), SystemTime::now());
+            }
+            if let Err(e) = self.ensure(app) {
+                logging::log_fields("warn", "slskd", "could not start slskd", obj! { "error" => e });
+            }
+            if woke {
+                self.sign_in_again(app);
+            }
+        }
+    }
+
+    /// Asks slskd to connect to Soulseek now, when it runs, is not signed in,
+    /// and nothing but the connection stands in the way (not a wrong
+    /// password, nor the account signed in elsewhere). The watcher does this
+    /// after the computer wakes.
+    pub fn sign_in_again(&self, app: &App) {
+        if self.stopped.load(Ordering::Relaxed) || self.system().agent().pid.is_none() {
+            return;
+        }
+        let Ok(info) = app.slskd.test(app) else { return };
+        if info.get("loggedIn").and_then(Value::as_bool) == Some(true) {
+            return;
+        }
+        let layout = self.layout(app);
+        let reason = newest_log(&layout.logs).and_then(|l| reason_in(&tail(&l, 0, 256 * 1024)));
+        if matches!(reason, Some(Reason::WrongPassword | Reason::NoAccount | Reason::SignedInElsewhere)) {
+            return;
+        }
+        match app.slskd.connect(app) {
+            Ok(()) => logging::log("info", "slskd", "asked slskd to sign in again"),
+            Err(e) => logging::log_fields("warn", "slskd", "could not ask slskd to sign in again", obj! { "code" => e.code }),
+        }
+    }
 }
 
 /// End-to-end tests run their stand-in slskd on another port.
@@ -1791,6 +1946,91 @@ fn wait_secs(default: u64) -> u64 {
 mod tests {
     use super::*;
 
+    /// macOS, run by CI only (`--ignored`, with SONORA_LAUNCHD_TEST=1): the
+    /// launch agent SONORA writes is accepted by launchd, which runs the
+    /// program in it, starts it again when asked and after a crash, and stops
+    /// it; SONORA reads launchd's answers. It adds and removes a launch agent
+    /// for the user running it, so it refuses to run where one is there.
+    #[test]
+    #[ignore]
+    fn launchd_takes_the_launch_agent() {
+        if !cfg!(target_os = "macos") || std::env::var("SONORA_LAUNCHD_TEST").as_deref() != Ok("1") {
+            eprintln!("skipped: macOS with SONORA_LAUNCHD_TEST=1 only");
+            return;
+        }
+        let service = Service::with_system(Arc::new(MacSystem));
+        let sys = service.system();
+        let root = std::env::temp_dir().join(format!("sonora-launchd-{}", std::process::id()));
+        let layout = Layout::new(&root, sys.agents_dir());
+        let plist_path = layout.plist().unwrap();
+        assert!(!plist_path.exists(), "a launch agent for slskd is there already: {}", plist_path.display());
+        // A stand-in for slskd: notes how it was started, then stays up.
+        std::fs::create_dir_all(layout.app(VERSION)).unwrap();
+        std::fs::create_dir_all(&layout.data).unwrap();
+        let bin = layout.binary(VERSION);
+        std::fs::write(&bin, "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/args.txt\"\nexec /bin/sleep 600\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let args = layout.app(VERSION).join("args.txt");
+        let wait = |what: &str, secs: u64, f: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(secs);
+            while !f() {
+                assert!(Instant::now() < deadline, "{what}: launchd says {:?}", sys.agent());
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        };
+        let clean = || {
+            let _ = sys.unload();
+            let _ = std::fs::remove_file(&plist_path);
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // In the background: launchd starts it as soon as it loads the agent.
+            let agent = service.install_agent(&layout, VERSION, true).unwrap();
+            assert!(agent.new && agent.loaded_now);
+            wait("slskd started", 20, &|| sys.agent().pid.is_some() && args.exists());
+            assert_eq!(std::fs::read_to_string(&args).unwrap().trim(), format!("--app-dir {} --no-logo", layout.data.display()));
+            assert!(layout.service_log().exists(), "launchd made the error log");
+            eprintln!("launchd ran it");
+            // Restart.
+            let first = sys.agent().pid.unwrap();
+            sys.kickstart(true).unwrap();
+            wait("slskd started again", 20, &|| sys.agent().pid.is_some_and(|p| p != first));
+            // After a crash, launchd starts it again (after its 30 s throttle at most).
+            let second = sys.agent().pid.unwrap();
+            run("/bin/kill", &["-KILL", &second.to_string()]).unwrap();
+            wait("slskd started again after a crash", 60, &|| sys.agent().pid.is_some_and(|p| p != second));
+            // Stopped: unloaded, and not running.
+            sys.unload().unwrap();
+            wait("slskd stopped", 20, &|| !sys.agent().loaded);
+            // Only while SONORA is open: loading does not start it; SONORA does.
+            let agent = service.install_agent(&layout, VERSION, false).unwrap();
+            assert!(agent.loaded_now);
+            std::thread::sleep(Duration::from_secs(2));
+            assert!(sys.agent().pid.is_none(), "it does not start at load");
+            sys.kickstart(false).unwrap();
+            wait("SONORA started slskd", 20, &|| sys.agent().pid.is_some());
+            eprintln!("launchd ran it in both modes");
+        }));
+        clean();
+        let _ = std::fs::remove_dir_all(&root);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+
+    #[test]
+    fn sleep_is_told_from_the_clocks() {
+        let s = Duration::from_secs;
+        assert!(!slept(s(20), Some(s(20))));
+        assert!(!slept(s(20), Some(s(45))), "a busy moment is not sleep");
+        assert!(slept(s(20), Some(s(20 + 31))));
+        assert!(slept(s(1), Some(s(3600))));
+        assert!(!slept(s(20), None), "the clock went back");
+    }
+
     #[test]
     fn pinned_releases() {
         let x = pinned("osx-x64").unwrap();
@@ -1803,9 +2043,13 @@ mod tests {
     #[test]
     fn launchd_answers() {
         let s = parse_launchctl_print("gui/501/app.sonora.analyzer.slskd = {\n\tactive count = 1\n\tstate = running\n\tpid = 4711\n\tlast exit code = 0\n}\n");
-        assert_eq!(s, AgentState { loaded: true, pid: Some(4711), last_exit: Some(0) });
+        assert_eq!(s, AgentState { loaded: true, pid: Some(4711), last_exit: Some(0), last_signal: None });
         let s = parse_launchctl_print("gui/501/x = {\n\tstate = not running\n\tlast exit code = (never exited)\n}");
-        assert_eq!(s, AgentState { loaded: true, pid: None, last_exit: None });
+        assert_eq!(s, AgentState { loaded: true, pid: None, last_exit: None, last_signal: None });
+        let s = parse_launchctl_print("gui/501/x = {\n\tstate = not running\n\tlast exit code = 78: EX_CONFIG\n}");
+        assert_eq!(s.last_exit, Some(78));
+        let s = parse_launchctl_print("gui/501/x = {\n\tstate = not running\n\tlast terminating signal = Killed: 9\n}");
+        assert_eq!(s.last_signal, Some(9));
     }
 
     #[test]

@@ -299,8 +299,11 @@ function StepIcon({ state }: { state: SetupRun['steps'][number]['state'] }) {
 }
 
 /** The setup's checklist, its problem and the way past it. */
+/** System Settings → Privacy & Security, where macOS lets a blocked program run. */
+const PRIVACY_SECURITY = 'x-apple.systempreferences:com.apple.preference.security?General';
+
 export function SetupProgress({ run, others, onChanged }: { run: SetupRun; others: SlskdProcess[]; onChanged: () => void }) {
-  const { client } = useCore();
+  const { client, bridge } = useCore();
   const toast = useToast();
   const [confirm, dialogs] = useConfirm();
   const [password, setPassword] = useState('');
@@ -408,6 +411,17 @@ export function SetupProgress({ run, others, onChanged }: { run: SetupRun; other
               </Button>
             </p>
           ) : null}
+          {err.fix === 'gatekeeper' ? (
+            <p className="sk-inline-act">
+              <Button
+                size="sm"
+                icon={LuExternalLink}
+                onClick={() => void bridge.openExternal(PRIVACY_SECURITY).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open System Settings', body: message(e) }))}
+              >
+                Open Privacy & Security
+              </Button>
+            </p>
+          ) : null}
           <div className="sk-key-actions">
             {err.fix !== 'password' || run.passwordKept ? (
               <Button size="sm" variant={err.fix === 'password' ? 'ghost' : 'primary'} icon={LuRefreshCw} busy={busy === 'retry'} onClick={() => void retry()}>
@@ -486,8 +500,8 @@ export function ManagedPanel({ m, state, onUpdate }: { m: ManagedSlskd; state: S
       title: 'Turn slskd off?',
       body: (
         <p>
-          slskd stops and no longer starts when you log in: SONORA removes its launch agent. slskd’s folder, its settings and your downloads stay where they are, and Set up
-          Soulseek brings it all back.
+          slskd stops and no longer starts when you log in or when SONORA opens: SONORA removes its launch agent. slskd’s folder, its settings and your downloads stay
+          where they are, and Start brings it back.
         </p>
       ),
       confirmLabel: 'Turn slskd off',
