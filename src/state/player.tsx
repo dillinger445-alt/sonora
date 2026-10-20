@@ -22,20 +22,11 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { CoreError } from '../api/bridge.ts';
 import type { PreviewSession, TrackRow } from '../api/types.ts';
 import { readPref, writePref } from '../lib/persist.ts';
+import { enqueue, playableUpTo, previewTrackId, putFirst, takeNext, without, type PreviewSource } from '../lib/previews.ts';
 import { useCore, useCoreEvent } from './core.tsx';
 import { throttle } from './emitter.ts';
 
-/** A Soulseek file to listen to before downloading it. */
-export interface PreviewSource {
-  username: string;
-  /** The full path on the other user's computer. */
-  filename: string;
-  name: string;
-  folder: string;
-  size: number;
-  /** Seconds, as the other user's client reports. */
-  length: number | null;
-}
+export type { PreviewSource } from '../lib/previews.ts';
 
 /** What the player needs to know about a track. A preview carries its source. */
 export type PlayableTrack = Pick<TrackRow, 'id' | 'displayTitle' | 'artist' | 'duration' | 'djBpm' | 'djKey'> & { preview?: PreviewSource };
@@ -102,19 +93,6 @@ export function usePlayer(): Player {
 export function usePlaybackTime(): number {
   const src = useContext(TimeContext);
   return useSyncExternalStore(src.subscribe, src.get, src.get);
-}
-
-/** One key per file on Soulseek. */
-export const previewKey = (src: Pick<PreviewSource, 'username' | 'filename'>) => `${src.username}\n${src.filename}`;
-
-/** A preview's place among tracks: a negative id (library tracks are positive), the same for the same file. */
-export function previewTrackId(src: Pick<PreviewSource, 'username' | 'filename'>): number {
-  let h = 0x811c9dc5;
-  for (const ch of previewKey(src)) {
-    h ^= ch.codePointAt(0) ?? 0;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return -(h + 1);
 }
 
 export function previewTrack(src: PreviewSource): PlayableTrack {
@@ -449,6 +427,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(timer);
   }, [previewPlaying, client, audio]);
 
+  // The core's events can be missed (an event stream that reconnects drops
+  // them): while a preview waits to start or buffers, the player also asks.
+  const previewWaiting = state.status === 'loading' && state.track?.preview != null;
+  useEffect(() => {
+    if (!previewWaiting) return;
+    const timer = setInterval(() => {
+      const a = attempt.current;
+      if (a?.previewId == null || a.id !== seq.current) return;
+      client.previewStatus(a.previewId).then(
+        (p) => onPreviewRef.current(p),
+        () => undefined,
+      );
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [previewWaiting, client]);
+
   // ------------------------------------------------------------ actions
   /** The file being prepared will start playing (from `at`, if given) once it is ready. */
   const playWhenReady = useCallback(
@@ -526,11 +520,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const d = !a && Number.isFinite(audio.duration) ? audio.duration : (s.duration ?? seconds);
       let t = Math.max(0, Math.min(d, seconds));
       // A preview seeks only within what has arrived.
-      const p = s.track.preview ? s.preview : null;
-      if (s.track.preview && p?.transfer !== 'complete') {
-        const reach = Math.max(0, (p?.decodedSeconds ?? 0) - 0.3);
-        t = Math.min(t, reach);
-      }
+      if (s.track.preview) t = Math.min(t, playableUpTo(s.preview));
       if (a) a.at = t;
       else if (audio.readyState === 0) pendingSeek.current = t;
       else audio.currentTime = t;
@@ -562,25 +552,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // ------------------------------------------------------ preview queue
   const togglePreview = useCallback((src: PreviewSource) => toggle(previewTrack(src)), [toggle]);
 
-  const enqueuePreview = useCallback((src: PreviewSource) => {
-    setQueue((q) => (q.some((x) => previewKey(x) === previewKey(src)) ? q : [...q, src]));
-  }, []);
-
-  const playPreviewNext = useCallback((src: PreviewSource) => {
-    setQueue((q) => [src, ...q.filter((x) => previewKey(x) !== previewKey(src))]);
-  }, []);
-
-  const removeFromQueue = useCallback((src: PreviewSource) => {
-    setQueue((q) => q.filter((x) => previewKey(x) !== previewKey(src)));
-  }, []);
-
+  const enqueuePreview = useCallback((src: PreviewSource) => setQueue((q) => enqueue(q, src)), []);
+  const playPreviewNext = useCallback((src: PreviewSource) => setQueue((q) => putFirst(q, src)), []);
+  const removeFromQueue = useCallback((src: PreviewSource) => setQueue((q) => without(q, src)), []);
   const clearQueue = useCallback(() => setQueue([]), []);
 
   const skipPreview = useCallback(() => {
-    const [next, ...rest] = queueRef.current;
-    if (!next) return;
-    setQueue(rest);
-    play(previewTrack(next));
+    const step = takeNext(queueRef.current);
+    if (!step) return;
+    setQueue(step.rest);
+    play(previewTrack(step.next));
   }, [play]);
 
   const setAutoAdvance = useCallback((v: boolean) => {

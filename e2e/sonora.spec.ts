@@ -1080,9 +1080,11 @@ test('Soulseek: one button sets slskd up, a failed step can be tried again, and 
   const config = join(LIBRARY, 'slskd', 'data', 'slskd.yml');
   const downloads = join(DATA, 'managed-downloads');
   rmSync(downloads, { recursive: true, force: true });
+  // The notice was accepted on screen in the test before; accepted here
+  // too, so this test also runs on its own.
   await page.goto('/#/soulseek');
-  const accept = page.getByRole('button', { name: 'Accept and continue' });
-  if (await accept.isVisible()) await accept.click();
+  await api(page, 'sources.accept');
+  await page.reload();
   await page.getByRole('tab', { name: 'Setup' }).click();
 
   // One permission screen that says exactly what will happen.
@@ -1150,10 +1152,11 @@ test('Soulseek previews play while the file arrives, are never downloads, queue 
   );
   slskd.key = 'e2e-preview-key-0123456789';
   try {
+    // Accepted and connected without the screens the tests before went through.
     await page.goto('/#/soulseek');
-    const accept = page.getByRole('button', { name: 'Accept and continue' });
-    if (await accept.isVisible()) await accept.click();
+    await api(page, 'sources.accept');
     await api(page, 'slskd.configure', { url: slskd.url, apiKey: slskd.key });
+    await page.reload();
     const tracksBefore = (await api<{ total: number }>(page, 'library.query', { limit: 1 })).total;
 
     await page.getByRole('tab', { name: 'Search' }).click();

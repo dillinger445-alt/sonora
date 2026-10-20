@@ -7,8 +7,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { LuDownload, LuLoaderCircle, LuPause, LuPlay, LuSkipForward, LuVolume2, LuVolumeX, LuX } from 'react-icons/lu';
-import type { PreviewSession } from '../api/types.ts';
 import { formatTimecode, plural } from '../lib/format.ts';
+import { previewWords } from '../lib/previews.ts';
 import { navigate } from '../lib/router.ts';
 import { decodeWaveform, type WaveformData } from '../lib/visuals.ts';
 import { useCore } from '../state/core.tsx';
@@ -128,29 +128,6 @@ function Clock({ duration }: { duration: number | null }) {
       <span className="faint"> / {duration != null ? formatTimecode(duration) : '–:––'}</span>
     </span>
   );
-}
-
-/** Where a preview stands, in words. */
-export function previewWords(p: PreviewSession | null, username: string): string {
-  if (!p) return `Asking ${username}…`;
-  if (p.handedOver) return 'Downloading; it joins your library when it finishes';
-  if (p.followsDownload) return 'Playing along with the download';
-  if (p.limitReached) return 'The preview stops here: its cache is full';
-  if (p.endsEarly) return 'The transfer stopped, so the preview ends early';
-  switch (p.state) {
-    case 'connecting':
-      return `Asking ${username}…`;
-    case 'queued':
-      return p.queue != null ? `Number ${p.queue} in ${username}’s queue` : `Waiting in ${username}’s queue`;
-    case 'buffering':
-      return 'Buffering…';
-    case 'reconnecting':
-      return 'The connection dropped; asking again…';
-    case 'ready':
-      return p.transfer === 'complete' ? 'All of it has arrived' : p.transfer === 'paused' ? 'Enough has arrived for now' : 'Arriving as it plays';
-    default:
-      return '';
-  }
 }
 
 /** The player while a Soulseek preview is loaded: no analysis, a Download button, the next preview. */

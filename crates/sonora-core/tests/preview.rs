@@ -449,6 +449,7 @@ fn plays_before_the_file_has_arrived_reads_ahead_only_so_far_and_leaves_nothing(
     assert!(!partial(&e, FILE).exists());
     assert!(!e.fake.downloads().join(".sonora-preview").exists());
     assert!(!e.root.join("data").join("cache").join("previews").join("previews.json").exists());
+    wait_for("every transfer of the preview to leave slskd's list", 10, || e.fake.world.lock().unwrap().transfers.iter().all(|t| t.removed));
     let tracks = call(app, "library.query", &obj! { "limit" => 10 });
     assert_eq!(tracks.get("total").and_then(Value::as_i64), Some(0), "nothing joined the library");
     assert_eq!(call_err(app, "preview.status", &obj! { "id" => id }).0, "not_found");
