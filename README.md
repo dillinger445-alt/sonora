@@ -28,9 +28,11 @@ files with rekordbox, Serato and M3U playlists.
 [docs/PLAYLISTS.md](docs/PLAYLISTS.md) describes how.
 
 And it can search Soulseek for lossless music through slskd, the Soulseek
-client you run with your own account, download what you choose, and check
-each file as it arrives, so an MP3 passed off as FLAC is caught before it
-reaches a set. [docs/SOULSEEK.md](docs/SOULSEEK.md) describes how.
+client that runs with your own account (on a Mac, SONORA sets it up and
+keeps it running), let you listen to a file while it arrives, download what
+you choose, and check each file as it arrives, so an MP3 passed off as FLAC
+is caught before it reaches a set. [docs/SOULSEEK.md](docs/SOULSEEK.md)
+describes how.
 
 ![Track analysis](docs/screenshots/track.png)
 
@@ -42,16 +44,20 @@ reaches a set. [docs/SOULSEEK.md](docs/SOULSEEK.md) describes how.
 
 SONORA is local-first. Analysis and playback run on your computer, and
 audio, results and file paths never leave it. There are no uploads,
-analytics or telemetry. SONORA goes online for two things only. It asks
+analytics or telemetry. SONORA goes online for three things only. It asks
 GitHub whether a newer version exists, on launch and every six hours; the
 request carries nothing about you or your music, and Settings → Updates
-turns it off. And looking up genres on Discogs, which runs only when you
-start it, sends the artist and title of the tracks you chose (and your
-Discogs token) to Discogs, nothing else. Soulseek searches and downloads
-go through slskd, the Soulseek client you install and run: SONORA sends it
-your search words and the files you choose, slskd does the networking with
-your account and sharing settings, and SONORA never shares anything itself.
-slskd's API key stays in the macOS keychain or Windows Credential Manager.
+turns it off. Looking up genres on Discogs, which runs only when you start
+it, sends the artist and title of the tracks you chose (and your Discogs
+token) to Discogs, nothing else. And setting up slskd on a Mac, only when
+you allow it, downloads slskd's release from GitHub. Soulseek searches,
+previews and downloads go through slskd, the Soulseek client that runs on
+your computer with your account: SONORA sends it your search words and the
+files you choose, slskd does the networking with your account and sharing
+settings, and SONORA never shares anything itself. slskd's API key stays in
+the macOS keychain or Windows Credential Manager; the slskd SONORA sets up
+answers only on your computer and shares nothing unless you choose a
+folder. A preview keeps nothing once it stops.
 The desktop build's content-security policy blocks remote content. Your
 audio files are read, never modified: tempo, key and genre corrections stay
 in SONORA's library, and exports write new files without replacing any.
@@ -136,13 +142,17 @@ it again or bring it back from Folders.
   notes; **Install and restart** downloads it, checks its signature,
   replaces the installed version and restarts, keeping the library and
   settings. See [docs/RELEASING.md](docs/RELEASING.md).
-- **Soulseek**: search for lossless music through slskd, grouped by
-  folder with the best-connected people first; download files or whole
-  folders; follow the downloads; and see each finished file's score and
-  verdict as it joins the library (a "FLAC" made from an MP3 shows as
-  **Lossy source?**). Downloads from any Soulseek client's folder can join
-  the library too, at once or after review. Off until you accept its
-  notice. See [docs/SOULSEEK.md](docs/SOULSEEK.md).
+- **Soulseek**: on a Mac, one button sets up slskd (downloaded from its
+  official release and checked against a pinned checksum), signs it in and
+  keeps it running in the background, with a fix for each problem it can
+  name. Search for lossless music through slskd, grouped by folder with the
+  best-connected people first; listen to a FLAC, WAV or AIFF file while it
+  arrives, one after another from a queue, without downloading it into the
+  library; download files or whole folders; follow the downloads; and see
+  each finished file's score and verdict as it joins the library (a "FLAC"
+  made from an MP3 shows as **Lossy source?**). Downloads from any Soulseek
+  client's folder can join the library too, at once or after review. Off
+  until you accept its notice. See [docs/SOULSEEK.md](docs/SOULSEEK.md).
 - **Needs attention**: problem tracks grouped by clipping, lossy source, low
   bitrate, integrity, weak-evidence issues, failures and missing files.
 - **Duplicates**: identical files (same file hash), identical audio in
@@ -246,12 +256,12 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 | Part | Responsibility |
 | --- | --- |
 | `crates/sonora-engine` | Decoding, metadata, DSP (K-weighting, true-peak interpolation, FFT), measurements including tempo and key, findings and scores, and the export writers (AIFF, WAV, ID3 tags, MP3 re-tagging, conversion). Std-only Rust. |
-| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, playlists and smart playlists, arranging for mixing, sending playlists to USB drives, the Discogs lookup, playback preparation, settings, the JSON API used by both shells, structured logs. |
+| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, playlists and smart playlists, arranging for mixing, sending playlists to USB drives, the Discogs lookup, Soulseek through slskd (search, downloads, previews decoded as they arrive, the download folder watcher) and setting up and running slskd on macOS, playback preparation, settings, the JSON API used by both shells, structured logs. |
 | `crates/sonora-json` | A small JSON value type, parser and serializer. |
 | `crates/sonora-cli` | `sonora analyze / measure / compare / fixtures`, for development and calibration. |
-| `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests, plus the files prepared for playback (with range requests). Rejects other hosts and origins. |
-| `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog, opener, updater and process plugins and bundles FFmpeg. A private `sonora:` URL scheme serves audio for playback: only the files the core prepared, each under an id handed out with it, so the interface cannot read anything else on disk. |
-| `src/` | The interface: `api/` (bridges, typed client), `state/` (core context, imports, toasts, track actions, playlists, dragging, updates), `views/`, `components/`, `charts/`, `lib/` (formatting, scores, routing, key notations, mixing, visual decoding), `styles/` (design tokens). |
+| `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests, plus the files prepared for playback and Soulseek previews as they arrive (with range requests). Rejects other hosts and origins. |
+| `src-tauri` | Desktop shell: opens the core in the local app data folder, forwards `sonora_call` to it on a blocking thread, relays events, registers the single-instance, dialog, opener, updater and process plugins and bundles FFmpeg. A private `sonora:` URL scheme serves audio for playback: only the files the core prepared and the previews it decodes, each under an id handed out with it, so the interface cannot read anything else on disk. |
+| `src/` | The interface: `api/` (bridges, typed client), `state/` (core context, the player, imports, toasts, track actions, playlists, dragging, updates), `views/`, `components/`, `charts/`, `lib/` (formatting, scores, routing, key notations, mixing, visual decoding, previews), `styles/` (design tokens). |
 
 **Design decisions and trade-offs:**
 
@@ -279,21 +289,25 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 245 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads and slskd, API
-npm run test:unit          # 38 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, release notes and the release script)
+npm run test:rust          # 270 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, API
+npm run test:unit          # 44 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 25 Playwright tests: real interface + real core on a generated corpus
+npm run build && npm run test:e2e   # 27 Playwright tests: real interface + real core on a generated corpus
 ```
 
 A few Rust tests depend on the system: on macOS and Windows one moves a
 file to the system Trash or Recycle Bin, on Linux one makes the trash
 unusable to check that a file that stays keeps its place in a scan, and
-Unix systems check symlink loops. So macOS and Linux run 245 and Windows
-244. On Windows, CI also runs a test that turns the Recycle Bin off for the
+Unix systems check symlink loops. So macOS and Linux run 270 and Windows
+269. On Windows, CI also runs a test that turns the Recycle Bin off for the
 drive for a moment, to check that Move to Recycle Bin never deletes a file
-for good, and on macOS and Windows a test that stores, changes and removes
-a secret in the real keychain or Credential Manager. slskd is never
-contacted in tests: a stand-in answers the way its API does. The FFmpeg-based checks are skipped with a note when FFmpeg is
+for good; on macOS and Windows a test that stores, changes and removes
+a secret in the real keychain or Credential Manager; and on macOS a test
+that has launchd load SONORA's launch agent for slskd (with a stand-in
+program), start it, start it again after a crash and stop it. slskd,
+Soulseek and GitHub are never contacted in tests: stand-ins answer the way
+slskd's API does, deliver files a piece at a time, and stand in for its
+release. The FFmpeg-based checks are skipped with a note when FFmpeg is
 not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
@@ -320,7 +334,10 @@ playlists and rekordbox.xml on the drive, a second send that renames and
 removes only SONORA's own files, and files of the owner's left alone), and
 Soulseek through a stand-in for slskd (the notice, making a key, searching
 with the lossless filter, downloading a folder, and the downloads joining
-the library with an MP3-made "FLAC" flagged).
+the library with an MP3-made "FLAC" flagged; the one-button setup with a
+step that fails and is tried again, and Repair; and previews that play
+before the file has arrived, start no download, queue up, and leave no
+file, transfer or cache behind).
 
 ## Troubleshooting
 
