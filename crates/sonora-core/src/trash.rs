@@ -307,8 +307,10 @@ mod tests {
         assert!(!a.exists());
         assert_eq!(std::fs::read(trash.join("files/a b.flac")).unwrap(), b"one");
         let info = std::fs::read_to_string(trash.join("info/a b.flac.trashinfo")).unwrap();
-        assert!(info.starts_with("[Trash Info]\nPath=/"), "{info}");
-        assert!(info.contains("a%20b.flac"), "{info}");
+        // The full original path (on Unix, from the root), percent-encoded.
+        let prefix = if cfg!(unix) { "[Trash Info]\nPath=/" } else { "[Trash Info]\nPath=" };
+        assert!(info.starts_with(prefix), "{info}");
+        assert!(info.contains("a%20b.flac\nDeletionDate="), "{info}");
         // A second file of the same name gets another name in the trash.
         std::fs::write(&a, b"two").unwrap();
         trash_into(&a, &trash).unwrap();
