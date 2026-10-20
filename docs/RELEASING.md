@@ -15,7 +15,7 @@ private key that belongs to the public key in
 1. On GitHub, open the repository's **Settings → Secrets and variables →
    Actions** and add a repository secret named `TAURI_SIGNING_PRIVATE_KEY`
    whose value is the whole content of the private key file (one long line
-   of base64).
+   of base64; a line break pasted with it is ignored).
 2. The key has no password. If you ever replace it with one that has, also
    add `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 3. Keep a copy of the private key somewhere safe and private (a password
@@ -65,8 +65,10 @@ The workflow then:
 
 Running copies see the update only after step 3, when every file
 `latest.json` names is in place. A failed run leaves a draft that nobody
-sees; fix the cause and run the failed jobs again, or delete the draft and
-the tag and start over.
+sees. Fix the cause, then run the failed jobs again; when the fix is in the
+workflow itself, use **Actions → Release → Run workflow** with the tag
+instead, which builds the tag with the workflow as it is on `main`. Or
+delete the draft and the tag and start over.
 
 `node scripts/release.ts check v<version>` and
 `node scripts/release.ts notes <version>` run the workflow's checks locally.

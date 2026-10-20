@@ -8,12 +8,20 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Releases a tag that exists already with this version of the workflow:
+  # after a failed run, without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to release (v<version>); it must exist
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -22,6 +30,7 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   prepare:
@@ -30,6 +39,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - uses: actions/setup-node@v7
         with:
@@ -39,35 +50,45 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+          # Spaces and line breaks pasted with the key are ignored (as in the build).
+          key="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY:-}" | tr -d '[:space:]')"
+          if [ -z "$key" ]; then
             echo "::error::The repository secret TAURI_SIGNING_PRIVATE_KEY is missing. Updates must be signed; see docs/RELEASING.md."
             exit 1
           fi
+          decoded="$(printf '%s' "$key" | base64 -d 2>/dev/null || true)"
+          case "$decoded" in
+            "untrusted comment:"*) ;;
+            *)
+              echo "::error::The repository secret TAURI_SIGNING_PRIVATE_KEY is not a Tauri private key: its value must be the whole content of the .key file. See docs/RELEASING.md."
+              exit 1
+              ;;
+          esac
 
       - name: Check that the tag matches the version
-        run: node scripts/release.ts check "$GITHUB_REF_NAME"
+        run: node scripts/release.ts check "$TAG"
 
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          node scripts/release.ts notes "${GITHUB_REF_NAME#v}" > notes.md
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          node scripts/release.ts notes "${TAG#v}" > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
             # Made earlier, or on the GitHub website (which creates the tag
             # by publishing a release): it gets the changelog as its notes
             # and title when it has none, and stays a draft until its files
             # are in place. Its files are replaced.
-            if [ -z "$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body // ""')" ]; then
-              gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+            if [ -z "$(gh release view "$TAG" --json body --jq '.body // ""')" ]; then
+              gh release edit "$TAG" --notes-file notes.md
             fi
-            if [ -z "$(gh release view "$GITHUB_REF_NAME" --json name --jq '.name // ""')" ]; then
-              gh release edit "$GITHUB_REF_NAME" --title "SONORA ${GITHUB_REF_NAME#v}"
+            if [ -z "$(gh release view "$TAG" --json name --jq '.name // ""')" ]; then
+              gh release edit "$TAG" --title "SONORA ${TAG#v}"
             fi
-            gh release edit "$GITHUB_REF_NAME" --draft=true
-            echo "A release for $GITHUB_REF_NAME exists already: a draft until its files are in place."
+            gh release edit "$TAG" --draft=true
+            echo "A release for $TAG exists already: a draft until its files are in place."
           else
-            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "SONORA ${GITHUB_REF_NAME#v}" --notes-file notes.md
+            gh release create "$TAG" --draft --verify-tag --title "SONORA ${TAG#v}" --notes-file notes.md
           fi
 
   build:
@@ -95,6 +116,8 @@ jobs:
       HAS_WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Install Rust
         run: |
@@ -145,6 +168,10 @@ jobs:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          # A key pasted with a line break at its end is still the key:
+          # base64 holds no spaces or line breaks.
+          TAURI_SIGNING_PRIVATE_KEY="$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')"
+          export TAURI_SIGNING_PRIVATE_KEY
           # Tauri treats a variable that is set but empty as a request to
           # sign or notarize, so drop the ones whose secrets are not set. An
           # empty key password is the same as none.
@@ -179,7 +206,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           bundle="src-tauri/target/$BUILD_TARGET/release/bundle"
           mkdir -p out
           if [ "$RUNNER_OS" = macOS ]; then
@@ -191,7 +218,7 @@ jobs:
             cp "$bundle"/nsis/*-setup.exe "$bundle"/nsis/*-setup.exe.sig "$bundle"/msi/*.msi "$bundle"/msi/*.msi.sig out/
           fi
           ls -l out
-          gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          gh release upload "$TAG" out/* --clobber
 
   publish:
     name: Publish the release and the update manifest
@@ -200,6 +227,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - uses: actions/setup-node@v7
         with:
@@ -211,12 +240,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir signatures
-          gh release download "$GITHUB_REF_NAME" --dir signatures --pattern '*.sig'
-          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' > uploaded.txt
-          node scripts/release.ts notes "${GITHUB_REF_NAME#v}" > notes.md
-          node scripts/release.ts manifest signatures "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" notes.md uploaded.txt > latest.json
+          gh release download "$TAG" --dir signatures --pattern '*.sig'
+          gh release view "$TAG" --json assets --jq '.assets[].name' > uploaded.txt
+          node scripts/release.ts notes "${TAG#v}" > notes.md
+          node scripts/release.ts manifest signatures "$TAG" "$GITHUB_REPOSITORY" notes.md uploaded.txt > latest.json
           cat latest.json
-          gh release upload "$GITHUB_REF_NAME" latest.json --clobber
+          gh release upload "$TAG" latest.json --clobber
           # Published last: running copies only see the update once every
           # file it names is in place.
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          gh release edit "$TAG" --draft=false --latest
