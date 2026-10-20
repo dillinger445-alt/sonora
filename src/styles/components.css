@@ -518,7 +518,10 @@
   max-width: calc(100vw - 48px);
 }
 
-/* Long dialogs scroll inside; the title and the buttons stay in view. */
+/* Long dialogs scroll inside; the title and the buttons stay in view.
+   The box is as tall as its content: the parts start from their content
+   size (flex-basis auto) and only shrink, the body first. With a zero
+   basis (flex: 1), WebKit (the macOS app) sized the box to nothing. */
 .dialog[open] {
   display: flex;
   flex-direction: column;
@@ -529,12 +532,12 @@
 .dialog-inner {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
 }
 
 .dialog-body {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
