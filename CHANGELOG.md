@@ -4,6 +4,45 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.3.1
+
+### New
+
+- **Set up Soulseek for me** (macOS): one button on the Soulseek page sets
+  up slskd for you. You type your Soulseek user name and password and
+  confirm the download folder; one screen lists everything SONORA will do,
+  and nothing happens until you allow it. SONORA then downloads slskd from
+  its official release on GitHub, checks it against a checksum built into
+  SONORA, writes its settings (slskd's web page on this Mac only, a new key
+  for SONORA, nothing shared unless you choose a folder), starts it and
+  checks that it signs in. Each step is ticked off as it goes, and one that
+  fails says why and can be tried again. No Terminal, no keys to copy.
+  Settings from an earlier slskd on your Mac are taken over.
+- **slskd in the background**: slskd now starts when you log in and again
+  if it stops, with no window, whether SONORA is open or not (or, if you
+  prefer, only while SONORA is open). The Setup tab shows whether it is
+  running and signed in, with Restart, Stop, its log and its web page.
+  When it is not signed in, SONORA says why (a wrong password, the same
+  account signed in in the Soulseek app, the Soulseek server out of reach)
+  with one fix for each. **Repair** puts SONORA's key back if slskd's
+  settings lost it. After your Mac wakes from sleep, slskd signs in again
+  at once. **Turn off** stops it and removes it from login, keeping its
+  settings and your downloads.
+- **Listen before you download**: ▶ beside a FLAC, WAV or AIFF result plays
+  it in SONORA's player while it arrives, starting within seconds. A preview
+  fetches only a minute or so ahead of what plays, stops fetching when you
+  stop listening, and leaves nothing behind: it is never downloaded into
+  your library, analysed or shared. Queue up several and listen one after
+  another, and choose **Download** in the player to keep one: the download
+  carries on from what the preview fetched.
+
+### Fixed
+
+- SONORA and slskd can no longer end up with different API keys: SONORA
+  keeps the two in step by itself.
+- A second slskd (one started by hand, say) no longer gets in the way
+  without a word: SONORA says which one it is and can stop it, with your OK.
+
 ## 0.3.0
 
 ### New

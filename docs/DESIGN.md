@@ -75,7 +75,9 @@ The building blocks are in `src/components/`:
 - **DJ**: `KeyWheel` (the Camelot wheel as a picker: one Tab stop, arrows
   go round it and between the major and minor rings), `BpmFilter` and
   `KeyFilter`, `KeyBadge`, `BpmText` and `SourceNote` (where a value came
-  from), and `PlayerBar` (transport, waveform seek bar as a slider, volume).
+  from), and `PlayerBar` (transport, waveform seek bar as a slider, volume;
+  for a Soulseek preview, a Preview badge, how it is going, how far the file
+  has arrived on the seek bar, Download and the next preview).
 - **Marks**: `ScoreMeter` (20-segment ladder), `ScoreCell` (number plus a
   10-segment mini ladder), `EvidenceMark`, `SeverityIcon`, `FlagList`,
   `StatusMark`. On the Soulseek page, each folder of results carries a

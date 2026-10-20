@@ -115,8 +115,16 @@ The bridge for the end-to-end tests keeps slskd's API key in a file in its
 library folder instead of the system's keychain (`SONORA_SECRET_STORE=file`)
 and looks at the Soulseek download folder every second
 (`SONORA_SOURCE_POLL_SECONDS=1`; `0` looks only when asked, as the Rust
-tests do). The Soulseek test talks to a stand-in for slskd
-(`e2e/fakeSlskd.ts`); no test reaches Soulseek or a real slskd.
+tests do). The Soulseek tests talk to a stand-in for slskd
+(`e2e/fakeSlskd.ts`), which for previews "receives" files a piece at a time
+into its folder for partial downloads, as slskd does; no test reaches
+Soulseek, GitHub or a real slskd. For the one-button setup the bridge runs
+with `SONORA_SLSKD_SYSTEM=test`: SONORA "downloads" a stand-in release
+(`SONORA_SLSKD_TEST_ARCHIVE`, made by `e2e/serve.mjs`), notes the launch
+agent instead of asking launchd, and talks to its slskd on the stand-in's
+port (`SONORA_SLSKD_TEST_PORT`). `SONORA_SLSKD_SYSTEM=spawn` runs the
+installed program as a child process instead, for trying the setup with a
+real slskd on Linux.
 
 `npm run fixtures` writes the same corpus to `fixtures/library` with
 45-second tracks, which is handy as a demo library: import that folder in
