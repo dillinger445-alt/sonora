@@ -27,6 +27,8 @@ export default defineConfig({
     // lays some things out differently from Chromium. Checked there after the
     // main suite, in the state it leaves.
     { name: 'webkit', testMatch: /webkit\.spec\.ts/, dependencies: ['chromium'], use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 900 } } },
+    // Exploration only (not for merging).
+    { name: 'explore', testMatch: /explore\.spec\.ts/, use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 900 } } },
   ],
   webServer: {
     command: `node e2e/serve.mjs ${BRIDGE_PORT}`,
