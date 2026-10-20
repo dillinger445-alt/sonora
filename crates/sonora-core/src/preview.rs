@@ -1140,8 +1140,12 @@ fn cleanup(app: &Arc<App>, s: &Arc<Session>) {
         (st.owned, st.handed_over, st.transfer.clone(), st.incomplete.clone(), st.preexisting, st.incomplete_root.clone(), st.preview_dir.clone(), st.transfers.clone())
     };
     if owned && !handed_over {
-        if let Some(t) = transfer {
-            stop_transfer(app, &s.username, &t);
+        if let Some(t) = &transfer {
+            stop_transfer(app, &s.username, t);
+        }
+        // Earlier ones (finished, failed or paused) come off slskd's list too.
+        for t in transfers.iter().filter(|t| Some(*t) != transfer.as_ref()) {
+            let _ = app.slskd.cancel_transfer(app, &s.username, t, true);
         }
         // Other transfers of this file (a download chosen since) keep the partial file.
         let in_use = app
@@ -1315,7 +1319,10 @@ mod tests {
         assert!(incomplete_path(root, "u", "folder\\", false).is_none());
         // Windows replaces more characters.
         assert_eq!(incomplete_path(root, "u", "x\\a:b?.flac", true).unwrap(), root.join("u").join("x").join("a_b_.flac"));
-        assert_eq!(incomplete_path(root, "u", "x\\a:b?.flac", false).unwrap(), root.join("u/x/a:b?.flac"));
+        // (Only where such a name is a file name: on Windows "a:" starts a drive.)
+        if !cfg!(windows) {
+            assert_eq!(incomplete_path(root, "u", "x\\a:b?.flac", false).unwrap(), root.join("u/x/a:b?.flac"));
+        }
     }
 
     #[test]

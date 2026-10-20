@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { basename, dirname, join } from 'node:path';
@@ -112,28 +112,42 @@ export async function startFakeSlskd(shared: SharedFile[], options: FakeOptions 
     if (!file?.source || !options.incomplete || !options.downloads) return;
     const data = readFileSync(file.source);
     const partial = incompletePath(options.incomplete, t.username, t.filename);
-    mkdirSync(dirname(partial), { recursive: true });
-    let pos = existsSync(partial) ? statSync(partial).size : 0;
-    t.offset = pos;
+    let pos = 0;
+    let fd: number | null = null;
     let stopped = false;
     stops.set(t.id, () => {
       stopped = true;
     });
+    const close = () => {
+      if (fd != null) closeSync(fd);
+      fd = null;
+    };
     const step = () => {
       if (stopped) {
+        close();
         if (!t.state.startsWith('Completed')) t.state = 'Completed, Cancelled';
         return;
+      }
+      if (fd == null) {
+        // As slskd does when the transfer starts: the folder is made, the
+        // partial file opened (and kept open), and what is there already is
+        // not asked for again.
+        mkdirSync(dirname(partial), { recursive: true });
+        pos = existsSync(partial) ? statSync(partial).size : 0;
+        t.offset = pos;
+        fd = openSync(partial, 'a');
       }
       t.state = 'InProgress';
       t.placeInQueue = null;
       const n = Math.min(options.rate ?? 64 * 1024, data.length - pos);
-      appendFileSync(partial, data.subarray(pos, pos + n));
+      writeSync(fd, data.subarray(pos, pos + n));
       pos += n;
       t.bytesTransferred = pos;
       if (pos < data.length) {
         setTimeout(step, 50);
         return;
       }
+      close();
       const dir = join(options.downloads ?? '', t.destination ?? 'received');
       mkdirSync(dir, { recursive: true });
       renameSync(partial, join(dir, basename(partial)));

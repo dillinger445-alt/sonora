@@ -9,27 +9,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { LuCheck, LuCircleStop, LuDownload, LuListPlus, LuLoaderCircle, LuPause, LuPlay, LuSearch, LuX } from 'react-icons/lu';
 import type { FoundFile, FoundFolder, SearchResults, Transfer } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
-import { previewWords } from '../components/PlayerBar.tsx';
 import { Checkbox, Segmented } from '../components/Controls.tsx';
 import { EmptyState } from '../components/Layout.tsx';
 import { DASH, formatBytes, formatCount, formatDuration, formatKbps, formatRateKhz, plural } from '../lib/format.ts';
+import { previewBlock, previewKey, rowWords, type PreviewSource } from '../lib/previews.ts';
 import { navigate } from '../lib/router.ts';
 import { useCore } from '../state/core.tsx';
-import { previewKey, usePlayer, type PreviewSource } from '../state/player.tsx';
+import { usePlayer } from '../state/player.tsx';
 import { useToast } from '../state/toasts.tsx';
 import type { SoulseekState } from './Soulseek.tsx';
-
-/** Formats a preview can be played of (decoded as they arrive). */
-const PREVIEWABLE = new Set(['flac', 'wav', 'wave', 'aif', 'aiff', 'aifc']);
-
-/** Why a file cannot be previewed, or null when it can. */
-function previewBlock(x: FoundFile, local: boolean): string | null {
-  if (!local) return 'Previews need slskd on this computer.';
-  if (x.size <= 0) return 'Its size is unknown, so it cannot be previewed.';
-  if (PREVIEWABLE.has(x.ext)) return null;
-  if (x.ext === 'm4a' || x.ext === 'mp4' || x.ext === 'alac') return 'M4A files keep what a player needs at their end, so they cannot be played before they arrive whole.';
-  return `${x.ext ? x.ext.toUpperCase() : 'This file'} cannot be previewed. Previews are for FLAC, WAV and AIFF.`;
-}
 
 function sourceOf(f: FoundFolder, x: FoundFile): PreviewSource {
   return { username: f.username, filename: x.filename, name: x.name, folder: f.name, size: x.size, length: x.length };
@@ -234,15 +222,7 @@ function FolderBlock({
             const isCurrent = current === key;
             const playing = isCurrent && (player.status === 'playing' || player.status === 'loading');
             const loading = isCurrent && player.status === 'loading';
-            const words = isCurrent
-              ? player.status === 'error'
-                ? (player.error ?? 'Playback failed')
-                : player.status === 'playing'
-                  ? 'Playing'
-                  : player.status === 'paused' && player.preview?.ready
-                    ? 'Paused'
-                    : previewWords(player.preview, f.username)
-              : null;
+            const words = isCurrent ? rowWords(player, f.username) : null;
             return (
               <tr key={x.filename} className={isCurrent ? 'is-previewing' : undefined}>
                 <td className="sk-play">

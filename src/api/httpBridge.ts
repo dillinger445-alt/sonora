@@ -9,27 +9,33 @@
  */
 
 import { CoreError, type Bridge, type DropHandlers, type Updater, type UpdateStep } from './bridge.ts';
-import type { PreparedPlayback } from './types.ts';
+import type { CoreEventName, PreparedPlayback } from './types.ts';
 
-const EVENT_NAMES = [
-  'scan.started',
-  'scan.progress',
-  'scan.item',
-  'scan.finished',
-  'library.indexed',
-  'library.changed',
-  'duplicates.progress',
-  'duplicates.updated',
-  'djexport.progress',
-  'djexport.finished',
-  'discogs.progress',
-  'discogs.finished',
-  'playlists.changed',
-  'usb.progress',
-  'usb.finished',
-  'sources.changed',
-  'sources.imported',
-] as const;
+/**
+ * Every core event, listened for by name (Server-Sent Events have no
+ * catch-all). The type check fails when an event is missing here.
+ */
+const EVENT_NAMES = Object.keys({
+  'scan.started': true,
+  'scan.progress': true,
+  'scan.item': true,
+  'scan.finished': true,
+  'library.indexed': true,
+  'library.changed': true,
+  'duplicates.progress': true,
+  'duplicates.updated': true,
+  'djexport.progress': true,
+  'djexport.finished': true,
+  'discogs.progress': true,
+  'discogs.finished': true,
+  'playlists.changed': true,
+  'usb.progress': true,
+  'usb.finished': true,
+  'sources.changed': true,
+  'sources.imported': true,
+  'slskd.setup': true,
+  'preview.changed': true,
+} satisfies Record<CoreEventName, true>) as CoreEventName[];
 
 interface CallResponse {
   ok: boolean;
