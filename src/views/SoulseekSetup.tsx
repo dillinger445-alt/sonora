@@ -8,6 +8,7 @@ import { LuCopy, LuExternalLink, LuFolderOpen, LuKeyRound, LuRefreshCw, LuShield
 import { Button } from '../components/Button.tsx';
 import { Segmented, Switch } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
+import { copyText } from '../lib/clipboard.ts';
 import { formatDate, formatRelative, plural } from '../lib/format.ts';
 import { isAbsolutePath } from '../lib/paths.ts';
 import { useCore } from '../state/core.tsx';
@@ -102,7 +103,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
 
   const copy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       toast({ tone: 'success', title: 'Copied' });
     } catch {
       toast({ tone: 'warning', title: 'Could not copy', body: 'Select the lines and copy them with the keyboard.' });
