@@ -228,7 +228,7 @@ impl App {
         self.exporter.cancel();
         self.syncer.cancel();
         self.discogs.cancel();
-        self.previews.stop_all();
+        self.previews.stop_all(self);
         self.scans.shutdown(Duration::from_secs(5));
         self.service.on_quit(self);
         logging::log("info", "app", "core stopped");

@@ -125,6 +125,8 @@ struct World {
     /// Fail transfers once they reach this many bytes (then clear it).
     fail_at: Option<u64>,
     reject: bool,
+    /// Ordinary downloads are not queued (slskd says why).
+    refuse_downloads: bool,
     next_id: u64,
 }
 
@@ -262,7 +264,7 @@ impl Http for FakeHttp {
                 for f in files.as_array().unwrap() {
                     let filename = f.get("filename").and_then(Value::as_str).unwrap();
                     let busy = this.world.lock().unwrap().transfers.iter().any(|t| t.filename == filename && !t.removed && !t.state.starts_with("Completed"));
-                    if busy {
+                    if busy || this.world.lock().unwrap().refuse_downloads {
                         failed.push(Value::String(filename.into()));
                     } else {
                         this.start(user, filename, f.get("size").and_then(Value::as_i64).unwrap(), None, None);
@@ -595,6 +597,94 @@ fn an_aiff_previews_too_its_big_endian_samples_served_as_they_are() {
     }
     call(app, "preview.stop", &obj! { "id" => id });
     wait_for("cleaned up", 20, || !partial(&e, name).exists());
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_same_named_file_of_another_download_is_never_taken_for_the_preview_nor_deleted() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("same-name");
+    let app = &e.app;
+    e.fake.world.lock().unwrap().rate = 16 * 1024;
+    let size = share(&e, FILE, flac(30, true));
+    // The person's own partial download of a same-named track, from another
+    // album of the same user, is there before the preview starts.
+    let other = e.fake.incomplete().join(USER).join("Other Album").join("01 Lights.flac");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let other_bytes = flac(3, true);
+    std::fs::write(&other, &other_bytes).unwrap();
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => FILE, "size" => size }).get("id").and_then(Value::as_i64).unwrap();
+    wait_for("the preview's own audio", 20, || status(app, id).get("totalSeconds").and_then(Value::as_f64).is_some());
+    assert_eq!(status(app, id).get("totalSeconds").and_then(Value::as_f64), Some(30.0), "the preview plays its own file, not the other one");
+    call(app, "preview.stop", &obj! { "id" => id });
+    wait_for("the preview's partial file to go", 20, || !partial(&e, FILE).exists());
+    assert_eq!(std::fs::read(&other).unwrap(), other_bytes, "the other download is untouched");
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_file_that_cannot_be_previewed_is_not_fetched_on() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("unplayable");
+    let app = &e.app;
+    e.fake.world.lock().unwrap().rate = 16 * 1024;
+    // A "FLAC" that is not one (they are on Soulseek).
+    let mut junk = b"ID3\x04\x00\x00\x00\x00\x00\x00".to_vec();
+    junk.extend((0..3_000_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8));
+    let name = "@@abcde\\Music\\Night Drive\\09 Fake.flac";
+    let size = share(&e, name, junk);
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => name, "size" => size, "length" => 200 }).get("id").and_then(Value::as_i64).unwrap();
+    wait_for("unavailable", 20, || s(&status(app, id), "state") == "unavailable");
+    wait_for("its transfer to stop", 10, || e.fake.world.lock().unwrap().transfers.iter().all(|t| t.removed && t.state.starts_with("Completed")));
+    std::thread::sleep(Duration::from_millis(500));
+    let got = std::fs::metadata(partial(&e, name)).map(|m| m.len()).unwrap_or(0);
+    assert!(got < size as u64 / 2, "not fetched on: {got} of {size} bytes");
+    assert!(!e.fake.downloads().join(".sonora-preview").join(id.to_string()).exists());
+    call(app, "preview.stop", &obj! { "id" => id });
+    wait_for("its partial file to go", 20, || !partial(&e, name).exists());
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn download_after_the_whole_file_arrived_leaves_no_copy_in_the_preview_folder() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("complete-then-download");
+    let app = &e.app;
+    let size = share(&e, FILE, flac(5, true));
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => FILE, "size" => size }).get("id").and_then(Value::as_i64).unwrap();
+    wait_for("all of it", 20, || s(&status(app, id), "transfer") == "complete");
+    let dir = e.fake.downloads().join(".sonora-preview").join(id.to_string());
+    assert!(dir.is_dir());
+    let r = call(app, "slskd.download", &obj! { "username" => USER, "files" => Value::Array(vec![obj! { "filename" => FILE, "size" => size }]) });
+    assert_eq!(r.get("queued").and_then(Value::as_i64), Some(1), "{r:?}");
+    assert_eq!(status(app, id).get("handedOver").and_then(Value::as_bool), Some(false), "nothing to hand over");
+    call(app, "preview.stop", &obj! { "id" => id });
+    wait_for("the preview's copy to go", 20, || !dir.exists());
+    wait_for("the download", 20, || e.fake.downloads().join("from-soulseek").join("01 Lights.flac").exists());
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_download_that_does_not_start_gives_the_preview_back_its_transfer() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("refused-download");
+    let app = &e.app;
+    e.fake.world.lock().unwrap().rate = 16 * 1024;
+    let size = share(&e, FILE, flac(30, true));
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => FILE, "size" => size }).get("id").and_then(Value::as_i64).unwrap();
+    wait_for("some audio", 20, || status(app, id).get("ready").and_then(Value::as_bool) == Some(true));
+    e.fake.world.lock().unwrap().refuse_downloads = true;
+    let r = call(app, "slskd.download", &obj! { "username" => USER, "files" => Value::Array(vec![obj! { "filename" => FILE, "size" => size }]) });
+    assert_eq!(r.get("queued").and_then(Value::as_i64), Some(0), "{r:?}");
+    let st = status(app, id);
+    assert_eq!(st.get("handedOver").and_then(Value::as_bool), Some(false), "{st:?}");
+    // It fetches on by itself, from what it had.
+    wait_for("the preview's own transfer again", 20, || {
+        let w = e.fake.world.lock().unwrap();
+        w.transfers.iter().filter(|t| t.batch.is_some()).count() >= 2 && w.transfers.last().is_some_and(|t| t.offset > 0)
+    });
+    call(app, "preview.stop", &obj! { "id" => id });
+    wait_for("cleaned up", 20, || !partial(&e, FILE).exists());
     let _ = std::fs::remove_dir_all(&e.root);
 }
 

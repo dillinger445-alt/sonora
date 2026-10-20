@@ -609,8 +609,8 @@ impl Slskd {
                 "files" => Value::Array(files.iter().map(|(f, s)| obj! { "filename" => f.as_str(), "size" => *s }).collect()),
             };
             let r = self.call(app, "POST", "transfers/downloads/batches", Some(body))?;
-            let failed = sonora_json::parse(&r.body).ok().and_then(|v| v.get("failures").and_then(Value::as_array).map(Vec::len)).unwrap_or(0);
-            return Ok(obj! { "queued" => files.len().saturating_sub(failed), "failed" => failed });
+            let failed = failed_files(sonora_json::parse(&r.body).ok().as_ref().and_then(|v| v.get("failures")));
+            return Ok(obj! { "queued" => files.len().saturating_sub(failed.len()), "failed" => failed.len(), "failedFiles" => Value::Array(failed.into_iter().map(Value::String).collect()) });
         }
         if !(200..300).contains(&r.status) {
             let t = error_text(&r.body);
@@ -620,8 +620,8 @@ impl Slskd {
             });
         }
         let v = sonora_json::parse(&r.body).unwrap_or(Value::Null);
-        let failed = v.get("failed").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
-        Ok(obj! { "queued" => files.len().saturating_sub(failed), "failed" => failed })
+        let failed = failed_files(v.get("failed"));
+        Ok(obj! { "queued" => files.len().saturating_sub(failed.len()), "failed" => failed.len(), "failedFiles" => Value::Array(failed.into_iter().map(Value::String).collect()) })
     }
 
     /// slskd's downloads, newest activity first, each with what became of
@@ -700,6 +700,14 @@ impl Slskd {
     pub fn clear_finished(&self, app: &App) -> Result<(), SlskdError> {
         self.call(app, "DELETE", "transfers/downloads/all/completed", None).map(|_| ())
     }
+}
+
+/// The files slskd did not queue: a list of names, or of objects with a
+/// `filename` (slskd answers either way, by version and route).
+fn failed_files(v: Option<&Value>) -> Vec<String> {
+    v.and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string).or_else(|| x.get("filename").and_then(Value::as_str).map(str::to_string))).collect())
+        .unwrap_or_default()
 }
 
 /// What SONORA needs from slskd's settings (`GET options`).

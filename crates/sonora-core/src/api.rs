@@ -833,10 +833,23 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                 list.push((name.to_string(), size));
             }
             // Files being previewed: their preview hands over to the download,
-            // which resumes from what the preview already fetched.
+            // which resumes from what the preview already fetched. If slskd
+            // does not queue a file, its preview fetches on its own again.
             let names: Vec<String> = list.iter().map(|(f, _)| f.clone()).collect();
             app.previews.hand_over(app, username, &names);
-            Ok(app.slskd.download(app, username, &list)?)
+            match app.slskd.download(app, username, &list) {
+                Ok(v) => {
+                    let failed: Vec<String> = v.get("failedFiles").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                    if !failed.is_empty() {
+                        app.previews.take_back(username, &failed);
+                    }
+                    Ok(v)
+                }
+                Err(e) => {
+                    app.previews.take_back(username, &names);
+                    Err(e.into())
+                }
+            }
         }
 
         // ---------------------------------------- previews (preview.rs)
