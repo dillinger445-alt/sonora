@@ -275,6 +275,7 @@ impl ScanManager {
                         o.force = true;
                         library::import_paths(&shared.db, p, &o, &shared.index_cancel)
                     }
+                    IndexJob::Source { files, .. } => library::import_paths(&shared.db, files, &opts, &shared.index_cancel),
                 };
                 let cancelled = shared.index_cancel.load(Ordering::Relaxed);
                 // Queue first, then leave the indexing phase, so observers go
@@ -292,6 +293,10 @@ impl ScanManager {
                         };
                         let mut v = report_json(report, cancelled);
                         v.set("waiting", refused);
+                        if let IndexJob::Source { files, source } = &job {
+                            crate::sources::record_imports(&shared.db, &shared.events, source, files, report);
+                            v.set("source", source.as_str());
+                        }
                         shared.events.emit("library.indexed", &v);
                         shared.events.emit("library.changed", &obj! { "reason" => "indexed" });
                     }
@@ -537,6 +542,9 @@ pub enum IndexJob {
     Folders(Option<Vec<i64>>),
     /// Re-analyse everything under these paths.
     Force(Vec<PathBuf>),
+    /// Files a download client finished (the person's own Soulseek
+    /// client): imported one by one, with where they came from.
+    Source { files: Vec<PathBuf>, source: String },
 }
 
 impl IndexJob {
@@ -545,6 +553,8 @@ impl IndexJob {
             IndexJob::Paths(p) | IndexJob::Force(p) if p.len() == 1 => format!("Indexing {}", p[0].display()),
             IndexJob::Paths(p) | IndexJob::Force(p) => format!("Indexing {} locations", p.len()),
             IndexJob::Folders(_) => "Checking library folders for changes".to_string(),
+            IndexJob::Source { files, .. } if files.len() == 1 => "Adding a new download".to_string(),
+            IndexJob::Source { files, .. } => format!("Adding {} new downloads", files.len()),
         }
     }
 }

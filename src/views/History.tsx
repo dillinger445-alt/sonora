@@ -28,6 +28,8 @@ export function kindLabel(kind: string): string {
       return 'Resumed after restart';
     case 'dj':
       return 'Tempo and key analysis';
+    case 'soulseek':
+      return 'Soulseek downloads';
     default:
       return kind;
   }

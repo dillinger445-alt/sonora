@@ -13,7 +13,7 @@ use sqlite::{Connection, DbError};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -196,6 +196,27 @@ CREATE TABLE removed_files (
 );
 "#;
 
+/// Files that arrived through a download client's folder (the person's own
+/// Soulseek client): where each came from, and what happened to it. Nothing
+/// about the people who shared them is kept.
+const MIGRATION_5: &str = r#"
+CREATE TABLE source_files (
+    path TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+    found_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    error TEXT
+);
+CREATE INDEX source_files_track ON source_files(track_id);
+CREATE INDEX source_files_state ON source_files(state);
+CREATE INDEX source_files_size ON source_files(size);
+CREATE INDEX idx_tracks_size ON tracks(size);
+"#;
+
 #[derive(Debug)]
 pub enum StoreError {
     Db(DbError),
@@ -354,6 +375,13 @@ fn migrate(c: &Connection) -> Result<(), DbError> {
         c.transaction(|tx| {
             tx.execute_batch(MIGRATION_4)?;
             tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["4"])?;
+            Ok::<(), DbError>(())
+        })?;
+    }
+    if version < 5 {
+        c.transaction(|tx| {
+            tx.execute_batch(MIGRATION_5)?;
+            tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["5"])?;
             Ok::<(), DbError>(())
         })?;
     }

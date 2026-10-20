@@ -111,6 +111,13 @@ files); 26 of them need FFmpeg, so without it only 13 are written and some
 tests fail. After installing FFmpeg, delete `e2e/.data/music` to generate the
 full corpus.
 
+The bridge for the end-to-end tests keeps slskd's API key in a file in its
+library folder instead of the system's keychain (`SONORA_SECRET_STORE=file`)
+and looks at the Soulseek download folder every second
+(`SONORA_SOURCE_POLL_SECONDS=1`; `0` looks only when asked, as the Rust
+tests do). The Soulseek test talks to a stand-in for slskd
+(`e2e/fakeSlskd.ts`); no test reaches Soulseek or a real slskd.
+
 `npm run fixtures` writes the same corpus to `fixtures/library` with
 45-second tracks, which is handy as a demo library: import that folder in
 the app.
@@ -269,7 +276,7 @@ requests and on demand:
 
 | Job | What it does |
 | --- | --- |
-| `rust` | `cargo test --workspace --locked` on Ubuntu, macOS and Windows (FFmpeg from apt and Homebrew; Windows deliberately without FFmpeg), plus `cargo clippy -D warnings` on Ubuntu |
+| `rust` | `cargo test --workspace --locked` on Ubuntu, macOS and Windows (FFmpeg from apt and Homebrew; Windows deliberately without FFmpeg), plus `cargo clippy -D warnings` on Ubuntu; on macOS and Windows a round trip through the real keychain or Credential Manager, and on Windows the Recycle Bin safety test |
 | `frontend` | Type-check, unit tests and production build of the interface |
 | `e2e` | Builds the interface and runs the Playwright tests against the dev bridge (which generates its audio corpus); uploads the report on failure |
 | `desktop` | After `rust` and `frontend` pass: bundles for macOS Apple silicon (`macos-15`), macOS Intel (`macos-15-intel`) and Windows x64, each with its FFmpeg; uploads the `.dmg`, the `.app` (as `.tar.gz`), the `.msi` and the NSIS `.exe` as workflow artifacts |

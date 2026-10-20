@@ -33,6 +33,14 @@ pub struct Settings {
     /// The desktop app asks GitHub for a newer release on launch and every
     /// few hours (the interface does the asking; the core only keeps the choice).
     pub check_updates: bool,
+    /// The folder where the person's own Soulseek client saves finished
+    /// downloads; SONORA adds what arrives there. None = not watched.
+    pub soulseek_folder: Option<String>,
+    /// Hold each arrival for the person to add or keep out, instead of
+    /// adding it at once.
+    pub soulseek_review: bool,
+    /// Where slskd, the Soulseek client SONORA can search through, answers.
+    pub slskd_url: String,
 }
 
 pub fn default_workers() -> usize {
@@ -57,6 +65,9 @@ impl Default for Settings {
             bpm_range: sonora_engine::analysis::tempo::DEFAULT_RANGE,
             genre_from_folders: "off".into(),
             check_updates: true,
+            soulseek_folder: None,
+            soulseek_review: false,
+            slskd_url: crate::slskd::DEFAULT_URL.into(),
         }
     }
 }
@@ -108,6 +119,22 @@ impl Settings {
             "skipHidden" => self.skip_hidden = v.as_bool().ok_or("skipHidden must be true or false")?,
             "followSymlinks" => self.follow_symlinks = v.as_bool().ok_or("followSymlinks must be true or false")?,
             "checkUpdates" => self.check_updates = v.as_bool().ok_or("checkUpdates must be true or false")?,
+            "soulseekReview" => self.soulseek_review = v.as_bool().ok_or("soulseekReview must be true or false")?,
+            "soulseekFolder" => {
+                if v.is_null() {
+                    self.soulseek_folder = None;
+                } else {
+                    let p = v.as_str().ok_or("soulseekFolder must be a folder path")?;
+                    if !std::path::Path::new(p).is_absolute() {
+                        return Err("soulseekFolder must be a full path".into());
+                    }
+                    self.soulseek_folder = Some(p.to_string());
+                }
+            }
+            "slskdUrl" => {
+                let u = v.as_str().ok_or("slskdUrl must be a web address")?;
+                self.slskd_url = crate::slskd::normalize_url(u)?;
+            }
             "keepVisuals" => self.keep_visuals = v.as_bool().ok_or("keepVisuals must be true or false")?,
             "maxDurationMin" => {
                 let m = v.as_f64().ok_or("maxDurationMin must be a number")?;
@@ -181,6 +208,9 @@ impl ToJson for Settings {
             "bpmRange" => Value::Array(vec![Value::from(self.bpm_range.0), Value::from(self.bpm_range.1)]),
             "genreFromFolders" => self.genre_from_folders,
             "checkUpdates" => self.check_updates,
+            "soulseekFolder" => self.soulseek_folder.clone().map(Value::String).unwrap_or(Value::Null),
+            "soulseekReview" => self.soulseek_review,
+            "slskdUrl" => self.slskd_url,
         }
     }
 }

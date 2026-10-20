@@ -164,7 +164,7 @@ export function StatusBar() {
         ) : null}
         <span
           className="sb-item"
-          data-tip="Analysis and playback run on this computer. Audio, results and file paths are never uploaded. SONORA goes online only to ask GitHub for a newer version (can be turned off in Settings) and for Discogs genre lookups you start, which send artist and title."
+          data-tip="Analysis and playback run on this computer. Audio, results and file paths are never uploaded. SONORA goes online only to ask GitHub for a newer version (can be turned off in Settings) and for Discogs genre lookups you start, which send artist and title. Soulseek searches and downloads go through slskd, the Soulseek client you run."
         >
           <LuShieldCheck aria-hidden />
           Local only

@@ -27,6 +27,8 @@ const EVENT_NAMES = [
   'playlists.changed',
   'usb.progress',
   'usb.finished',
+  'sources.changed',
+  'sources.imported',
 ] as const;
 
 interface CallResponse {

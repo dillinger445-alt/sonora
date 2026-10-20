@@ -79,7 +79,7 @@ export interface Bridge {
   pickSavePath(defaultName: string, kind?: SaveKind): Promise<string | null>;
   /** Native picker for one folder (export destination); `null` if cancelled or unavailable. */
   pickFolder(title: string): Promise<string | null>;
-  /** Opens a web page in the default browser (Discogs pages only). */
+  /** Opens a web page in the default browser (Discogs pages, SONORA's releases and guides, slskd's page). */
   openExternal(url: string): Promise<void>;
   /** URL the audio element can play for a file the core prepared for playback. */
   mediaUrl(prepared: PreparedPlayback): string;

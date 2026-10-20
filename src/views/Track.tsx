@@ -16,7 +16,7 @@ import {
   LuTriangleAlert,
   LuUsb,
 } from 'react-icons/lu';
-import type { Evidence, Finding, Measurements, ScanItemEvent, StoredAnalysis, TrackDetail } from '../api/types.ts';
+import type { Evidence, Finding, Measurements, ScanItemEvent, StoredAnalysis, TrackDetail, TrackOrigin } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
 import { BpmText, KeyBadge } from '../components/DjMarks.tsx';
 import { ErrorState, ViewHeader } from '../components/Layout.tsx';
@@ -247,7 +247,7 @@ const CHECKSUM: Record<string, string> = {
  * (the track's `cutoffHz`, decided from unrounded measurements), so this
  * view agrees with the library's Cutoff column.
  */
-function TechTables({ a, steepCutoff }: { a: StoredAnalysis; steepCutoff: boolean }) {
+function TechTables({ a, steepCutoff, origin }: { a: StoredAnalysis; steepCutoff: boolean; origin: TrackOrigin | null }) {
   const m: Measurements = a.measurements;
   const f = a.facts;
   const clip = m.clipping;
@@ -284,6 +284,13 @@ function TechTables({ a, steepCutoff }: { a: StoredAnalysis; steepCutoff: boolea
           {f.extensionMismatch ? <Row label="Extension" value={f.extensionMismatch} tone="amber" /> : null}
           <Row label="Size" value={formatBytes(f.fileSize)} />
           <Row label="Duration" value={`${formatDuration(m.duration)}${m.declaredDuration != null && Math.abs(m.declaredDuration - m.duration) > 0.5 ? ` (header says ${formatDuration(m.declaredDuration)})` : ''}`} tone={m.truncated ? 'red' : undefined} />
+          {origin ? (
+            <Row
+              label="Came from"
+              value={`Soulseek, ${formatDate(origin.foundAt)}`}
+              tip={`Downloaded with a Soulseek client and added from its download folder. Name on arrival: ${origin.originalName}`}
+            />
+          ) : null}
         </dl>
       </section>
       <section className="tech-block">
@@ -720,7 +727,7 @@ export function TrackView({ id }: { id: number }) {
                 Scoring model <span className="num">{s.modelVersion}</span>, analyzed {formatDate(a.createdAt)}
               </span>
             </div>
-            <TechTables a={a} steepCutoff={t.cutoffHz != null} />
+            <TechTables a={a} steepCutoff={t.cutoffHz != null} origin={d.origin ?? null} />
           </section>
         </>
       )}

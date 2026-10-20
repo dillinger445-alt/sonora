@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { LuCircleArrowUp, LuDatabaseBackup, LuFolderSearch, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
+import { LuCircleArrowUp, LuDatabaseBackup, LuFolderSearch, LuRadioTower, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
 import type { KeyNotation, Settings } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { Segmented, Switch } from '../components/Controls.tsx';
@@ -7,7 +7,7 @@ import { useConfirm } from '../components/Dialog.tsx';
 import { ViewHeader } from '../components/Layout.tsx';
 import { formatBytes, formatCount, formatRelative, plural } from '../lib/format.ts';
 import { formatKey, KEY_NOTATIONS } from '../lib/keys.ts';
-import { formatRoute } from '../lib/router.ts';
+import { formatRoute, navigate } from '../lib/router.ts';
 import { SCORE_HINT, SCORE_KINDS, SCORE_LABEL } from '../lib/scores.ts';
 import { useCore, useScanBusy } from '../state/core.tsx';
 import { isAbsolutePath } from '../lib/paths.ts';
@@ -35,7 +35,7 @@ const FOLDER_GENRES: { value: Settings['genreFromFolders']; label: string }[] = 
 
 const A_MINOR = 21;
 
-function Group({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+export function Group({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
     <section className="settings-group" aria-label={title}>
       <div className="settings-intro">
@@ -47,7 +47,7 @@ function Group({ title, description, children }: { title: string; description?: 
   );
 }
 
-function Row({ label, description, children }: { label: string; description?: ReactNode; children: ReactNode }) {
+export function Row({ label, description, children }: { label: string; description?: ReactNode; children: ReactNode }) {
   return (
     <div className="setting-row">
       <div className="switch-text">
@@ -337,6 +337,17 @@ export function SettingsView() {
           <DiscogsSettings />
         </Group>
 
+        <Group title="Soulseek" description="Searching, downloads and the download folder are set up on the Soulseek page.">
+          <Row
+            label="Soulseek through slskd"
+            description="Search Soulseek and download with slskd, the Soulseek client you run with your own account; finished downloads join your library and get checked. Nothing happens until you accept the notice there."
+          >
+            <Button size="sm" icon={LuRadioTower} onClick={() => navigate({ view: 'soulseek', tab: 'setup' })}>
+              Open Soulseek setup
+            </Button>
+          </Row>
+        </Group>
+
         <Group title="Library" description={<>Folders are managed on the <a className="link" href={formatRoute({ view: 'folders' })}>Folders</a> page.</>}>
           <Row label="Library database" description={<span className="selectable mono-path">{info.dbPath}</span>}>
             <Button size="sm" icon={LuFolderSearch} onClick={() => void bridge.reveal(info.dbPath).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: String(e) }))}>
@@ -413,13 +424,16 @@ export function SettingsView() {
             <LuShieldCheck className="privacy-icon" aria-hidden />
             <div>
               <p>
-                SONORA works entirely on this computer: no uploads, no analytics, no telemetry. It goes online for two things only: asking GitHub whether a newer version exists
-                (unless you turn that off above), and Discogs genre lookups you start yourself, which send the artist and title of the tracks you chose.
+                SONORA works on this computer: no uploads, no analytics, no telemetry. It goes online for two things only: asking GitHub whether a newer version exists (unless
+                you turn that off above), and Discogs genre lookups you start yourself, which send the artist and title of the tracks you chose. Soulseek searches and downloads
+                go through slskd, the Soulseek client you run: SONORA sends it your search words and the files you choose, and slskd does the networking with your account and
+                sharing settings.
               </p>
               <p className="faint">
                 The library database stores file paths, tags, measurements, scores, visualizations and your tempo, key and genre edits for the{' '}
-                {overview ? formatCount(overview.tracks.total) : ''} tracks you added. Removing a track removes its data; your audio files are never modified, moved or
-                deleted. Exports write new files and never replace existing ones.
+                {overview ? formatCount(overview.tracks.total) : ''} tracks you added, and for downloads, that they came from Soulseek, their names on arrival and when they
+                arrived. Removing a track removes its data. SONORA never changes your audio files, and moves one only to the Trash when you choose Move to Trash. Exports
+                write new files and never replace existing ones.
               </p>
               <p className="faint">
                 Playback reads your files where they are. Formats this window cannot play directly are decoded once into SONORA's cache folder, which keeps the six most

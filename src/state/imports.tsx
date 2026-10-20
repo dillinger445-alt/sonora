@@ -5,7 +5,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { LuFolderInput } from 'react-icons/lu';
-import type { ImportReport } from '../api/types.ts';
+import type { CoreEvents, ImportReport } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { Dialog } from '../components/Dialog.tsx';
 import { plural } from '../lib/format.ts';
@@ -148,6 +148,8 @@ export function ImportProvider({ children }: { children: ReactNode }) {
       toast({ tone: 'warning', title: 'Indexing cancelled', body: describeReport(p) });
       return;
     }
+    // Downloads from the Soulseek folder have their own message (below).
+    if (p.source) return;
     const nothingElse = !p.added && !p.changed && !p.relinked && !p.restored && !p.unchanged && !p.queued && !p.errors.length;
     if (nothingElse && p.notAudio) {
       toast({
@@ -172,6 +174,26 @@ export function ImportProvider({ children }: { children: ReactNode }) {
       title: p.queued > 0 ? `Indexed: ${plural(p.queued, 'file')} to analyze` : 'Indexing finished',
       body: p.errors.length ? `${describeReport(p)}. ${plural(p.errors.length, 'item')} could not be read, for example: ${p.errors[0]}` : describeReport(p),
     });
+  });
+
+  useCoreEvent(['sources.imported'], (_name, payload) => {
+    const p = payload as CoreEvents['sources.imported'];
+    if (p.added > 0 || p.failed > 0) {
+      toast({
+        tone: p.failed > 0 ? 'warning' : 'success',
+        title: p.added > 0 ? `Added ${plural(p.added, 'download')} from Soulseek` : `${plural(p.failed, 'download')} could not be added`,
+        body:
+          p.added > 0 && p.failed > 0
+            ? `${plural(p.failed, 'other file')} could not be read as audio. The rest are being analysed.`
+            : p.added > 0
+              ? 'SONORA is analysing them now.'
+              : 'SONORA could not read them as audio. The files stay in the download folder.',
+        action: { label: 'Show downloads', run: () => navigate({ view: 'soulseek', tab: 'downloads' }) },
+      });
+    }
+    if (p.first) {
+      toast({ tone: 'info', title: 'Files from Soulseek come from other people', body: 'SONORA checks how a file sounds, not whether you may have it.', timeout: 0 });
+    }
   });
 
   const submit = async () => {

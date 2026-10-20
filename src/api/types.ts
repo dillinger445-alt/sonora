@@ -204,6 +204,8 @@ export interface ImportReport {
   notAudio?: number;
   /** The files to analyze were not queued (a cancelled scan was still stopping): they wait. */
   waiting?: boolean;
+  /** Set when the files were downloads from a source (the person's own Soulseek client). */
+  source?: 'soulseek';
 }
 
 export interface Overview {
@@ -337,6 +339,12 @@ export interface Settings {
   genreFromFolders: 'off' | 'top' | 'parent';
   /** Desktop app: look for a newer release on GitHub on launch and every few hours. */
   checkUpdates: boolean;
+  /** The person's own Soulseek client's download folder, watched (set through `sources.configure`). */
+  soulseekFolder: string | null;
+  /** Hold each download for the person to add or keep out. */
+  soulseekReview: boolean;
+  /** slskd's web address. */
+  slskdUrl: string;
 }
 
 export interface CacheStats {
@@ -583,6 +591,158 @@ export interface TrackDetail {
   analysis: StoredAnalysis | null;
   history: { scanId: number; kind: string; startedAt: number; outcome: string; finishedAt: number | null }[];
   fileExists: boolean;
+  /** Where the file came from, when it arrived through a download client's folder. */
+  origin: TrackOrigin | null;
+}
+
+/** A track that arrived through the person's own Soulseek client. */
+export interface TrackOrigin {
+  source: 'soulseek';
+  /** The file's name when it arrived. */
+  originalName: string;
+  /** When SONORA found it finished. */
+  foundAt: number;
+  /** When it joined the library. */
+  addedAt: number | null;
+}
+
+/** How many downloads are in each state. */
+export interface SourceCounts {
+  review: number;
+  imported: number;
+  failed: number;
+  declined: number;
+  importing: number;
+}
+
+/** The download folder watcher (`sources.status`). */
+export interface SourcesStatus {
+  source: 'soulseek';
+  /** The lawful-use notice was accepted. */
+  accepted: boolean;
+  acceptedAt: number | null;
+  folder: string | null;
+  review: boolean;
+  /** Accepted, and the folder is there. */
+  watching: boolean;
+  lastCheck: number | null;
+  error: string | null;
+  /** Files seen at the last look that are not finished yet. */
+  settling: number;
+  counts: SourceCounts;
+}
+
+/** A download held for the person to add or keep out. */
+export interface SourceFile {
+  path: string;
+  name: string;
+  size: number;
+  foundAt: number;
+}
+
+// ---------------------------------------------------------------- slskd
+
+/** The connection to slskd, the Soulseek client SONORA searches through (`slskd.status`). */
+export interface SlskdStatus {
+  /** slskd's web address. */
+  url: string;
+  /** The address is this computer. */
+  local: boolean;
+  keySaved: boolean;
+  /** Reading the key from the system's store failed. */
+  keyError: string | null;
+  /** Where the key is kept. */
+  keyStore: 'keychain' | 'credential-manager' | 'file';
+  /** slskd's usual download folders that exist on this computer. */
+  defaultFolders: string[];
+}
+
+/** What slskd says about itself (`slskd.test`). */
+export interface SlskdInfo {
+  version: string;
+  /** The Soulseek user name slskd signs in with. */
+  username: string | null;
+  connected: boolean;
+  loggedIn: boolean;
+  sharedFolders: number | null;
+  sharedFiles: number | null;
+}
+
+/** One file in search results; format details are what the other user's client reports. */
+export interface FoundFile {
+  /** The full path on the other user's computer. */
+  filename: string;
+  name: string;
+  ext: string;
+  size: number;
+  bitDepth: number | null;
+  sampleRate: number | null;
+  bitRate: number | null;
+  /** Seconds. */
+  length: number | null;
+  lossless: boolean;
+  /** A track with the same name and size is in the library. */
+  inLibrary: boolean;
+}
+
+/** One folder of one user's results. */
+export interface FoundFolder {
+  username: string;
+  directory: string;
+  name: string;
+  freeSlot: boolean;
+  /** Downloads waiting in the user's queue. */
+  queue: number;
+  /** Bytes a second, as the user's client reports. */
+  speed: number;
+  size: number;
+  /** Files left out by the format filter. */
+  hidden: number;
+  files: FoundFile[];
+}
+
+export interface SearchResults {
+  id: string;
+  text: string;
+  state: 'searching' | 'done' | 'stopped' | 'failed';
+  /** Users who answered. */
+  responses: number;
+  folders: FoundFolder[];
+  /** Folders beyond the ones listed. */
+  moreFolders: number;
+  hiddenFiles: number;
+}
+
+export type TransferState = 'requested' | 'queued' | 'waiting' | 'starting' | 'downloading' | 'done' | 'failed' | 'cancelled';
+
+/** One of slskd's downloads (`slskd.downloads`). */
+export interface Transfer {
+  id: string;
+  username: string;
+  filename: string;
+  name: string;
+  folder: string;
+  size: number;
+  state: TransferState;
+  /** Why it failed. */
+  detail: string | null;
+  bytes: number;
+  /** Bytes a second. */
+  speed: number;
+  /** Place in the other user's queue. */
+  position: number | null;
+  requestedAt: number | null;
+  endedAt: number | null;
+  /** A finished download as SONORA found it in the download folder. */
+  local: { state: 'review' | 'importing' | 'imported' | 'failed' | 'declined'; path: string; error: string | null; track: TrackRow | null } | null;
+}
+
+export interface DownloadList {
+  downloads: Transfer[];
+  /** Downloads not finished yet. */
+  active: number;
+  /** Older downloads not listed. */
+  more: number;
 }
 
 // ----------------------------------------------------------- duplicates
@@ -845,6 +1005,9 @@ export interface CoreEvents {
   'playlists.changed': { reason: string; id?: number };
   'usb.progress': UsbProgress;
   'usb.finished': UsbReport;
+  'sources.changed': SourceCounts | null;
+  /** An import of downloads finished; `first` = the first ever. */
+  'sources.imported': { source: 'soulseek'; added: number; failed: number; first: boolean };
 }
 
 export type CoreEventName = keyof CoreEvents;

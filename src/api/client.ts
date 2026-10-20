@@ -11,6 +11,7 @@ import type {
   CoreEventName,
   CoreEvents,
   DiscogsStatus,
+  DownloadList,
   Drive,
   DuplicateList,
   ExportOptions,
@@ -31,9 +32,14 @@ import type {
   ScanItemRow,
   ScanRecord,
   ScanStatus,
+  SearchResults,
   Settings,
+  SlskdInfo,
+  SlskdStatus,
   SmartRules,
   Sort,
+  SourceFile,
+  SourcesStatus,
   TrackDetail,
   TrackRow,
   TrashResult,
@@ -146,6 +152,29 @@ export class Client {
   discogsTest = () => this.call<{ username: string }>('discogs.test');
   discogsLookup = (ids: number[], overwrite: boolean) => this.call<{ accepted: boolean; total: number }>('discogs.lookup', { ids, overwrite });
   discogsCancel = () => this.call<{ ok: boolean }>('discogs.cancel');
+
+  // The person's own Soulseek client's download folder (SONORA never connects to Soulseek).
+  sourcesStatus = () => this.call<SourcesStatus>('sources.status');
+  sourcesAccept = () => this.call<SourcesStatus>('sources.accept');
+  sourcesConfigure = (values: { folder?: string | null; review?: boolean }) => this.call<SourcesStatus>('sources.configure', values);
+  sourcesCheck = () => this.call<SourcesStatus & { found: { imported: number; held: number; settling: number } }>('sources.check');
+  sourcesReview = () => this.call<SourceFile[]>('sources.review');
+  sourcesDecide = (paths: string[], add: boolean) => this.call<{ added: number; declined: number }>('sources.decide', { paths, add });
+
+  // slskd: searching and downloading through the Soulseek client the person runs.
+  slskdStatus = () => this.call<SlskdStatus>('slskd.status');
+  /** `apiKey: null` removes the saved key. */
+  slskdConfigure = (values: { url?: string; apiKey?: string | null }) => this.call<SlskdStatus>('slskd.configure', values);
+  /** Makes and saves a new key, to be added to slskd.yml. */
+  slskdNewKey = () => this.call<{ key: string }>('slskd.newKey');
+  slskdTest = () => this.call<SlskdInfo>('slskd.test');
+  slskdSearch = (text: string) => this.call<{ id: string; text: string }>('slskd.search', { text });
+  slskdResults = (id: string, lossless: boolean) => this.call<SearchResults>('slskd.results', { id, lossless });
+  slskdStop = (id: string) => this.call<{ ok: boolean }>('slskd.stop', { id });
+  slskdDownload = (username: string, files: { filename: string; size: number }[]) => this.call<{ queued: number; failed: number }>('slskd.download', { username, files });
+  slskdDownloads = () => this.call<DownloadList>('slskd.downloads');
+  slskdCancel = (username: string, id: string) => this.call<{ ok: boolean }>('slskd.cancel', { username, id });
+  slskdClearFinished = () => this.call<{ ok: boolean }>('slskd.clearFinished');
 
   // Folders
   folders = () => this.call<Folder[]>('folders.list');

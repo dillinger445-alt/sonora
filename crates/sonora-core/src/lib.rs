@@ -19,9 +19,13 @@ pub mod jobs;
 pub mod library;
 pub mod logging;
 pub mod model;
+pub mod net;
 pub mod playback;
 pub mod playlists;
+pub mod secrets;
 pub mod settings;
+pub mod slskd;
+pub mod sources;
 pub mod trash;
 pub mod usb;
 

@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { LuCopy, LuFolder, LuHistory, LuInbox, LuLayoutDashboard, LuLibrary, LuPlus, LuSettings, LuTriangleAlert } from 'react-icons/lu';
+import { LuCopy, LuFolder, LuHistory, LuInbox, LuLayoutDashboard, LuLibrary, LuPlus, LuRadioTower, LuSettings, LuTriangleAlert } from 'react-icons/lu';
 import { Button } from './Button.tsx';
 import { Menu } from './Menu.tsx';
 import { formatCount } from '../lib/format.ts';
@@ -30,6 +30,7 @@ const GROUPS: NavItem[][] = [
     { view: 'duplicates', route: { view: 'duplicates' }, label: 'Duplicates', icon: LuCopy, shortcut: '6' },
     { view: 'history', route: { view: 'history' }, label: 'Analysis history', icon: LuHistory, shortcut: '7' },
   ],
+  [{ view: 'soulseek', route: { view: 'soulseek' }, label: 'Soulseek', icon: LuRadioTower, shortcut: '8' }],
 ];
 
 export const NAV_ORDER: Route[] = [...GROUPS.flat().map((i) => i.route), { view: 'settings' }];

@@ -27,6 +27,11 @@ mixing, and sends playlists to a USB drive as numbered folders of DJ-ready
 files with rekordbox, Serato and M3U playlists.
 [docs/PLAYLISTS.md](docs/PLAYLISTS.md) describes how.
 
+And it can search Soulseek for lossless music through slskd, the Soulseek
+client you run with your own account, download what you choose, and check
+each file as it arrives, so an MP3 passed off as FLAC is caught before it
+reaches a set. [docs/SOULSEEK.md](docs/SOULSEEK.md) describes how.
+
 ![Track analysis](docs/screenshots/track.png)
 
 ![The key filter on the Camelot wheel, with a track playing](docs/screenshots/dj.png)
@@ -42,8 +47,12 @@ GitHub whether a newer version exists, on launch and every six hours; the
 request carries nothing about you or your music, and Settings → Updates
 turns it off. And looking up genres on Discogs, which runs only when you
 start it, sends the artist and title of the tracks you chose (and your
-Discogs token) to Discogs, nothing else. The desktop build's
-content-security policy blocks remote content. Your
+Discogs token) to Discogs, nothing else. Soulseek searches and downloads
+go through slskd, the Soulseek client you install and run: SONORA sends it
+your search words and the files you choose, slskd does the networking with
+your account and sharing settings, and SONORA never shares anything itself.
+slskd's API key stays in the macOS keychain or Windows Credential Manager.
+The desktop build's content-security policy blocks remote content. Your
 audio files are read, never modified: tempo, key and genre corrections stay
 in SONORA's library, and exports write new files without replacing any.
 SONORA moves one of your files only when you choose **Move to Trash** for
@@ -127,6 +136,13 @@ it again or bring it back from Folders.
   notes; **Install and restart** downloads it, checks its signature,
   replaces the installed version and restarts, keeping the library and
   settings. See [docs/RELEASING.md](docs/RELEASING.md).
+- **Soulseek**: search for lossless music through slskd, grouped by
+  folder with the best-connected people first; download files or whole
+  folders; follow the downloads; and see each finished file's score and
+  verdict as it joins the library (a "FLAC" made from an MP3 shows as
+  **Lossy source?**). Downloads from any Soulseek client's folder can join
+  the library too, at once or after review. Off until you accept its
+  notice. See [docs/SOULSEEK.md](docs/SOULSEEK.md).
 - **Needs attention**: problem tracks grouped by clipping, lossy source, low
   bitrate, integrity, weak-evidence issues, failures and missing files.
 - **Duplicates**: identical files (same file hash), identical audio in
@@ -137,7 +153,7 @@ it again or bring it back from Folders.
 - **History**: every scan with its summary and results.
 - **Settings**: parallel workers, longest file analyzed, rescan behaviour,
   hidden files and symlinks, default score view, key notation, BPM range,
-  folder genres, the Discogs token, update checks, database location and
+  folder genres, the Discogs token, Soulseek, update checks, database location and
   backup, cache management, FFmpeg status, version and privacy information.
 - **Accessibility**: full keyboard use (table, menus, dialogs, tabs, chart
   cursor), visible focus, labels and tooltips, confirmation before
@@ -263,19 +279,21 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 226 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, API
+npm run test:rust          # 244 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads and slskd, API
 npm run test:unit          # 38 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 24 Playwright tests: real interface + real core on a generated corpus
+npm run build && npm run test:e2e   # 25 Playwright tests: real interface + real core on a generated corpus
 ```
 
 A few Rust tests depend on the system: on macOS and Windows one moves a
 file to the system Trash or Recycle Bin, on Linux one makes the trash
 unusable to check that a file that stays keeps its place in a scan, and
-Unix systems check symlink loops. So macOS and Linux run 226 and Windows
-225. On Windows, CI also runs a test that turns the Recycle Bin off for the
+Unix systems check symlink loops. So macOS and Linux run 244 and Windows
+243. On Windows, CI also runs a test that turns the Recycle Bin off for the
 drive for a moment, to check that Move to Recycle Bin never deletes a file
-for good. The FFmpeg-based checks are skipped with a note when FFmpeg is
+for good, and on macOS and Windows a test that stores, changes and removes
+a secret in the real keychain or Credential Manager. slskd is never
+contacted in tests: a stand-in answers the way its API does. The FFmpeg-based checks are skipped with a note when FFmpeg is
 not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
@@ -299,7 +317,10 @@ details panel, reordered by keyboard and by dragging, Undo after taking a
 track out), smart playlists and folders (moved by dragging and from the
 keyboard, and row menus), and Send to USB (the files,
 playlists and rekordbox.xml on the drive, a second send that renames and
-removes only SONORA's own files, and files of the owner's left alone).
+removes only SONORA's own files, and files of the owner's left alone), and
+Soulseek through a stand-in for slskd (the notice, making a key, searching
+with the lossless filter, downloading a folder, and the downloads joining
+the library with an MP3-made "FLAC" flagged).
 
 ## Troubleshooting
 

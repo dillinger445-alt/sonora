@@ -73,7 +73,7 @@ fn escape_like(s: &str) -> String {
     o
 }
 
-fn path_str(p: &Path) -> String {
+pub(crate) fn path_str(p: &Path) -> String {
     p.to_string_lossy().to_string()
 }
 
@@ -197,7 +197,8 @@ fn mark_missing_under(c: &Connection, root: &Path, seen: &HashSet<String>) -> Re
 /// LIKE prefix (escaped for `ESCAPE '\\'`) of the paths inside `root`: the
 /// root and the platform's separator. The separator is escaped too: on
 /// Windows it is the backslash, which would otherwise escape what follows.
-fn under_pattern(root: &Path) -> String {
+/// A LIKE pattern (backslash as the escape) matching paths inside `root`, without the `%`.
+pub(crate) fn under_pattern(root: &Path) -> String {
     like_prefix(&path_str(root), std::path::MAIN_SEPARATOR)
 }
 
@@ -750,7 +751,8 @@ pub fn track_detail(c: &Connection, id: i64, with_visuals: bool) -> Result<Optio
         |r| obj! { "scanId" => r.i64(0), "kind" => r.text(1), "startedAt" => r.i64(2), "outcome" => r.text(3), "finishedAt" => r.opt_i64(4) },
     )?;
     let exists = Path::new(&row.path).exists();
-    Ok(Some(obj! { "track" => row, "analysis" => analysis_json, "history" => Value::Array(history), "fileExists" => exists }))
+    let origin = crate::sources::origin_json(c, id)?;
+    Ok(Some(obj! { "track" => row, "analysis" => analysis_json, "history" => Value::Array(history), "fileExists" => exists, "origin" => origin }))
 }
 
 pub fn facets(c: &Connection) -> Result<Value, StoreError> {

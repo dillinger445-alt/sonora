@@ -6,8 +6,9 @@
  */
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { startFakeSlskd } from './fakeSlskd.ts';
 import { DATA, MUSIC } from './paths.ts';
 
 test.describe.configure({ mode: 'serial' });
@@ -405,7 +406,7 @@ test('settings persist and the default score applies', async ({ page }) => {
   // Restore.
   await page.goto('/#/settings');
   await page.getByRole('radiogroup', { name: 'Default score' }).getByRole('radio', { name: 'Overall' }).click();
-  await expect(page.getByText('SONORA works entirely on this computer')).toBeVisible();
+  await expect(page.getByText('SONORA works on this computer')).toBeVisible();
 });
 
 test('history lists scans with their results', async ({ page }) => {
@@ -956,4 +957,99 @@ test('Send to USB writes numbered folders of DJ-ready files and playlists, and c
   expect(readdirSync(warm).sort()).toEqual(['001 - radio_edit.aiff', '002 - dark_master.aiff', 'Warm-up.m3u8', 'my edit.aiff']);
   expect(readFileSync(join(usb, 'notes.txt'), 'utf8')).toBe('mine');
   rmSync(usb, { recursive: true, force: true });
+});
+
+test('Soulseek: search through slskd, download, and the files join the library with their quality checked', async ({ page }) => {
+  // A stand-in for slskd: nothing here reaches Soulseek.
+  const downloads = join(DATA, 'slskd-downloads');
+  rmSync(downloads, { recursive: true, force: true });
+  mkdirSync(downloads, { recursive: true });
+  const album = '@@shared\\Music\\Night Drive - Lights';
+  const slskd = await startFakeSlskd([
+    { username: 'crate-digger', filename: `${album}\\01 Lights.flac`, size: statSync(join(MUSIC, 'clean_master.flac')).size, bitDepth: 16, sampleRate: 44100, length: 20 },
+    { username: 'crate-digger', filename: `${album}\\02 Afterglow.flac`, size: statSync(join(MUSIC, 'transcode_mp3_128.flac')).size, bitDepth: 16, sampleRate: 44100, length: 20 },
+    { username: 'mp3-only', filename: 'mp3s\\Night Drive\\01 Lights.mp3', size: 480_000, bitRate: 192, length: 20 },
+  ]);
+  try {
+    // Nothing works before the notice is accepted.
+    await page.goto('/#/soulseek');
+    await expect(page.getByRole('heading', { name: 'Find lossless music on Soulseek' })).toBeVisible();
+    await expect(page.getByRole('note', { name: 'Before you start' })).toContainText('you are responsible for making sure each download');
+    await page.getByRole('button', { name: 'Accept and continue' }).click();
+
+    // Setup: slskd's address, a key SONORA makes, then the download folder.
+    await expect(page.getByRole('tab', { name: 'Setup' })).toHaveAttribute('aria-selected', 'true');
+    const address = page.getByRole('textbox', { name: 'slskd’s address' });
+    await address.fill(slskd.url);
+    await address.press('Enter');
+    await page.getByRole('button', { name: 'Make a key' }).click();
+    const yaml = page.getByLabel('Lines for slskd.yml');
+    await expect(yaml).toContainText('role: readwrite');
+    await expect(yaml).toContainText('cidr: 127.0.0.1/32,::1/128');
+    const key = /key: (\S+)/.exec(await yaml.innerText())?.[1] ?? '';
+    expect(key).toMatch(/^[A-Za-z0-9]{32}$/);
+    slskd.key = key;
+    await page.getByRole('button', { name: 'I restarted slskd: test' }).click();
+    await expect(page.locator('.view-sub')).toContainText('Signed in to Soulseek as e2e-dj through slskd 0.26.1');
+    await page.getByRole('textbox', { name: 'Download folder path' }).fill(downloads);
+    await page.getByRole('button', { name: 'Use folder' }).click();
+    await expect(page.getByText(downloads, { exact: true })).toBeVisible();
+
+    // Search: lossless files only, grouped by folder, best-connected first.
+    await page.getByRole('tab', { name: 'Search' }).click();
+    await page.getByRole('searchbox', { name: 'Search Soulseek' }).fill('night drive lights');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    const folder = page.getByRole('region', { name: 'Night Drive - Lights from crate-digger' });
+    await expect(folder.getByRole('cell', { name: '01 Lights.flac', exact: true })).toBeVisible();
+    await expect(page.locator('.sk-summary')).toContainText('1 lossy file hidden', { timeout: 15_000 });
+    expect(slskd.searches).toEqual(['night drive lights']);
+    await expect(page.getByRole('region', { name: /from mp3-only/ })).toHaveCount(0);
+    await page.getByRole('radio', { name: 'All formats' }).click();
+    await expect(page.getByRole('region', { name: 'Night Drive from mp3-only' })).toBeVisible();
+    await page.getByRole('radio', { name: 'Lossless' }).click();
+    await expect(page.getByRole('region', { name: /from mp3-only/ })).toHaveCount(0);
+
+    // Download the folder; slskd queues both files.
+    await folder.getByRole('button', { name: 'Download 2 files' }).click();
+    await expect(page.getByText('Asked crate-digger for 2 files')).toBeVisible();
+    await expect(folder.getByText('Queued')).toHaveCount(2);
+    expect(slskd.transfers.map((t) => t.filename).sort()).toEqual([`${album}\\01 Lights.flac`, `${album}\\02 Afterglow.flac`]);
+    await page.getByRole('tab', { name: /^Downloads/ }).click();
+    await expect(page.getByText('Number 2 in their queue')).toBeVisible();
+
+    // slskd finishes them in its folder: SONORA adds both and checks them.
+    // The second is an MP3 saved as FLAC, and the analysis says so.
+    const dir = join(downloads, 'Night Drive - Lights');
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(join(MUSIC, 'clean_master.flac'), join(dir, '01 Lights.flac'));
+    copyFileSync(join(MUSIC, 'transcode_mp3_128.flac'), join(dir, '02 Afterglow.flac'));
+    const settled = new Date(Date.now() - 60_000);
+    for (const f of readdirSync(dir)) utimesSync(join(dir, f), settled, settled);
+    slskd.finish(`${album}\\01 Lights.flac`);
+    slskd.finish(`${album}\\02 Afterglow.flac`);
+    await expect(page.getByText('Added 2 downloads from Soulseek')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Files from Soulseek come from other people')).toBeVisible();
+    await waitIdle(page);
+    const lights = page.getByRole('row', { name: /01 Lights\.flac/ });
+    const afterglow = page.getByRole('row', { name: /02 Afterglow\.flac/ });
+    await expect(lights.locator('.sk-verdict')).toBeVisible({ timeout: 30_000 });
+    await expect(afterglow.locator('.sk-verdict')).toContainText('Lossy source?');
+    await expect(lights.locator('.sk-verdict')).not.toContainText('Lossy source?');
+
+    // Later results show the files as already in the library.
+    await page.getByRole('tab', { name: 'Search' }).click();
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Night Drive - Lights from crate-digger' }).getByText('Downloaded')).toHaveCount(2, { timeout: 15_000 });
+
+    // The analysis page says where the track came from.
+    await page.getByRole('tab', { name: /^Downloads/ }).click();
+    await lights.getByRole('link', { name: 'Open the analysis of 01 Lights.flac' }).click();
+    await expect(page.getByText('Came from')).toBeVisible();
+    await expect(page.getByText(/^Soulseek, /)).toBeVisible();
+
+    // slskd's files stay exactly where it put them.
+    expect(readdirSync(dir).sort()).toEqual(['01 Lights.flac', '02 Afterglow.flac']);
+  } finally {
+    await slskd.close();
+  }
 });

@@ -38,7 +38,9 @@ if (!existsSync(join(MUSIC, 'manifest.json'))) {
 rmSync(LIBRARY, { recursive: true, force: true });
 
 // "Move to Trash" uses the freedesktop trash on Linux: keep it inside e2e/.data.
-const env = { ...process.env, XDG_DATA_HOME: join(DATA, 'xdg') };
+// slskd's API key goes to a file in the library folder, never the system's
+// keychain; the Soulseek download folder is looked at every second.
+const env = { ...process.env, XDG_DATA_HOME: join(DATA, 'xdg'), SONORA_SECRET_STORE: 'file', SONORA_SOURCE_POLL_SECONDS: '1' };
 const bridge = spawn(exe('sonora-devserver'), ['--port', port, '--static', join(ROOT, 'dist'), '--data', LIBRARY], { cwd: ROOT, stdio: 'inherit', env });
 bridge.on('exit', (code) => process.exit(code ?? 0));
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => bridge.kill(sig));

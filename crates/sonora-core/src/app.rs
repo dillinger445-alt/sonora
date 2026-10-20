@@ -45,6 +45,12 @@ pub struct App {
     pub exporter: Arc<crate::djexport::Exporter>,
     pub syncer: Arc<crate::usb::Syncer>,
     pub discogs: Arc<crate::discogs::Discogs>,
+    /// The person's own Soulseek client's download folder, watched.
+    pub sources: crate::sources::Watcher,
+    /// slskd, the Soulseek client the person runs, which SONORA can search through.
+    pub slskd: crate::slskd::Slskd,
+    /// Secrets kept by the system (slskd's API key).
+    pub secrets: Arc<dyn crate::secrets::SecretStore>,
 }
 
 impl App {
@@ -82,6 +88,7 @@ impl App {
             }
         }
         let events = Arc::new(EventBus::default());
+        let secrets = crate::secrets::system(&config.data_dir);
         let version = config.app_version.clone();
         let rescan = settings.rescan_on_launch == "changed";
         let scans = ScanManager::new(Arc::clone(&db), Arc::clone(&events), tools, settings);
@@ -95,7 +102,11 @@ impl App {
             exporter: Arc::new(crate::djexport::Exporter::default()),
             syncer: Arc::new(crate::usb::Syncer::default()),
             discogs: Arc::new(crate::discogs::Discogs::new(&version)),
+            sources: crate::sources::Watcher::default(),
+            slskd: crate::slskd::Slskd::default(),
+            secrets,
         });
+        crate::sources::Watcher::start(&app);
         // Work interrupted by a crash or by quitting mid-scan continues where
         // it stopped. Cancelled work is not resumed.
         match app.interrupted_work() {
@@ -184,6 +195,7 @@ impl App {
     /// Cancels running work and waits briefly for workers to stop.
     pub fn shutdown(&self) {
         self.dup_cancel.store(true, Ordering::Relaxed);
+        self.sources.stop();
         self.exporter.cancel();
         self.syncer.cancel();
         self.discogs.cancel();

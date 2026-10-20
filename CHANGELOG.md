@@ -4,6 +4,27 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## Unreleased
+
+### New
+
+- **Soulseek**: a new page for finding lossless music. SONORA searches
+  Soulseek through slskd, a free Soulseek client you install and run with
+  your own account, and lists FLAC, WAV and AIFF results grouped by folder,
+  with the people most likely to deliver soon first. Download a file or a
+  whole folder, follow the downloads, and see each finished file's score
+  and verdict as it joins your library: a "FLAC" made from an MP3 shows as
+  **Lossy source?** straight away. SONORA never connects to Soulseek itself
+  and never shares anything; slskd's sharing stays as you set it. Nothing
+  happens until you accept the notice on the page. slskd's API key stays
+  in the macOS keychain or Windows Credential Manager. The setup guide is
+  in docs/SOULSEEK.md.
+- **Downloads from any Soulseek client** can join the library: choose the
+  folder where it saves finished downloads, and each finished file is added
+  and checked, at once or after you review it. SONORA only reads that
+  folder; it never moves, renames or deletes anything there.
+- A track's analysis and details show when it came from Soulseek.
+
 ## 0.2.1
 
 ### New

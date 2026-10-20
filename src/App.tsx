@@ -26,6 +26,7 @@ import { OverviewView } from './views/Overview.tsx';
 import { PlaylistView } from './views/Playlist.tsx';
 import { QueueView } from './views/Queue.tsx';
 import { SettingsView } from './views/Settings.tsx';
+import { SoulseekView } from './views/Soulseek.tsx';
 import { TrackView } from './views/Track.tsx';
 import { UpdateDialog } from './views/UpdateDialog.tsx';
 
@@ -69,6 +70,8 @@ function renderView(route: Route) {
       return <HistoryView scanId={route.scanId} />;
     case 'settings':
       return <SettingsView />;
+    case 'soulseek':
+      return <SoulseekView tab={route.tab} />;
     case 'track':
       return <TrackView key={route.id} id={route.id} />;
     case 'playlist':
@@ -82,7 +85,7 @@ function Shell() {
   const imports = useImports();
   const player = usePlayer();
 
-  // Global shortcuts: ⌘/Ctrl+1…7 views, ⌘/Ctrl+, settings, ⌘/Ctrl+O import.
+  // Global shortcuts: ⌘/Ctrl+1…8 views, ⌘/Ctrl+, settings, ⌘/Ctrl+O import.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -91,7 +94,7 @@ function Shell() {
       // lose what was being set up there.
       if (document.querySelector('dialog[open]')) return;
       const n = Number(e.key);
-      if (Number.isInteger(n) && n >= 1 && n <= 7 && !e.shiftKey) {
+      if (Number.isInteger(n) && n >= 1 && n <= 8 && !e.shiftKey) {
         const r = NAV_ORDER[n - 1];
         if (r) {
           e.preventDefault();

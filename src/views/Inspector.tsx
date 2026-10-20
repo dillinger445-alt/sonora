@@ -6,7 +6,7 @@ import { AddToPlaylist } from '../components/AddToPlaylist.tsx';
 import { Button } from '../components/Button.tsx';
 import { BpmText, KeyBadge, SourceNote } from '../components/DjMarks.tsx';
 import { EvidenceMark, ScoreMeter, SeverityIcon, StatusMark } from '../components/Marks.tsx';
-import { DASH, encodingShort, formatBytes, formatDb, formatDuration, formatHz, formatKbps, middleEllipsis, plural } from '../lib/format.ts';
+import { DASH, encodingShort, formatBytes, formatDate, formatDb, formatDuration, formatHz, formatKbps, middleEllipsis, plural } from '../lib/format.ts';
 import { useDebouncedValue } from '../lib/persist.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
 import { SCORE_HINT, SCORE_KINDS, SCORE_LABEL, SEVERITY } from '../lib/scores.ts';
@@ -165,6 +165,7 @@ export function Inspector({
   }
 
   const a = detail.data?.track.id === row.id ? detail.data.analysis : null;
+  const origin = detail.data?.track.id === row.id ? detail.data.origin : null;
   const findings = a
     ? [...a.assessment.findings]
         .filter((f) => f.severity !== 'info' || f.evidence === 'inconclusive')
@@ -303,6 +304,15 @@ export function Inspector({
             {middleEllipsis(row.path, 72)}
           </dd>
         </div>
+        {origin ? (
+          <div className="is-wide">
+            <dt>Came from</dt>
+            <dd data-tip="Downloaded with a Soulseek client and added from its download folder">
+              Soulseek, {formatDate(origin.foundAt)}
+              {origin.originalName !== row.fileName ? <span className="faint"> (arrived as “{origin.originalName}”)</span> : null}
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       <div className="insp-actions">

@@ -79,6 +79,40 @@ jobs:
           if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk recycle-output.txt; fi
           exit "$status"
 
+      # slskd's API key lives in the system's secret store. These run against
+      # the real store: on macOS a keychain made for the run (the runner's
+      # login keychain may be locked), on Windows the runner's Credential
+      # Manager.
+      - name: Secret store (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set +e
+          kc="$RUNNER_TEMP/sonora-ci.keychain-db"
+          security create-keychain -p sonora-ci "$kc"
+          security unlock-keychain -p sonora-ci "$kc"
+          old_default=$(security default-keychain -d user | xargs)
+          read -ra old_list <<< "$(security list-keychains -d user | xargs)"
+          security list-keychains -d user -s "$kc" "${old_list[@]}"
+          security default-keychain -d user -s "$kc"
+          cargo test -p sonora-core --lib --locked -- --ignored --exact secrets::tests::system_store_round_trip --nocapture 2>&1 | tee secrets-output.txt
+          status=${PIPESTATUS[0]}
+          security default-keychain -d user -s "$old_default"
+          security list-keychains -d user -s "${old_list[@]}"
+          security delete-keychain "$kc"
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk secrets-output.txt; fi
+          grep -q "store: keychain" secrets-output.txt || { [ "$status" -ne 0 ] || { echo "::error::the keychain was not used"; status=1; }; }
+          exit "$status"
+
+      - name: Secret store (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          set +e
+          cargo test -p sonora-core --lib --locked -- --ignored --exact secrets::tests::system_store_round_trip --nocapture 2>&1 | tee secrets-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk secrets-output.txt; fi
+          grep -q "store: credential-manager" secrets-output.txt || { [ "$status" -ne 0 ] || { echo "::error::Credential Manager was not used"; status=1; }; }
+          exit "$status"
+
       - name: Lint
         if: runner.os == 'Linux'
         run: |

@@ -49,6 +49,12 @@ impl From<StoreError> for ApiError {
     }
 }
 
+impl From<crate::slskd::SlskdError> for ApiError {
+    fn from(e: crate::slskd::SlskdError) -> Self {
+        ApiError::new(e.code, e.message)
+    }
+}
+
 impl From<crate::playlists::PlaylistError> for ApiError {
     fn from(e: crate::playlists::PlaylistError) -> Self {
         use crate::playlists::PlaylistError as E;
@@ -612,6 +618,148 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         }
         "usb.cancel" => Ok(obj! { "ok" => app.syncer.cancel() }),
         "usb.status" => Ok(obj! { "running" => app.syncer.is_running(), "last" => app.syncer.last() }),
+
+        // -------------------------------- Soulseek downloads (sources.rs)
+        // The person's own Soulseek client downloads; SONORA watches its
+        // download folder and adds finished files. Nothing here talks to
+        // the network.
+        "sources.status" => Ok(crate::sources::status_json(app)?),
+        "sources.accept" => {
+            crate::sources::accept(&app.db.write())?;
+            crate::logging::log("info", "sources", "lawful-use notice accepted");
+            app.sources.wake();
+            Ok(crate::sources::status_json(app)?)
+        }
+        "sources.configure" => {
+            let mut s = app.settings();
+            if let Some(v) = p.get("folder") {
+                if v.is_null() {
+                    s.soulseek_folder = None;
+                } else {
+                    if crate::sources::accepted_at(&app.db.read()).is_none() {
+                        return Err(ApiError::new("not_accepted", "Read and accept the lawful-use notice before choosing a folder."));
+                    }
+                    let path = v.as_str().ok_or_else(|| ApiError::invalid("folder must be a folder path"))?;
+                    let dir = PathBuf::from(path);
+                    if !dir.is_absolute() || !dir.is_dir() {
+                        return Err(ApiError::invalid("folder must be the full path of an existing folder"));
+                    }
+                    if let (Ok(chosen), Ok(own)) = (dir.canonicalize(), app.config.data_dir.canonicalize()) {
+                        if chosen.starts_with(&own) {
+                            return Err(ApiError::invalid("Choose the folder your Soulseek client saves downloads in, not SONORA's own data folder."));
+                        }
+                    }
+                    s.soulseek_folder = Some(path.to_string());
+                }
+            }
+            if let Some(v) = p.get("review") {
+                s.soulseek_review = v.as_bool().ok_or_else(|| ApiError::invalid("review must be true or false"))?;
+            }
+            s.save(&app.db.write())?;
+            *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
+            app.sources.wake();
+            Ok(crate::sources::status_json(app)?)
+        }
+        "sources.check" => {
+            let r = crate::sources::check(app);
+            let mut v = crate::sources::status_json(app)?;
+            v.set("found", obj! { "imported" => r.imported as i64, "held" => r.held as i64, "settling" => r.settling as i64 });
+            Ok(v)
+        }
+        "sources.review" => Ok(crate::sources::review_list(&app.db.read(), 1000)?),
+        "sources.decide" => {
+            let paths: Vec<String> = p
+                .get("paths")
+                .and_then(Value::as_array)
+                .ok_or_else(|| ApiError::invalid("paths must be a list"))?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            let add = p.get("add").and_then(Value::as_bool).ok_or_else(|| ApiError::invalid("add must be true or false"))?;
+            let (added, declined) = crate::sources::decide(app, &paths, add)?;
+            Ok(obj! { "added" => added as i64, "declined" => declined as i64 })
+        }
+
+        // ------------------------------------------- slskd (slskd.rs)
+        // Searching and downloading through slskd, the Soulseek client the
+        // person runs. SONORA sends slskd instructions; slskd does the
+        // networking. Downloads arrive through the folder watcher above.
+        "slskd.status" => Ok(app.slskd.status_json(app)?),
+        "slskd.configure" => {
+            if let Some(v) = p.get("url") {
+                let url = v.as_str().ok_or_else(|| ApiError::invalid("url must be a web address"))?;
+                let url = crate::slskd::normalize_url(url).map_err(ApiError::invalid)?;
+                let mut s = app.settings();
+                s.slskd_url = url;
+                s.save(&app.db.write())?;
+                *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
+            }
+            match p.get("apiKey") {
+                None => {}
+                Some(Value::Null) => app.slskd.set_key(app, None)?,
+                Some(v) => {
+                    let key = v.as_str().map(str::trim).ok_or_else(|| ApiError::invalid("apiKey must be text or null"))?;
+                    crate::slskd::check_key(key).map_err(ApiError::invalid)?;
+                    app.slskd.set_key(app, Some(key))?;
+                }
+            }
+            Ok(app.slskd.status_json(app)?)
+        }
+        "slskd.newKey" => {
+            // A key for the person to add to slskd.yml; saved here at once.
+            let key = crate::secrets::random_key(32).map_err(|e| ApiError::new("internal", e))?;
+            app.slskd.set_key(app, Some(&key))?;
+            Ok(obj! { "key" => key })
+        }
+        "slskd.test" => Ok(app.slskd.test(app)?),
+        "slskd.search" => {
+            if crate::sources::accepted_at(&app.db.read()).is_none() {
+                return Err(ApiError::new("not_accepted", "Read and accept the notice on the Soulseek page before searching."));
+            }
+            let text = p.get("text").and_then(Value::as_str).map(str::trim).unwrap_or("");
+            if text.is_empty() || text.chars().count() > 200 || text.chars().any(char::is_control) {
+                return Err(ApiError::invalid("Type between 1 and 200 characters to search for."));
+            }
+            Ok(app.slskd.search(app, text)?)
+        }
+        "slskd.results" => {
+            let id = p.get("id").and_then(Value::as_str).ok_or_else(|| ApiError::invalid("id must be a search id"))?;
+            let lossless = p.get("lossless").and_then(Value::as_bool).unwrap_or(true);
+            Ok(app.slskd.results(app, id, lossless)?)
+        }
+        "slskd.stop" => {
+            let id = p.get("id").and_then(Value::as_str).ok_or_else(|| ApiError::invalid("id must be a search id"))?;
+            app.slskd.stop(app, id)?;
+            Ok(obj! { "ok" => true })
+        }
+        "slskd.download" => {
+            if crate::sources::accepted_at(&app.db.read()).is_none() {
+                return Err(ApiError::new("not_accepted", "Read and accept the notice on the Soulseek page before downloading."));
+            }
+            let username = p.get("username").and_then(Value::as_str).filter(|u| !u.trim().is_empty()).ok_or_else(|| ApiError::invalid("username must be a Soulseek user name"))?;
+            let files = p.get("files").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("files must be a list"))?;
+            if files.is_empty() || files.len() > 1000 {
+                return Err(ApiError::invalid("choose between 1 and 1000 files"));
+            }
+            let mut list = Vec::with_capacity(files.len());
+            for f in files {
+                let name = f.get("filename").and_then(Value::as_str).filter(|n| !n.is_empty()).ok_or_else(|| ApiError::invalid("each file needs its filename"))?;
+                let size = f.get("size").and_then(Value::as_i64).filter(|s| *s >= 0).ok_or_else(|| ApiError::invalid("each file needs its size"))?;
+                list.push((name.to_string(), size));
+            }
+            Ok(app.slskd.download(app, username, &list)?)
+        }
+        "slskd.downloads" => Ok(app.slskd.downloads(app)?),
+        "slskd.cancel" => {
+            let username = p.get("username").and_then(Value::as_str).ok_or_else(|| ApiError::invalid("username must be a Soulseek user name"))?;
+            let id = p.get("id").and_then(Value::as_str).ok_or_else(|| ApiError::invalid("id must be a transfer id"))?;
+            app.slskd.cancel(app, username, id)?;
+            Ok(obj! { "ok" => true })
+        }
+        "slskd.clearFinished" => {
+            app.slskd.clear_finished(app)?;
+            Ok(obj! { "ok" => true })
+        }
 
         // ------------------------------------------------------ Discogs
         "discogs.status" => Ok(obj! {

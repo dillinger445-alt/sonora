@@ -14,10 +14,15 @@ export type Route =
   | { view: 'duplicates' }
   | { view: 'history'; scanId?: number }
   | { view: 'settings' }
+  | { view: 'soulseek'; tab?: SoulseekTab }
   | { view: 'track'; id: number }
   | { view: 'playlist'; id: number };
 
 export type View = Route['view'];
+
+/** The parts of the Soulseek page. */
+export type SoulseekTab = 'search' | 'downloads' | 'setup';
+const SOULSEEK_TABS: SoulseekTab[] = ['search', 'downloads', 'setup'];
 
 const SIMPLE: View[] = ['overview', 'queue', 'folders', 'duplicates', 'settings'];
 
@@ -47,7 +52,11 @@ export function parseRoute(hash: string): Route {
     const flag = params.get('flag');
     return flag ? { view: 'attention', flag } : { view: 'attention' };
   }
-  if ((SIMPLE as string[]).includes(head)) return { view: head as Exclude<View, 'track' | 'history' | 'attention' | 'library' | 'playlist'> } as Route;
+  if (head === 'soulseek') {
+    const tab = params.get('tab');
+    return tab && (SOULSEEK_TABS as string[]).includes(tab) ? { view: 'soulseek', tab: tab as SoulseekTab } : { view: 'soulseek' };
+  }
+  if ((SIMPLE as string[]).includes(head)) return { view: head as Exclude<View, 'track' | 'history' | 'attention' | 'library' | 'playlist' | 'soulseek'> } as Route;
   return { view: 'overview' };
 }
 
@@ -63,6 +72,8 @@ export function formatRoute(r: Route): string {
       return r.flag ? `#/attention?flag=${encodeURIComponent(r.flag)}` : '#/attention';
     case 'library':
       return r.folderId ? `#/library?folder=${r.folderId}` : '#/library';
+    case 'soulseek':
+      return r.tab ? `#/soulseek?tab=${r.tab}` : '#/soulseek';
     default:
       return `#/${r.view}`;
   }

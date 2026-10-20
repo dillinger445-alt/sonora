@@ -15,6 +15,9 @@ test('routes round-trip through the hash', () => {
     { view: 'history' },
     { view: 'history', scanId: 12 },
     { view: 'settings' },
+    { view: 'soulseek' },
+    { view: 'soulseek', tab: 'downloads' },
+    { view: 'soulseek', tab: 'setup' },
     { view: 'track', id: 42 },
   ];
   for (const r of routes) assert.deepEqual(parseRoute(formatRoute(r)), r);
@@ -27,4 +30,5 @@ test('unknown or malformed hashes fall back safely', () => {
   assert.deepEqual(parseRoute('#/track/-4'), { view: 'library' });
   assert.deepEqual(parseRoute('#/history/0'), { view: 'history' });
   assert.deepEqual(parseRoute('#/library?folder=x'), { view: 'library' });
+  assert.deepEqual(parseRoute('#/soulseek?tab=nowhere'), { view: 'soulseek' });
 });
