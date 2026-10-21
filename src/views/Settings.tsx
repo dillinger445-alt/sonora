@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { LuCircleArrowUp, LuDatabaseBackup, LuFolderSearch, LuRadioTower, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
 import type { KeyNotation, Settings } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
-import { Segmented, Switch } from '../components/Controls.tsx';
+import { NumberStepper, Segmented, Switch } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
 import { ViewHeader } from '../components/Layout.tsx';
 import { formatBytes, formatCount, formatRelative, plural } from '../lib/format.ts';
@@ -15,6 +15,7 @@ import { useToast } from '../state/toasts.tsx';
 import { revealLabel } from '../lib/platform.ts';
 import { useResource } from '../state/useResource.ts';
 import { useUpdates } from '../state/updates.tsx';
+import { PlaylistRulesForm } from '../components/PlaylistRules.tsx';
 import { DiscogsSettings } from './DiscogsSettings.tsx';
 
 /** Tempo ranges DJs commonly use (each spans an octave, so every tempo has one reading in it). */
@@ -103,55 +104,6 @@ function UpdateSettings({ version, checkUpdates, onAutoChange }: { version: stri
         onChange={onAutoChange}
       />
     </>
-  );
-}
-
-function NumberStepper({ value, min, max, step = 1, onChange, label, unit }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; label: string; unit?: string }) {
-  const [text, setText] = useState(String(value));
-  const [lastValue, setLastValue] = useState(value);
-  if (value !== lastValue) {
-    setLastValue(value);
-    setText(String(value));
-  }
-  const commit = (raw: string) => {
-    const v = Number(raw);
-    if (!Number.isFinite(v)) {
-      setText(String(value));
-      return;
-    }
-    const clamped = Math.max(min, Math.min(max, Math.round(v / step) * step));
-    setText(String(clamped));
-    if (clamped !== value) onChange(clamped);
-  };
-  return (
-    <div className="stepper">
-      <button type="button" className="stepper-btn" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - step))}>
-        −
-      </button>
-      <input
-        className="stepper-input num"
-        inputMode="numeric"
-        aria-label={label}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={(e) => commit(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
-          if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            onChange(Math.min(max, value + step));
-          }
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            onChange(Math.max(min, value - step));
-          }
-        }}
-      />
-      <button type="button" className="stepper-btn" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + step))}>
-        +
-      </button>
-      {unit ? <span className="stepper-unit faint">{unit}</span> : null}
-    </div>
   );
 }
 
@@ -346,6 +298,18 @@ export function SettingsView() {
               Open Soulseek setup
             </Button>
           </Row>
+        </Group>
+
+        <Group
+          title="Playlist download rules"
+          description={
+            <>
+              How SONORA picks a Soulseek file for each track of a YouTube playlist (Soulseek → YouTube playlist). A file must pass every rule; among those that do, the first format wins, then the
+              resolution preference, then a free upload slot, a short queue and speed, then how well the name matches.
+            </>
+          }
+        >
+          <PlaylistRulesForm />
         </Group>
 
         <Group title="Library" description={<>Folders are managed on the <a className="link" href={formatRoute({ view: 'folders' })}>Folders</a> page.</>}>

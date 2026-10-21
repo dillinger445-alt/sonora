@@ -1,13 +1,14 @@
 /**
  * Background jobs besides analysis: DJ exports, sending playlists to a USB
- * drive, and Discogs genre lookups.
+ * drive, Discogs genre lookups, and YouTube playlists downloaded from
+ * Soulseek.
  * Both run in the core; this follows their events so the status bar can
  * show progress from any view, and reports the outcome when nobody is
  * watching it in a dialog.
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { CoreEvents, DiscogsReport, ExportProgress, ExportReport, UsbProgress, UsbReport } from '../api/types.ts';
+import type { CoreEvents, DiscogsReport, ExportProgress, ExportReport, PlaylistRun, UsbProgress, UsbReport } from '../api/types.ts';
 import { formatCount, plural } from '../lib/format.ts';
 import { revealLabel } from '../lib/platform.ts';
 import { navigate } from '../lib/router.ts';
@@ -24,6 +25,10 @@ export interface Jobs {
   discogsProgress: DiscogsProgress | null;
   usbRunning: boolean;
   usbProgress: UsbProgress | null;
+  /** The YouTube playlist being searched and downloaded, while one is. */
+  playlistRun: PlaylistRun | null;
+  /** While the playlist page shows the run, its outcome is not announced again. Returns the release. */
+  watchPlaylist: () => () => void;
   /** While a dialog shows the export, its outcome is not announced again. Returns the release. */
   watchExport: () => () => void;
   /** The same for sending to a drive. */
@@ -35,6 +40,18 @@ export interface Jobs {
   cancelExport: () => void;
   cancelDiscogs: () => void;
   cancelUsb: () => void;
+  cancelPlaylist: () => void;
+}
+
+/** One line describing a finished playlist run. */
+export function describePlaylist(r: PlaylistRun): { tone: 'success' | 'warning' | 'error' | 'info'; title: string; body?: string } {
+  const c = r.counts;
+  const name = r.title ?? 'YouTube playlist';
+  if (r.state === 'cancelled') return { tone: 'info', title: `Stopped: ${name}`, body: `${plural(c.done, 'track')} downloaded before it stopped.` };
+  if (r.state === 'failed') return { tone: 'error', title: `${name} stopped`, body: r.error ?? undefined };
+  const parts = [c.notFound ? `${plural(c.notFound, 'track')} not found` : null, c.failed ? `${plural(c.failed, 'track')} failed` : null].filter(Boolean);
+  if (c.done === 0) return { tone: 'warning', title: `Nothing downloaded from ${name}`, body: parts.join(', ') || undefined };
+  return { tone: parts.length ? 'warning' : 'success', title: `${name}: ${plural(c.done, 'track')} downloaded and checked`, body: parts.join(', ') || undefined };
 }
 
 /** One line describing a finished send to a drive. */
@@ -78,8 +95,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [discogsProgress, setDiscogsProgress] = useState<DiscogsProgress | null>(null);
   const [usbRunning, setUsbRunning] = useState(false);
   const [usbProgress, setUsbProgress] = useState<UsbProgress | null>(null);
+  const [playlistRun, setPlaylistRun] = useState<PlaylistRun | null>(null);
   const watchers = useRef(0);
   const usbWatchers = useRef(0);
+  const playlistWatchers = useRef(0);
 
   const resync = useCallback(() => {
     client.exportStatus().then(
@@ -94,13 +113,32 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       (s) => setUsbRunning(s.running),
       () => undefined,
     );
+    client.playlistList().then(
+      (r) => setPlaylistRun(r.runs.find((x) => x.state === 'running' || x.state === 'paused') ?? null),
+      () => undefined,
+    );
   }, [client]);
 
   // A job may already run (the interface was reloaded during it).
   useEffect(resync, [resync]);
 
-  useCoreEvent(['djexport.progress', 'djexport.finished', 'discogs.progress', 'discogs.finished', 'usb.progress', 'usb.finished'], (name, payload) => {
+  useCoreEvent(['djexport.progress', 'djexport.finished', 'discogs.progress', 'discogs.finished', 'usb.progress', 'usb.finished', 'playlist.changed', 'playlist.finished'], (name, payload) => {
     switch (name) {
+      case 'playlist.changed': {
+        const r = payload as CoreEvents['playlist.changed'];
+        if (r.state === 'fetching') break;
+        const run = r as PlaylistRun;
+        setPlaylistRun((cur) => (run.state === 'running' || run.state === 'paused' ? run : cur && cur.id === run.id ? null : cur));
+        break;
+      }
+      case 'playlist.finished': {
+        const r = payload as PlaylistRun;
+        setPlaylistRun((cur) => (cur && cur.id === r.id ? null : cur));
+        if (playlistWatchers.current > 0) break;
+        const d = describePlaylist(r);
+        toast({ ...d, action: { label: 'Show', run: () => navigate({ view: 'soulseek', tab: 'playlist' }) }, timeout: d.tone === 'error' ? 0 : 9000 });
+        break;
+      }
       case 'usb.progress':
         setUsbRunning(true);
         setUsbProgress(payload as UsbProgress);
@@ -168,6 +206,16 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const watchPlaylist = useCallback(() => {
+    playlistWatchers.current += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      playlistWatchers.current -= 1;
+    };
+  }, []);
+
   const watchUsb = useCallback(() => {
     usbWatchers.current += 1;
     let released = false;
@@ -208,6 +256,12 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const cancelUsb = useCallback(() => {
     client.usbCancel().catch(cancelFailed('sending to the drive'));
   }, [client, cancelFailed]);
+  const cancelPlaylist = useCallback(() => {
+    setPlaylistRun((r) => {
+      if (r) client.playlistCancel(r.id).catch(cancelFailed('the playlist'));
+      return r;
+    });
+  }, [client, cancelFailed]);
 
   const value = useMemo<Jobs>(
     () => ({
@@ -218,6 +272,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       discogsProgress,
       usbRunning,
       usbProgress,
+      playlistRun,
+      watchPlaylist,
       watchExport,
       watchUsb,
       started,
@@ -225,8 +281,9 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       cancelExport,
       cancelDiscogs,
       cancelUsb,
+      cancelPlaylist,
     }),
-    [exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, usbRunning, usbProgress, watchExport, watchUsb, started, resync, cancelExport, cancelDiscogs, cancelUsb],
+    [exportRunning, exportProgress, exportReport, discogsRunning, discogsProgress, usbRunning, usbProgress, playlistRun, watchPlaylist, watchExport, watchUsb, started, resync, cancelExport, cancelDiscogs, cancelUsb, cancelPlaylist],
   );
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;
 }

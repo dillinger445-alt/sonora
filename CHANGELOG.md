@@ -4,6 +4,23 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## Unreleased
+
+### New
+
+- **Download a YouTube playlist from Soulseek.** On the Soulseek page,
+  **YouTube playlist** takes the link of a public or unlisted playlist,
+  reads its track list (titles read as artist, title and mix name; Shorts,
+  mixes and repeats left out, with a tick to put any back), looks for every
+  track through slskd, one search at a time with up to five searches each,
+  picks the best file by the rules under Settings → **Playlist download
+  rules** (formats in order, resolution, size, who shares it, how well the
+  name matches) and downloads it, automatically or after you review the
+  picks. A file that arrives made from a lossy source, damaged or lossy is
+  swapped for the next best, up to three tries. The run can be paused,
+  stopped and retried, shows in the status bar, and carries on after a
+  restart. YouTube sees the playlist's id and nothing about you.
+
 ## 0.3.2
 
 ### Fixed

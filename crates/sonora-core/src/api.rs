@@ -891,6 +891,55 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             Ok(obj! { "ok" => true })
         }
 
+        // ---------------------------- YouTube playlists from Soulseek (jobs.rs)
+        // The person pastes a playlist link; SONORA reads the list from
+        // YouTube's page, looks for each track through slskd and downloads
+        // the pick by the rules in Settings.
+        "playlist.fetch" => {
+            if crate::sources::accepted_at(&app.db.read()).is_none() {
+                return Err(ApiError::new("not_accepted", "Read and accept the notice on the Soulseek page first."));
+            }
+            let source = p.get("source").and_then(Value::as_str).map(str::trim).unwrap_or("");
+            if source.is_empty() || source.chars().count() > 500 {
+                return Err(ApiError::invalid("Paste the link of a YouTube playlist."));
+            }
+            let id = app.playlist.fetch(app, source)?;
+            Ok(obj! { "id" => id })
+        }
+        "playlist.list" => Ok(obj! { "runs" => app.playlist.list(app)? }),
+        "playlist.get" => app.playlist.get(app, id_param(p, "id")?),
+        "playlist.delete" => {
+            app.playlist.delete(app, id_param(p, "id")?)?;
+            Ok(obj! { "ok" => true })
+        }
+        "playlist.include" => {
+            let id = id_param(p, "id")?;
+            let items = ids_param(p, "itemIds")?;
+            let included = p.req_bool("included").map_err(|e| ApiError::invalid(e.to_string()))?;
+            app.playlist.include(app, id, &items, included)
+        }
+        "playlist.start" => {
+            if app.slskd.key(app)?.is_none() {
+                return Err(ApiError::new("slskd_not_set_up", "Set slskd up on the Soulseek page first."));
+            }
+            app.playlist.start(app, id_param(p, "id")?)
+        }
+        "playlist.pause" => app.playlist.pause(app, id_param(p, "id")?),
+        "playlist.resume" => app.playlist.resume_run(app, id_param(p, "id")?),
+        "playlist.cancel" => app.playlist.cancel(app, id_param(p, "id")?),
+        "playlist.confirm" => app.playlist.confirm(app, id_param(p, "id")?),
+        "playlist.choose" => {
+            let id = id_param(p, "id")?;
+            let item = id_param(p, "itemId")?;
+            let candidate = id_param(p, "candidate")?;
+            app.playlist.choose(app, id, item, candidate)
+        }
+        "playlist.retry" => {
+            let id = id_param(p, "id")?;
+            let items = opt_ids(p, "itemIds")?;
+            app.playlist.retry(app, id, items.as_deref())
+        }
+
         // ------------------------------------------------------ Discogs
         "discogs.status" => Ok(obj! {
             "configured" => crate::discogs::Discogs::token(&app.db).is_some(),

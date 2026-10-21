@@ -1068,3 +1068,1086 @@ impl ToJson for Phase {
         Value::String(self.id().into())
     }
 }
+
+// ======================================= YouTube playlists from Soulseek
+
+use crate::api::ApiError;
+use crate::app::App;
+use crate::matching::{self, Candidate, Want};
+use crate::net::Http;
+use crate::settings::PlaylistRules;
+use crate::youtube;
+use std::sync::Weak;
+
+/// How often a running search is looked at.
+const SEARCH_POLL: Duration = Duration::from_millis(1500);
+/// After `search_seconds`, a search that slskd has not ended is stopped and
+/// given this long to hand over its results.
+const STOP_GRACE: Duration = Duration::from_secs(6);
+/// A download that moved no bytes for this long is given up on.
+const STALL: Duration = Duration::from_secs(15 * 60);
+/// A download waiting in the other person's queue may wait this long.
+const QUEUE_WAIT: Duration = Duration::from_secs(60 * 60);
+/// A finished download that the folder watcher has not taken in this long
+/// is given up on (the watcher looks every 20 seconds).
+const ARRIVAL_WAIT: Duration = Duration::from_secs(10 * 60);
+/// Tries per track (the first pick and fallbacks).
+pub const MAX_ATTEMPTS: i64 = 3;
+/// Tracks not found are looked for again after this, up to `MAX_PASSES` times.
+const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+const MAX_PASSES: i64 = 3;
+/// Candidates kept per track (the accepted ones first).
+const MAX_CANDIDATES: usize = 40;
+/// Between two progress events while a search runs.
+const PLAYLIST_PROGRESS: Duration = Duration::from_millis(400);
+
+#[derive(Default)]
+struct PlaylistInner {
+    /// The run a worker is on.
+    active: Mutex<Option<i64>>,
+    cancel: AtomicBool,
+    stop: AtomicBool,
+    woken: Mutex<bool>,
+    wake: Condvar,
+    fetching: AtomicBool,
+    last_emit: Mutex<Option<Instant>>,
+}
+
+/// Downloading the tracks of a YouTube playlist from Soulseek: the list is
+/// fetched and read, each track searched for (one search at a time, as
+/// slskd takes one), the best file by the rules downloaded, and what
+/// arrives checked. Everything is in `playlist_runs` and `playlist_items`,
+/// so a run quit half way carries on at the next launch.
+pub struct PlaylistJobs {
+    tube: Mutex<Arc<dyn Http>>,
+    base: String,
+    inner: Arc<PlaylistInner>,
+}
+
+impl Default for PlaylistJobs {
+    fn default() -> Self {
+        PlaylistJobs { tube: Mutex::new(Arc::new(crate::net::Curl::default())), base: youtube::base(), inner: Arc::new(PlaylistInner::default()) }
+    }
+}
+
+fn pl_log(level: &str, msg: &str, fields: Value) {
+    crate::logging::log_fields(level, "playlist", msg, fields);
+}
+
+/// One item as the database has it.
+#[derive(Clone, Debug)]
+struct Item {
+    id: i64,
+    run_id: i64,
+    seq: i64,
+    video_id: String,
+    yt_title: String,
+    channel: Option<String>,
+    seconds: Option<i64>,
+    artist: Option<String>,
+    title: String,
+    mix: Option<String>,
+    catalogue: Option<String>,
+    included: bool,
+    left_out: Option<String>,
+    status: String,
+    variation: Option<i64>,
+    responses: Option<i64>,
+    candidates: Vec<Candidate>,
+    chosen: Option<i64>,
+    attempts: i64,
+    transfer_id: Option<String>,
+    transfer_user: Option<String>,
+    transfer_file: Option<String>,
+    transfer_size: Option<i64>,
+    bytes_seen: Option<i64>,
+    progress_at: Option<i64>,
+    note: Option<String>,
+    error: Option<String>,
+    track_id: Option<i64>,
+    updated_at: i64,
+}
+
+const ITEM_COLUMNS: &str = "id, run_id, seq, video_id, yt_title, channel, seconds, artist, title, mix, catalogue, included, left_out, status, variation, responses, candidates, chosen, attempts, transfer_id, transfer_user, transfer_file, transfer_size, bytes_seen, progress_at, note, error, track_id, updated_at";
+
+impl Item {
+    fn from_row(r: &crate::db::sqlite::Row) -> Item {
+        let candidates = r.opt_text(16).and_then(|t| sonora_json::parse(&t).ok()).and_then(|v| v.as_array().map(|a| a.iter().filter_map(Candidate::from_json).collect())).unwrap_or_default();
+        Item {
+            id: r.i64(0),
+            run_id: r.i64(1),
+            seq: r.i64(2),
+            video_id: r.text(3),
+            yt_title: r.text(4),
+            channel: r.opt_text(5),
+            seconds: r.opt_i64(6),
+            artist: r.opt_text(7),
+            title: r.text(8),
+            mix: r.opt_text(9),
+            catalogue: r.opt_text(10),
+            included: r.i64(11) != 0,
+            left_out: r.opt_text(12),
+            status: r.text(13),
+            variation: r.opt_i64(14),
+            responses: r.opt_i64(15),
+            candidates,
+            chosen: r.opt_i64(17),
+            attempts: r.i64(18),
+            transfer_id: r.opt_text(19),
+            transfer_user: r.opt_text(20),
+            transfer_file: r.opt_text(21),
+            transfer_size: r.opt_i64(22),
+            bytes_seen: r.opt_i64(23),
+            progress_at: r.opt_i64(24),
+            note: r.opt_text(25),
+            error: r.opt_text(26),
+            track_id: r.opt_i64(27),
+            updated_at: r.i64(28),
+        }
+    }
+
+    fn want(&self) -> Want {
+        Want { artist: self.artist.clone(), title: self.title.clone(), mix: self.mix.clone(), catalogue: self.catalogue.clone(), seconds: self.seconds }
+    }
+
+    fn accepted(&self) -> Vec<&Candidate> {
+        self.candidates.iter().filter(|c| c.rejected.is_none()).collect()
+    }
+
+    fn to_json(&self, track: Option<Value>) -> Value {
+        obj! {
+            "id" => self.id,
+            "runId" => self.run_id,
+            "seq" => self.seq,
+            "videoId" => self.video_id.as_str(),
+            "url" => format!("https://www.youtube.com/watch?v={}", self.video_id),
+            "ytTitle" => self.yt_title.as_str(),
+            "channel" => self.channel.clone(),
+            "seconds" => self.seconds,
+            "artist" => self.artist.clone(),
+            "title" => self.title.as_str(),
+            "mix" => self.mix.clone(),
+            "catalogue" => self.catalogue.clone(),
+            "included" => self.included,
+            "leftOut" => self.left_out.clone(),
+            "status" => self.status.as_str(),
+            "variation" => self.variation,
+            "responses" => self.responses,
+            "candidates" => Value::Array(self.candidates.iter().map(Candidate::to_json).collect()),
+            "chosen" => self.chosen,
+            "attempts" => self.attempts,
+            "transfer" => self.transfer_id.as_ref().map(|id| obj! {
+                "id" => id.as_str(),
+                "username" => self.transfer_user.clone(),
+                "filename" => self.transfer_file.clone(),
+                "size" => self.transfer_size,
+                "bytes" => self.bytes_seen.unwrap_or(0),
+            }).unwrap_or(Value::Null),
+            "note" => self.note.clone(),
+            "error" => self.error.clone(),
+            "trackId" => self.track_id,
+            "track" => track.unwrap_or(Value::Null),
+            "updatedAt" => self.updated_at,
+        }
+    }
+}
+
+fn load_item(c: &crate::db::sqlite::Connection, id: i64) -> Result<Option<Item>, StoreError> {
+    Ok(c.query_row(&format!("SELECT {ITEM_COLUMNS} FROM playlist_items WHERE id = ?"), params![id], Item::from_row)?)
+}
+
+fn load_items(c: &crate::db::sqlite::Connection, run_id: i64, cond: &str) -> Result<Vec<Item>, StoreError> {
+    Ok(c.query(&format!("SELECT {ITEM_COLUMNS} FROM playlist_items WHERE run_id = ? AND {cond} ORDER BY seq"), params![run_id], Item::from_row)?)
+}
+
+fn candidates_json(c: &[Candidate]) -> String {
+    Value::Array(c.iter().take(MAX_CANDIDATES).map(Candidate::to_json).collect()).to_string_compact()
+}
+
+/// A run's row and the counts of its items.
+fn run_json(c: &crate::db::sqlite::Connection, id: i64) -> Result<Option<Value>, StoreError> {
+    let Some(mut v) = c.query_row(
+        "SELECT id, created_at, updated_at, state, source, playlist_id, title, rules, confirmed, passes, retry_at, error, finished_at FROM playlist_runs WHERE id = ?",
+        params![id],
+        |r| {
+            obj! {
+                "id" => r.i64(0),
+                "createdAt" => r.i64(1),
+                "updatedAt" => r.i64(2),
+                "state" => r.text(3),
+                "source" => r.text(4),
+                "playlistId" => r.opt_text(5),
+                "title" => r.opt_text(6),
+                "rules" => r.opt_text(7).and_then(|t| sonora_json::parse(&t).ok()).unwrap_or(Value::Null),
+                "confirmed" => r.i64(8) != 0,
+                "passes" => r.i64(9),
+                "retryAt" => r.opt_i64(10),
+                "error" => r.opt_text(11),
+                "finishedAt" => r.opt_i64(12),
+            }
+        },
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut counts = obj! { "total" => 0, "included" => 0, "leftOut" => 0, "pending" => 0, "searching" => 0, "found" => 0, "notFound" => 0, "downloading" => 0, "verifying" => 0, "done" => 0, "failed" => 0 };
+    let rows = c.query("SELECT included, status, COUNT(*) FROM playlist_items WHERE run_id = ? GROUP BY included, status", params![id], |r| (r.i64(0) != 0, r.text(1), r.i64(2)))?;
+    let mut total = 0;
+    let mut included = 0;
+    for (inc, status, n) in rows {
+        total += n;
+        if !inc {
+            continue;
+        }
+        included += n;
+        let key = match status.as_str() {
+            "pending" => "pending",
+            "searching" => "searching",
+            "found" => "found",
+            "not_found" => "notFound",
+            "downloading" => "downloading",
+            "verifying" => "verifying",
+            "done" => "done",
+            "failed" => "failed",
+            _ => continue,
+        };
+        let prev = counts.get(key).and_then(Value::as_i64).unwrap_or(0);
+        counts.set(key, prev + n);
+    }
+    counts.set("total", total);
+    counts.set("included", included);
+    counts.set("leftOut", total - included);
+    v.set("counts", counts);
+    let current = c.query_row("SELECT id, artist, title, variation FROM playlist_items WHERE run_id = ? AND status = 'searching' ORDER BY seq LIMIT 1", params![id], |r| {
+        obj! { "itemId" => r.i64(0), "title" => match r.opt_text(1) { Some(a) => format!("{a} – {}", r.text(2)), None => r.text(2) }, "variation" => r.opt_i64(3) }
+    })?;
+    v.set("current", current.unwrap_or(Value::Null));
+    Ok(Some(v))
+}
+
+impl PlaylistJobs {
+    /// Replaces how YouTube is reached (tests).
+    pub fn set_http(&self, h: Arc<dyn Http>) {
+        *lock(&self.tube) = h;
+    }
+
+    fn emit_run(&self, app: &App, run_id: i64, force: bool) {
+        if !force {
+            let mut last = lock(&self.inner.last_emit);
+            if last.is_some_and(|t| t.elapsed() < PLAYLIST_PROGRESS) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        if let Ok(Some(v)) = run_json(&app.db.read(), run_id) {
+            app.events.emit("playlist.changed", &v);
+        }
+    }
+
+    fn emit_item(&self, app: &App, item_id: i64) {
+        let c = app.db.read();
+        if let Ok(Some(item)) = load_item(&c, item_id) {
+            let track = item.track_id.and_then(|id| library::get_track(&c, id).ok().flatten()).map(|t| t.to_json());
+            drop(c);
+            app.events.emit("playlist.item", &item.to_json(track));
+        }
+    }
+
+    // ---------------------------------------------------------- the list
+
+    /// Starts reading the playlist at `source` (a link or an id) in the
+    /// background: a run in state `fetching`, then `draft` with its items,
+    /// or `failed` with the reason. The run's id.
+    pub fn fetch(&self, app: &Arc<App>, source: &str) -> Result<i64, ApiError> {
+        let id = youtube::playlist_id(source).map_err(|m| ApiError::new("invalid_params", m))?;
+        if self.inner.fetching.swap(true, Ordering::SeqCst) {
+            return Err(ApiError::new("busy", "A playlist is being read already; wait a moment."));
+        }
+        let now = now_ms();
+        let run_id = {
+            let c = app.db.write();
+            let inserted = c.execute("INSERT INTO playlist_runs (created_at, updated_at, state, source, playlist_id) VALUES (?, ?, 'fetching', ?, ?)", params![now, now, source.trim(), id]);
+            if let Err(e) = inserted {
+                self.inner.fetching.store(false, Ordering::SeqCst);
+                return Err(e.into());
+            }
+            c.last_insert_rowid()
+        };
+        let weak: Weak<App> = Arc::downgrade(app);
+        let tube = Arc::clone(&lock(&self.tube));
+        let base = self.base.clone();
+        let inner = Arc::clone(&self.inner);
+        let spawned = std::thread::Builder::new().name("sonora-playlist-fetch".into()).spawn(move || {
+            let Some(app) = weak.upgrade() else { return };
+            let mut last = Instant::now();
+            let progress = |n: usize| {
+                if last.elapsed() > Duration::from_millis(300) {
+                    last = Instant::now();
+                    app.events.emit("playlist.changed", &obj! { "id" => run_id, "state" => "fetching", "videos" => n as i64 });
+                }
+            };
+            let mut progress = progress;
+            let result = youtube::fetch(tube.as_ref(), &base, &id, &inner.stop, &mut progress);
+            let now = now_ms();
+            match result {
+                Ok(list) => {
+                    let c = app.db.write();
+                    let res = c.transaction(|tx| {
+                        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                        for (i, v) in list.videos.iter().enumerate() {
+                            let p = youtube::parse_title(&v.title, &v.channel);
+                            let mut left_out = youtube::leave_out(v, &p);
+                            let key = youtube::track_key(&p);
+                            if left_out.is_none() && !seen.insert(key) {
+                                left_out = Some("The same track is in the list already.".into());
+                            }
+                            tx.execute(
+                                "INSERT INTO playlist_items (run_id, seq, video_id, yt_title, channel, seconds, artist, title, mix, catalogue, included, left_out, status, updated_at) \
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                                params![run_id, i as i64, v.id, v.title, v.channel, v.seconds, p.artist, p.title, p.mix, p.catalogue, left_out.is_none(), left_out, now],
+                            )?;
+                        }
+                        let error: Option<String> = list.truncated.then(|| format!("Only the first {} videos were read.", youtube::MAX_VIDEOS));
+                        tx.execute("UPDATE playlist_runs SET state = 'draft', title = ?, error = ?, updated_at = ? WHERE id = ?", params![list.title, error, now, run_id])?;
+                        Ok::<(), StoreError>(())
+                    });
+                    if let Err(e) = res {
+                        let _ = c.execute("UPDATE playlist_runs SET state = 'failed', error = ?, updated_at = ? WHERE id = ?", params![format!("The list could not be saved: {e}"), now, run_id]);
+                    }
+                    pl_log("info", "playlist read", obj! { "run" => run_id, "videos" => list.videos.len() as i64 });
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    let _ = app.db.write().execute("UPDATE playlist_runs SET state = 'failed', error = ?, updated_at = ? WHERE id = ?", params![msg.clone(), now, run_id]);
+                    pl_log("warn", "playlist could not be read", obj! { "run" => run_id, "code" => e.code() });
+                }
+            }
+            inner.fetching.store(false, Ordering::SeqCst);
+            let summary = run_json(&app.db.read(), run_id).ok().flatten();
+            if let Some(v) = summary {
+                app.events.emit("playlist.changed", &v);
+            }
+        });
+        if spawned.is_err() {
+            self.inner.fetching.store(false, Ordering::SeqCst);
+            let _ = app.db.write().execute("UPDATE playlist_runs SET state = 'failed', error = 'SONORA could not start reading the playlist.' WHERE id = ?", params![run_id]);
+        }
+        Ok(run_id)
+    }
+
+    /// Every run, newest first (without their items).
+    pub fn list(&self, app: &App) -> Result<Value, StoreError> {
+        let c = app.db.read();
+        let ids = c.query("SELECT id FROM playlist_runs ORDER BY id DESC LIMIT 100", params![], |r| r.i64(0))?;
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some(v) = run_json(&c, id)? {
+                out.push(v);
+            }
+        }
+        Ok(Value::Array(out))
+    }
+
+    /// One run with its items (and the library track of each finished one).
+    pub fn get(&self, app: &App, id: i64) -> Result<Value, ApiError> {
+        let c = app.db.read();
+        let mut run = run_json(&c, id)?.ok_or_else(|| ApiError::new("not_found", "That playlist run is gone."))?;
+        let items = load_items(&c, id, "1")?;
+        let ids: Vec<i64> = items.iter().filter_map(|i| i.track_id).collect();
+        let tracks: std::collections::HashMap<i64, Value> = library::get_tracks(&c, &ids)?.into_iter().map(|t| (t.id, t.to_json())).collect();
+        run.set("items", Value::Array(items.iter().map(|i| i.to_json(i.track_id.and_then(|t| tracks.get(&t).cloned()))).collect()));
+        Ok(run)
+    }
+
+    /// Removes a run and everything noted about it. Not while it runs.
+    pub fn delete(&self, app: &App, id: i64) -> Result<(), ApiError> {
+        if *lock(&self.inner.active) == Some(id) {
+            return Err(ApiError::new("busy", "Stop the run before removing it."));
+        }
+        app.db.write().execute("DELETE FROM playlist_runs WHERE id = ?", params![id])?;
+        Ok(())
+    }
+
+    /// Puts videos in or out of the tracks to look for (a draft, or a run
+    /// that is not searching them yet).
+    pub fn include(&self, app: &App, run_id: i64, item_ids: &[i64], included: bool) -> Result<Value, ApiError> {
+        {
+            let c = app.db.write();
+            let now = now_ms();
+            for id in item_ids {
+                c.execute(
+                    "UPDATE playlist_items SET included = ?, updated_at = ? WHERE id = ? AND run_id = ? AND status IN ('pending', 'not_found', 'failed')",
+                    params![included, now, *id, run_id],
+                )?;
+            }
+        }
+        for id in item_ids {
+            self.emit_item(app, *id);
+        }
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    // ------------------------------------------------------- the search
+
+    /// Starts searching and downloading a draft, with the rules in use now
+    /// (kept with the run). One run searches at a time.
+    pub fn start(&self, app: &Arc<App>, run_id: i64) -> Result<Value, ApiError> {
+        let rules = app.settings().playlist_rules;
+        {
+            let c = app.db.write();
+            let state = c.query_row("SELECT state FROM playlist_runs WHERE id = ?", params![run_id], |r| r.text(0))?.ok_or_else(|| ApiError::new("not_found", "That playlist run is gone."))?;
+            if !matches!(state.as_str(), "draft" | "finished" | "cancelled" | "waiting" | "review") {
+                return Err(ApiError::new("invalid_params", format!("This run is {state}; it cannot be started now.")));
+            }
+            let n = c.query_row("SELECT COUNT(*) FROM playlist_items WHERE run_id = ? AND included = 1 AND status IN ('pending', 'not_found')", params![run_id], |r| r.i64(0))?.unwrap_or(0);
+            if n == 0 && state == "draft" {
+                return Err(ApiError::new("invalid_params", "There is nothing to look for: every video is left out."));
+            }
+            let now = now_ms();
+            c.execute(
+                "UPDATE playlist_runs SET state = 'running', rules = ?, confirmed = ?, error = NULL, retry_at = NULL, finished_at = NULL, updated_at = ? WHERE id = ?",
+                params![rules.to_json().to_string_compact(), rules.mode == "automatic", now, run_id],
+            )?;
+            // Searched again from the start: what was not found gets another look.
+            c.execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE run_id = ? AND included = 1 AND status = 'not_found'", params![now, run_id])?;
+        }
+        self.spawn(app, run_id)?;
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    /// Resumes runs left running when SONORA last quit.
+    pub fn resume(&self, app: &Arc<App>) {
+        let runs = {
+            let c = app.db.write();
+            let now = now_ms();
+            let _ = c.execute("UPDATE playlist_runs SET state = 'failed', error = 'SONORA quit while the list was being read. Fetch it again.', updated_at = ? WHERE state = 'fetching'", params![now]);
+            let _ = c.execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE status = 'searching'", params![now]);
+            c.query("SELECT id FROM playlist_runs WHERE state IN ('running', 'paused', 'waiting') ORDER BY id", params![], |r| r.i64(0)).unwrap_or_default()
+        };
+        for id in runs {
+            if self.spawn(app, id).is_ok() {
+                pl_log("info", "resumed a playlist run", obj! { "run" => id });
+                break;
+            }
+        }
+    }
+
+    fn spawn(&self, app: &Arc<App>, run_id: i64) -> Result<(), ApiError> {
+        let mut active = lock(&self.inner.active);
+        if let Some(other) = *active {
+            if other != run_id {
+                return Err(ApiError::new("busy", "Another playlist is being searched. Wait for it to finish, or stop it first."));
+            }
+            return Ok(());
+        }
+        self.inner.cancel.store(false, Ordering::SeqCst);
+        let weak: Weak<App> = Arc::downgrade(app);
+        let inner = Arc::clone(&self.inner);
+        let spawned = std::thread::Builder::new().name("sonora-playlist".into()).spawn(move || {
+            let worker = Worker { inner: Arc::clone(&inner), run_id };
+            worker.run(weak);
+            *lock(&inner.active) = None;
+        });
+        if spawned.is_err() {
+            return Err(ApiError::new("internal", "SONORA could not start the playlist worker."));
+        }
+        *active = Some(run_id);
+        Ok(())
+    }
+
+    fn wake(&self) {
+        *lock(&self.inner.woken) = true;
+        self.inner.wake.notify_all();
+    }
+
+    pub fn pause(&self, app: &App, run_id: i64) -> Result<Value, ApiError> {
+        let n = app.db.write().execute("UPDATE playlist_runs SET state = 'paused', updated_at = ? WHERE id = ? AND state = 'running'", params![now_ms(), run_id])?;
+        if n == 0 {
+            return Err(ApiError::new("invalid_params", "Only a running playlist can be paused."));
+        }
+        self.wake();
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    pub fn resume_run(&self, app: &Arc<App>, run_id: i64) -> Result<Value, ApiError> {
+        let n = app.db.write().execute("UPDATE playlist_runs SET state = 'running', updated_at = ? WHERE id = ? AND state IN ('paused', 'waiting')", params![now_ms(), run_id])?;
+        if n == 0 {
+            return Err(ApiError::new("invalid_params", "Only a paused playlist can be resumed."));
+        }
+        app.db.write().execute("UPDATE playlist_runs SET retry_at = NULL WHERE id = ?", params![run_id])?;
+        self.spawn(app, run_id)?;
+        self.wake();
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    /// Stops a run: searching stops, downloads on their way are cancelled
+    /// in slskd, finished tracks stay.
+    pub fn cancel(&self, app: &App, run_id: i64) -> Result<Value, ApiError> {
+        let active = *lock(&self.inner.active);
+        if active == Some(run_id) {
+            self.inner.cancel.store(true, Ordering::SeqCst);
+            self.wake();
+        } else {
+            // Nothing is working on it (a run in review or waiting): close it here.
+            let c = app.db.write();
+            let now = now_ms();
+            c.execute("UPDATE playlist_runs SET state = 'cancelled', finished_at = ?, updated_at = ? WHERE id = ? AND state IN ('running', 'paused', 'review', 'waiting')", params![now, now, run_id])?;
+            c.execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE run_id = ? AND status IN ('searching', 'found')", params![now, run_id])?;
+        }
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    /// In review mode: the picks are downloaded.
+    pub fn confirm(&self, app: &Arc<App>, run_id: i64) -> Result<Value, ApiError> {
+        let now = now_ms();
+        let n = app.db.write().execute("UPDATE playlist_runs SET confirmed = 1, state = 'running', updated_at = ? WHERE id = ? AND state IN ('review', 'running', 'paused')", params![now, run_id])?;
+        if n == 0 {
+            return Err(ApiError::new("invalid_params", "This run has no picks waiting."));
+        }
+        self.spawn(app, run_id)?;
+        self.wake();
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    /// Picks another of a track's candidates. A download on its way is
+    /// cancelled; the new pick is queued when the run next looks.
+    pub fn choose(&self, app: &Arc<App>, run_id: i64, item_id: i64, candidate: i64) -> Result<Value, ApiError> {
+        let item = load_item(&app.db.read(), item_id)?.filter(|i| i.run_id == run_id).ok_or_else(|| ApiError::new("not_found", "That track is not in this run."))?;
+        let accepted = item.accepted().len() as i64;
+        if candidate < 0 || candidate >= item.candidates.len() as i64 {
+            return Err(ApiError::new("invalid_params", "That candidate is not in the list."));
+        }
+        if candidate >= accepted {
+            return Err(ApiError::new("invalid_params", "That file was rejected by the rules; choose one that passed."));
+        }
+        if matches!(item.status.as_str(), "downloading") {
+            if let (Some(u), Some(t)) = (&item.transfer_user, &item.transfer_id) {
+                if let Err(e) = app.slskd.cancel_transfer(app, u, t, false) {
+                    pl_log("warn", "could not cancel the earlier pick", obj! { "code" => e.code });
+                }
+            }
+        }
+        let pick = &item.candidates[candidate as usize];
+        let note = format!("You chose {} from {}.", pick.name, pick.username);
+        let now = now_ms();
+        {
+            let c = app.db.write();
+            c.execute(
+                "UPDATE playlist_items SET chosen = ?, status = 'found', transfer_id = NULL, transfer_user = NULL, transfer_file = NULL, transfer_size = NULL, bytes_seen = NULL, progress_at = NULL, error = NULL, note = ?, attempts = 0, updated_at = ? WHERE id = ?",
+                params![candidate, note, now, item_id],
+            )?;
+            // A finished run takes the new pick up again.
+            c.execute("UPDATE playlist_runs SET state = 'running', confirmed = 1, finished_at = NULL, updated_at = ? WHERE id = ? AND state IN ('finished', 'cancelled', 'waiting')", params![now, run_id])?;
+        }
+        self.spawn(app, run_id)?;
+        self.wake();
+        self.emit_item(app, item_id);
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    /// Looks again for tracks that were not found (all of them, or `item_ids`).
+    pub fn retry(&self, app: &Arc<App>, run_id: i64, item_ids: Option<&[i64]>) -> Result<Value, ApiError> {
+        let now = now_ms();
+        {
+            let c = app.db.write();
+            let n = match item_ids {
+                Some(ids) => {
+                    let mut n = 0;
+                    for id in ids {
+                        n += c.execute("UPDATE playlist_items SET status = 'pending', included = 1, error = NULL, attempts = 0, updated_at = ? WHERE id = ? AND run_id = ? AND status IN ('not_found', 'failed')", params![now, *id, run_id])?;
+                    }
+                    n
+                }
+                None => c.execute("UPDATE playlist_items SET status = 'pending', error = NULL, attempts = 0, updated_at = ? WHERE run_id = ? AND included = 1 AND status IN ('not_found', 'failed')", params![now, run_id])?,
+            };
+            if n == 0 {
+                return Err(ApiError::new("invalid_params", "There is nothing to look for again."));
+            }
+            c.execute("UPDATE playlist_runs SET state = 'running', retry_at = NULL, finished_at = NULL, updated_at = ? WHERE id = ? AND state IN ('finished', 'cancelled', 'waiting', 'review')", params![now, run_id])?;
+        }
+        self.spawn(app, run_id)?;
+        self.wake();
+        self.emit_run(app, run_id, true);
+        Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
+    }
+
+    /// Stops the worker on the way out; the run stays as it is and carries
+    /// on at the next launch.
+    pub fn shutdown(&self) {
+        self.inner.stop.store(true, Ordering::SeqCst);
+        self.wake();
+    }
+
+    pub fn is_active(&self) -> Option<i64> {
+        *lock(&self.inner.active)
+    }
+}
+
+/// What happens to one item in one tick.
+enum Tick {
+    Done,
+    Wait,
+}
+
+struct Worker {
+    inner: Arc<PlaylistInner>,
+    run_id: i64,
+}
+
+impl Worker {
+    fn stopping(&self) -> bool {
+        self.inner.stop.load(Ordering::Relaxed) || self.inner.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Sleeps at most `d`, less when woken.
+    fn nap(&self, d: Duration) {
+        let mut woken = lock(&self.inner.woken);
+        if !*woken {
+            woken = self.inner.wake.wait_timeout(woken, d).map(|r| r.0).unwrap_or_else(|p| p.into_inner().0);
+        }
+        *woken = false;
+    }
+
+    fn rules(&self, app: &App) -> PlaylistRules {
+        let text = app.db.read().query_row("SELECT rules FROM playlist_runs WHERE id = ?", params![self.run_id], |r| r.opt_text(0)).ok().flatten().flatten();
+        text.and_then(|t| sonora_json::parse(&t).ok()).and_then(|v| PlaylistRules::from_json(&v).ok()).unwrap_or_else(|| app.settings().playlist_rules)
+    }
+
+    fn state(&self, app: &App) -> (String, bool, i64, Option<i64>) {
+        app.db
+            .read()
+            .query_row("SELECT state, confirmed, passes, retry_at FROM playlist_runs WHERE id = ?", params![self.run_id], |r| (r.text(0), r.i64(1) != 0, r.i64(2), r.opt_i64(3)))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| ("cancelled".into(), false, 0, None))
+    }
+
+    fn set_state(&self, app: &App, state: &str, error: Option<&str>) {
+        let now = now_ms();
+        let finished = matches!(state, "finished" | "cancelled" | "failed").then_some(now);
+        let _ = app.db.write().execute("UPDATE playlist_runs SET state = ?, error = ?, finished_at = ?, updated_at = ? WHERE id = ?", params![state, error, finished, now, self.run_id]);
+    }
+
+    fn run(&self, weak: Weak<App>) {
+        let mut slskd_down: Option<Instant> = None;
+        loop {
+            let Some(app) = weak.upgrade() else { return };
+            if self.inner.stop.load(Ordering::Relaxed) {
+                return;
+            }
+            if self.inner.cancel.load(Ordering::Relaxed) {
+                self.cancel_all(&app);
+                return;
+            }
+            let (state, confirmed, passes, retry_at) = self.state(&app);
+            let rules = self.rules(&app);
+            match state.as_str() {
+                "running" => {}
+                "paused" => {
+                    self.tick_downloads(&app, &rules);
+                    drop(app);
+                    self.nap(Duration::from_secs(1));
+                    continue;
+                }
+                "waiting" => {
+                    let due = retry_at.is_none_or(|t| now_ms() >= t);
+                    if due {
+                        let now = now_ms();
+                        let c = app.db.write();
+                        let _ = c.execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE run_id = ? AND included = 1 AND status = 'not_found'", params![now, self.run_id]);
+                        let _ = c.execute("UPDATE playlist_runs SET state = 'running', retry_at = NULL, passes = passes + 1, updated_at = ? WHERE id = ?", params![now, self.run_id]);
+                        drop(c);
+                        app.playlist.emit_run(&app, self.run_id, true);
+                    } else {
+                        drop(app);
+                        self.nap(Duration::from_secs(30));
+                    }
+                    continue;
+                }
+                _ => return,
+            }
+            self.tick_downloads(&app, &rules);
+            if confirmed {
+                self.start_downloads(&app, &rules);
+            }
+            let next = load_items(&app.db.read(), self.run_id, "included = 1 AND status = 'pending'").ok().and_then(|v| v.into_iter().next());
+            if let Some(item) = next {
+                match self.search(&app, &item, &rules) {
+                    Ok(()) => slskd_down = None,
+                    Err(e) => {
+                        // slskd is not answering: say so, and try the same track again in a while.
+                        let now = now_ms();
+                        let _ = app.db.write().execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE id = ?", params![now, item.id]);
+                        let _ = app.db.write().execute("UPDATE playlist_runs SET error = ?, updated_at = ? WHERE id = ?", params![e.message.clone(), now, self.run_id]);
+                        if slskd_down.is_none() {
+                            pl_log("warn", "search failed; waiting for slskd", obj! { "run" => self.run_id, "code" => e.code });
+                        }
+                        slskd_down.get_or_insert_with(Instant::now);
+                        app.playlist.emit_run(&app, self.run_id, true);
+                        drop(app);
+                        self.nap(Duration::from_secs(15));
+                    }
+                }
+                continue;
+            }
+            let active = app
+                .db
+                .read()
+                .query_row("SELECT COUNT(*) FROM playlist_items WHERE run_id = ? AND status IN ('downloading', 'verifying', 'found')", params![self.run_id], |r| r.i64(0))
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            if active > 0 && (confirmed || rules.mode == "automatic") {
+                drop(app);
+                self.nap(Duration::from_secs(2));
+                continue;
+            }
+            if !confirmed {
+                let found = app.db.read().query_row("SELECT COUNT(*) FROM playlist_items WHERE run_id = ? AND status = 'found'", params![self.run_id], |r| r.i64(0)).ok().flatten().unwrap_or(0);
+                if found > 0 {
+                    self.set_state(&app, "review", None);
+                    app.playlist.emit_run(&app, self.run_id, true);
+                    return;
+                }
+            }
+            let not_found = app.db.read().query_row("SELECT COUNT(*) FROM playlist_items WHERE run_id = ? AND included = 1 AND status = 'not_found'", params![self.run_id], |r| r.i64(0)).ok().flatten().unwrap_or(0);
+            if not_found > 0 && rules.retry_not_found && passes < MAX_PASSES {
+                let at = now_ms() + RETRY_AFTER.as_millis() as i64;
+                let _ = app.db.write().execute("UPDATE playlist_runs SET state = 'waiting', retry_at = ?, updated_at = ? WHERE id = ?", params![at, now_ms(), self.run_id]);
+                app.playlist.emit_run(&app, self.run_id, true);
+                drop(app);
+                self.nap(Duration::from_secs(30));
+                continue;
+            }
+            self.set_state(&app, "finished", None);
+            let summary = run_json(&app.db.read(), self.run_id).ok().flatten().unwrap_or(Value::Null);
+            pl_log("info", "playlist run finished", obj! { "run" => self.run_id });
+            app.events.emit("playlist.finished", &summary);
+            app.events.emit("playlist.changed", &summary);
+            return;
+        }
+    }
+
+    /// Stops everything on the way: downloads are cancelled in slskd, the
+    /// run is marked cancelled. Finished tracks stay.
+    fn cancel_all(&self, app: &Arc<App>) {
+        let items = load_items(&app.db.read(), self.run_id, "status IN ('downloading', 'verifying', 'searching', 'found')").unwrap_or_default();
+        let now = now_ms();
+        for item in items {
+            if item.status == "downloading" {
+                if let (Some(u), Some(t)) = (&item.transfer_user, &item.transfer_id) {
+                    let _ = app.slskd.cancel_transfer(app, u, t, false);
+                }
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'failed', error = 'Stopped.', updated_at = ? WHERE id = ?", params![now, item.id]);
+            } else {
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE id = ?", params![now, item.id]);
+            }
+            app.playlist.emit_item(app, item.id);
+        }
+        self.set_state(app, "cancelled", None);
+        let summary = run_json(&app.db.read(), self.run_id).ok().flatten().unwrap_or(Value::Null);
+        app.events.emit("playlist.finished", &summary);
+        app.events.emit("playlist.changed", &summary);
+    }
+
+    /// Looks for one track: the search variations in turn, until one finds
+    /// a file that passes the rules.
+    fn search(&self, app: &Arc<App>, item: &Item, rules: &PlaylistRules) -> Result<(), crate::slskd::SlskdError> {
+        let now = now_ms();
+        let db_err = |e: crate::db::sqlite::DbError| crate::slskd::SlskdError::new("storage_error", e.to_string());
+        app.db.write().execute("UPDATE playlist_items SET status = 'searching', variation = NULL, updated_at = ? WHERE id = ?", params![now, item.id]).map_err(db_err)?;
+        app.playlist.emit_item(app, item.id);
+        app.playlist.emit_run(app, self.run_id, true);
+        let want = item.want();
+        let mut best: Vec<Candidate> = Vec::new();
+        let mut responses = 0i64;
+        let mut used = None;
+        for (n, text) in matching::variations(&want) {
+            if self.stopping() {
+                return Ok(());
+            }
+            if self.state(app).0 != "running" {
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE id = ?", params![now_ms(), item.id]);
+                app.playlist.emit_item(app, item.id);
+                return Ok(());
+            }
+            let _ = app.db.write().execute("UPDATE playlist_items SET variation = ?, updated_at = ? WHERE id = ?", params![n as i64, now_ms(), item.id]);
+            app.playlist.emit_run(app, self.run_id, true);
+            let id = app.slskd.search(app, &text)?.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+            let started = Instant::now();
+            let mut stopped = false;
+            let st = loop {
+                self.nap(SEARCH_POLL);
+                if self.stopping() {
+                    let _ = app.slskd.stop(app, &id);
+                    return Ok(());
+                }
+                self.tick_downloads(app, rules);
+                let st = app.slskd.search_state(app, &id, false)?;
+                if st.state != "searching" {
+                    break st;
+                }
+                let limit = Duration::from_secs(rules.search_seconds.clamp(15, 25) as u64);
+                if !stopped && started.elapsed() > limit {
+                    let _ = app.slskd.stop(app, &id);
+                    stopped = true;
+                } else if stopped && started.elapsed() > limit + STOP_GRACE {
+                    break st;
+                }
+                app.playlist.emit_run(app, self.run_id, false);
+            };
+            responses += st.responses;
+            let ranked = matching::rank(&st.folders, &want, rules);
+            let ok = matching::sufficient(&ranked);
+            if ok || ranked.len() > best.len() {
+                best = ranked;
+                used = Some(n as i64);
+            }
+            if ok {
+                break;
+            }
+        }
+        let now = now_ms();
+        let found = matching::sufficient(&best);
+        let status = if found { "found" } else { "not_found" };
+        let error: Option<String> = (!found).then(|| if best.is_empty() { "No one answered with this track.".to_string() } else { "Every file found failed the rules.".to_string() });
+        app.db.write().execute(
+            "UPDATE playlist_items SET status = ?, variation = ?, responses = ?, candidates = ?, chosen = ?, attempts = 0, error = ?, updated_at = ? WHERE id = ?",
+            params![status, used, responses, candidates_json(&best), if found { Some(0i64) } else { None }, error, now, item.id],
+        ).map_err(db_err)?;
+        pl_log("info", "searched for a track", obj! { "run" => self.run_id, "item" => item.id, "found" => found, "variation" => used, "candidates" => best.len() as i64 });
+        app.playlist.emit_item(app, item.id);
+        app.playlist.emit_run(app, self.run_id, true);
+        Ok(())
+    }
+
+    /// Queues downloads for tracks that were found, up to the limit.
+    fn start_downloads(&self, app: &Arc<App>, rules: &PlaylistRules) {
+        let c = app.db.read();
+        let mut active = c.query_row("SELECT COUNT(*) FROM playlist_items WHERE run_id = ? AND status IN ('downloading', 'verifying')", params![self.run_id], |r| r.i64(0)).ok().flatten().unwrap_or(0);
+        let found = load_items(&c, self.run_id, "status = 'found'").unwrap_or_default();
+        drop(c);
+        for item in found {
+            if active >= rules.max_downloads || self.stopping() {
+                break;
+            }
+            let accepted = item.accepted();
+            let pick = item.chosen.unwrap_or(0).max(0) as usize;
+            if item.attempts >= MAX_ATTEMPTS || pick >= accepted.len() {
+                let why = if accepted.is_empty() {
+                    "No file passed the rules.".to_string()
+                } else {
+                    format!("None of the {} files could be downloaded.", accepted.len().min(MAX_ATTEMPTS as usize))
+                };
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'failed', error = ?, updated_at = ? WHERE id = ?", params![why, now_ms(), item.id]);
+                app.playlist.emit_item(app, item.id);
+                continue;
+            }
+            let c = accepted[pick].clone();
+            match app.slskd.download(app, &c.username, &[(c.filename.clone(), c.size)]) {
+                Ok(v) if v.get("queued").and_then(Value::as_i64).unwrap_or(0) > 0 => {
+                    // The transfer slskd made for it: the newest of that file from that person.
+                    let transfer = app.slskd.user_transfers(app, &c.username).ok().and_then(|ts| ts.into_iter().rev().find(|t| t.filename == c.filename && t.active()));
+                    let now = now_ms();
+                    let _ = app.db.write().execute(
+                        "UPDATE playlist_items SET status = 'downloading', transfer_id = ?, transfer_user = ?, transfer_file = ?, transfer_size = ?, bytes_seen = 0, progress_at = ?, attempts = attempts + 1, error = NULL, updated_at = ? WHERE id = ?",
+                        params![transfer.as_ref().map(|t| t.id.clone()), c.username, c.filename, c.size, now, now, item.id],
+                    );
+                    pl_log("info", "download queued", obj! { "run" => self.run_id, "item" => item.id, "attempt" => item.attempts + 1 });
+                    active += 1;
+                    app.playlist.emit_item(app, item.id);
+                }
+                Ok(_) => {
+                    self.fallback(app, &item, "slskd could not ask for it", true);
+                }
+                Err(e) => {
+                    if e.code == "slskd_unreachable" || e.code == "slskd_offline" {
+                        break;
+                    }
+                    self.fallback(app, &item, &e.message, true);
+                }
+            }
+        }
+    }
+
+    /// The pick did not work out: the next candidate is tried (up to
+    /// `MAX_ATTEMPTS` in all), or the track is given up on.
+    fn fallback(&self, app: &Arc<App>, item: &Item, why: &str, count: bool) {
+        let fresh = load_item(&app.db.read(), item.id).ok().flatten().unwrap_or_else(|| item.clone());
+        let accepted = fresh.accepted().len() as i64;
+        let next = fresh.chosen.unwrap_or(0) + 1;
+        let attempts = fresh.attempts + if count { 1 } else { 0 };
+        let pick = fresh.chosen.unwrap_or(0).max(0) as usize;
+        let name = fresh.candidates.get(pick).map(|c| format!("{} from {}", c.name, c.username)).unwrap_or_else(|| "the pick".into());
+        let now = now_ms();
+        let again = next < accepted && attempts < MAX_ATTEMPTS;
+        let note = match (&fresh.note, again) {
+            (Some(n), true) => format!("{n} {name} did not work out ({why}); trying the next."),
+            (None, true) => format!("{name} did not work out ({why}); trying the next."),
+            (Some(n), false) => format!("{n} {name} did not work out ({why})."),
+            (None, false) => format!("{name} did not work out ({why})."),
+        };
+        let status = if again { "found" } else { "failed" };
+        let error: Option<String> = (!again).then(|| format!("Gave up after {} {}: {why}", attempts.max(1), if attempts.max(1) == 1 { "try" } else { "tries" }));
+        let _ = app.db.write().execute(
+            "UPDATE playlist_items SET status = ?, chosen = ?, attempts = ?, note = ?, error = ?, transfer_id = NULL, transfer_user = NULL, transfer_file = NULL, transfer_size = NULL, bytes_seen = NULL, progress_at = NULL, updated_at = ? WHERE id = ?",
+            params![status, if again { next } else { fresh.chosen.unwrap_or(0) }, attempts, note, error, now, item.id],
+        );
+        pl_log("info", "pick did not work out", obj! { "run" => self.run_id, "item" => item.id, "again" => again });
+        app.playlist.emit_item(app, item.id);
+        app.playlist.emit_run(app, self.run_id, true);
+    }
+
+    /// Follows the downloads on their way and the files that arrived.
+    fn tick_downloads(&self, app: &Arc<App>, rules: &PlaylistRules) {
+        let items = load_items(&app.db.read(), self.run_id, "status IN ('downloading', 'verifying')").unwrap_or_default();
+        for item in items {
+            if self.stopping() {
+                return;
+            }
+            let result = if item.status == "downloading" { self.tick_transfer(app, &item) } else { self.tick_arrival(app, &item, rules) };
+            if let Tick::Done = result {
+                app.playlist.emit_item(app, item.id);
+                app.playlist.emit_run(app, self.run_id, false);
+            }
+        }
+    }
+
+    fn tick_transfer(&self, app: &Arc<App>, item: &Item) -> Tick {
+        let (Some(user), Some(file)) = (item.transfer_user.clone(), item.transfer_file.clone()) else {
+            self.fallback(app, item, "slskd gave it no transfer", false);
+            return Tick::Done;
+        };
+        // The transfer, by id or (when slskd gave none back) by file.
+        let found = match &item.transfer_id {
+            Some(id) => app.slskd.transfer(app, &user, id),
+            None => app.slskd.user_transfers(app, &user).map(|ts| ts.into_iter().rev().find(|t| t.filename == file)),
+        };
+        let t = match found {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                self.fallback(app, item, "slskd no longer lists the download", false);
+                return Tick::Done;
+            }
+            Err(_) => return Tick::Wait,
+        };
+        let now = now_ms();
+        if item.transfer_id.is_none() {
+            let _ = app.db.write().execute("UPDATE playlist_items SET transfer_id = ? WHERE id = ?", params![t.id.clone(), item.id]);
+        }
+        match t.state {
+            "done" => {
+                // The size slskd reports at the end is the file's (what the
+                // other person's client announced may have been off).
+                let size = if t.size > 0 { t.size } else { item.transfer_size.unwrap_or(0) };
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'verifying', transfer_size = ?, bytes_seen = ?, progress_at = ?, updated_at = ? WHERE id = ?", params![size, size, now, now, item.id]);
+                Tick::Done
+            }
+            "failed" | "cancelled" => {
+                let why = t.detail.clone().unwrap_or_else(|| if t.state == "cancelled" { "the download was cancelled".into() } else { "the download failed".into() });
+                self.fallback(app, item, &why, false);
+                Tick::Done
+            }
+            _ => {
+                let moved = t.bytes > item.bytes_seen.unwrap_or(0);
+                if moved {
+                    let _ = app.db.write().execute("UPDATE playlist_items SET bytes_seen = ?, progress_at = ?, updated_at = ? WHERE id = ?", params![t.bytes, now, now, item.id]);
+                    return Tick::Done;
+                }
+                let since = item.progress_at.map(|p| (now - p).max(0)).unwrap_or(0) as u128;
+                let limit = if t.state == "queued" { QUEUE_WAIT } else { STALL };
+                if since > limit.as_millis() {
+                    let _ = app.slskd.cancel_transfer(app, &user, &t.id, false);
+                    let why = if t.state == "queued" { format!("still in {user}’s queue after an hour") } else { "no progress for 15 minutes".to_string() };
+                    self.fallback(app, item, &why, false);
+                    return Tick::Done;
+                }
+                Tick::Wait
+            }
+        }
+    }
+
+    fn tick_arrival(&self, app: &Arc<App>, item: &Item, rules: &PlaylistRules) -> Tick {
+        let (Some(file), Some(size)) = (item.transfer_file.clone(), item.transfer_size) else {
+            self.fallback(app, item, "the download left no file to look for", false);
+            return Tick::Done;
+        };
+        let now = now_ms();
+        let local = match crate::slskd::local_file(&app.db.read(), &file, size) {
+            Ok(l) => l,
+            Err(_) => return Tick::Wait,
+        };
+        let Some(local) = local else {
+            let waited = item.progress_at.map(|p| (now - p).max(0)).unwrap_or(0) as u128;
+            if waited > ARRIVAL_WAIT.as_millis() {
+                self.fallback(app, item, "the finished file did not turn up in the download folder SONORA watches", false);
+                return Tick::Done;
+            }
+            // SONORA's watcher looks every 20 seconds; asked to look now.
+            app.sources.wake();
+            return Tick::Wait;
+        };
+        match local.state.as_str() {
+            "review" => {
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'done', note = ?, updated_at = ? WHERE id = ?", params!["Waiting for your review under Downloads.", now, item.id]);
+                Tick::Done
+            }
+            "declined" => {
+                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'done', note = 'You kept it out of the library.', updated_at = ? WHERE id = ?", params![now, item.id]);
+                Tick::Done
+            }
+            "failed" => {
+                self.fallback(app, item, &local.error.unwrap_or_else(|| "SONORA could not read it as audio".into()), false);
+                Tick::Done
+            }
+            _ => {
+                let Some(track_id) = local.track_id else { return Tick::Wait };
+                let track = match library::get_track(&app.db.read(), track_id) {
+                    Ok(Some(t)) => t,
+                    _ => return Tick::Wait,
+                };
+                match track.status.as_str() {
+                    "done" => {
+                        // What it is made of, not what its name says: a WAV
+                        // named .flac is fine, an MP3 named .flac is not.
+                        let flag = |f: &str| track.flags.iter().any(|x| x == f);
+                        let problem = if flag("source_concern") {
+                            Some("SONORA found signs it was made from a lossy source")
+                        } else if flag("integrity") {
+                            Some("SONORA found damage or truncation in it")
+                        } else if track.lossless == Some(false) && !rules.lossy {
+                            Some("it turned out to be lossy")
+                        } else if track.lossless == Some(false) && track.bitrate_kbps.is_some_and(|b| (b.round() as i64) < rules.min_bitrate) {
+                            Some("its bit rate is below the minimum")
+                        } else {
+                            None
+                        };
+                        match problem {
+                            Some(p) => {
+                                let keep = format!("{p} (the file stays in the library as {}).", track.display_title());
+                                let _ = app.db.write().execute("UPDATE playlist_items SET track_id = ?, updated_at = ? WHERE id = ?", params![track_id, now, item.id]);
+                                self.fallback(app, item, &keep, false);
+                            }
+                            None => {
+                                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'done', track_id = ?, error = NULL, updated_at = ? WHERE id = ?", params![track_id, now, item.id]);
+                                pl_log("info", "track verified", obj! { "run" => self.run_id, "item" => item.id, "track" => track_id });
+                            }
+                        }
+                        Tick::Done
+                    }
+                    "failed" => {
+                        self.fallback(app, item, &format!("it could not be analysed ({})", track.error_message.clone().unwrap_or_default()), false);
+                        Tick::Done
+                    }
+                    _ => Tick::Wait,
+                }
+            }
+        }
+    }
+}

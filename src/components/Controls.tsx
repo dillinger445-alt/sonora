@@ -1,6 +1,6 @@
 /** Small form controls: segmented control, tabs, checkbox, search field, switch. */
 
-import { forwardRef, useEffect, useRef, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
+import { forwardRef, useEffect, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { LuSearch, LuX } from 'react-icons/lu';
 import { formatCount } from '../lib/format.ts';
 
@@ -247,4 +247,54 @@ export function ProgressBar({ value, label, tone = 'lime', size = 'md' }: { valu
 
 export function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="kbd">{children}</kbd>;
+}
+
+/** A number with − and + buttons; typed values are clamped to the range on Enter or blur. */
+export function NumberStepper({ value, min, max, step = 1, onChange, label, unit }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; label: string; unit?: string }) {
+  const [text, setText] = useState(String(value));
+  const [lastValue, setLastValue] = useState(value);
+  if (value !== lastValue) {
+    setLastValue(value);
+    setText(String(value));
+  }
+  const commit = (raw: string) => {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) {
+      setText(String(value));
+      return;
+    }
+    const clamped = Math.max(min, Math.min(max, Math.round(v / step) * step));
+    setText(String(clamped));
+    if (clamped !== value) onChange(clamped);
+  };
+  return (
+    <div className="stepper">
+      <button type="button" className="stepper-btn" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - step))}>
+        −
+      </button>
+      <input
+        className="stepper-input num"
+        inputMode="numeric"
+        aria-label={label}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            onChange(Math.min(max, value + step));
+          }
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            onChange(Math.max(min, value - step));
+          }
+        }}
+      />
+      <button type="button" className="stepper-btn" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + step))}>
+        +
+      </button>
+      {unit ? <span className="stepper-unit faint">{unit}</span> : null}
+    </div>
+  );
 }

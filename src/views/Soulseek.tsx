@@ -16,6 +16,7 @@ import { throttle } from '../state/emitter.ts';
 import { useToast } from '../state/toasts.tsx';
 import { useResource, type Resource } from '../state/useResource.ts';
 import { SoulseekDownloads } from './SoulseekDownloads.tsx';
+import { SoulseekPlaylist } from './SoulseekPlaylist.tsx';
 import { SoulseekSearch } from './SoulseekSearch.tsx';
 import { SoulseekSetup } from './SoulseekSetup.tsx';
 
@@ -271,6 +272,7 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
           <TabList
             items={[
               { id: 'search', label: 'Search' },
+              { id: 'playlist', label: 'YouTube playlist' },
               { id: 'downloads', label: 'Downloads', count: activeCount + waiting || undefined },
               { id: 'setup', label: 'Setup' },
             ]}
@@ -290,6 +292,8 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
                   Searching needs slskd. <a className="link" href={formatRoute({ view: 'soulseek', tab: 'setup' })}>Set it up</a> first.
                 </p>
               )
+            ) : current === 'playlist' ? (
+              <SoulseekPlaylist state={state} />
             ) : current === 'downloads' ? (
               <SoulseekDownloads state={state} />
             ) : (

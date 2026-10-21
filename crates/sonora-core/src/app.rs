@@ -55,6 +55,8 @@ pub struct App {
     pub service: Arc<crate::slskd_service::Service>,
     /// Soulseek files being listened to before they are downloaded.
     pub previews: Arc<crate::preview::Previews>,
+    /// YouTube playlists downloaded from Soulseek, track by track.
+    pub playlist: Arc<crate::jobs::PlaylistJobs>,
 }
 
 impl App {
@@ -112,8 +114,13 @@ impl App {
             secrets,
             service,
             previews: Arc::new(crate::preview::Previews::default()),
+            playlist: Arc::new(crate::jobs::PlaylistJobs::default()),
         });
         crate::sources::Watcher::start(&app);
+        // A playlist run quit half way carries on.
+        if crate::sources::accepted_at(&app.db.read()).is_some() {
+            app.playlist.resume(&app);
+        }
         // SONORA's own slskd (when it set one up) runs while SONORA does, and
         // in the background mode from login on.
         {
@@ -229,6 +236,7 @@ impl App {
         self.syncer.cancel();
         self.discogs.cancel();
         self.previews.stop_all(self);
+        self.playlist.shutdown();
         self.scans.shutdown(Duration::from_secs(5));
         self.service.on_quit(self);
         logging::log("info", "app", "core stopped");

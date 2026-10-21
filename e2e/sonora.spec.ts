@@ -9,7 +9,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { incompletePath, startFakeSlskd } from './fakeSlskd.ts';
-import { DATA, LIBRARY, MANAGED_SLSKD_PORT, MUSIC } from './paths.ts';
+import { E2E_PLAYLIST, startFakeYoutube } from './fakeYoutube.ts';
+import { DATA, LIBRARY, MANAGED_SLSKD_PORT, MUSIC, YOUTUBE_PORT } from './paths.ts';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -1215,5 +1216,144 @@ test('Soulseek previews play while the file arrives, are never downloads, queue 
     expect((await api<{ total: number }>(page, 'library.query', { limit: 1 })).total).toBe(tracksBefore);
   } finally {
     await slskd.close();
+  }
+});
+
+test('a YouTube playlist is read, searched, downloaded by the rules and checked on arrival', async ({ page }) => {
+  // Searching, waiting for arrivals and a fallback take a while, all against stand-ins.
+  test.setTimeout(240_000);
+  // A stand-in YouTube serves the saved playlist page; a stand-in slskd
+  // answers every search with the same shared files (SONORA's rules pick
+  // among them) and "receives" downloads into its folder. Nothing reaches
+  // YouTube or Soulseek.
+  const root = join(DATA, 'playlist-slskd');
+  rmSync(root, { recursive: true, force: true });
+  const downloads = join(root, 'downloads');
+  const incomplete = join(root, 'incomplete');
+  mkdirSync(downloads, { recursive: true });
+  mkdirSync(incomplete, { recursive: true });
+  const ep = '@@shared\\Music\\Kerri Chandler - Rain EP';
+  const nd = '@@shared\\Music\\Night Drive - Afterglow';
+  const clean = join(MUSIC, 'clean_master.flac');
+  const fakeMp3 = join(MUSIC, 'transcode_mp3_128.flac');
+  const other = join(MUSIC, 'clean_master_16bit.wav');
+  const tube = await startFakeYoutube(YOUTUBE_PORT);
+  const slskd = await startFakeSlskd(
+    [
+      { username: 'crate-digger', filename: `${ep}\\01 Rain (Original Mix).flac`, size: statSync(clean).size, bitDepth: 16, sampleRate: 44100, length: 20, source: clean },
+      // A "FLAC" made from an MP3: the first pick for Afterglow, which the arrival check throws out.
+      { username: 'crate-digger', filename: `${nd}\\02 Afterglow.flac`, size: statSync(fakeMp3).size, bitDepth: 16, sampleRate: 44100, length: 20, source: fakeMp3 },
+      { username: 'backup', filename: `${nd}\\Night Drive - Afterglow.wav`, size: statSync(other).size, bitDepth: 16, sampleRate: 44100, length: 20, source: other },
+      { username: 'mp3-only', filename: 'mp3s\\Rain (Original Mix).mp3', size: 480_000, bitRate: 320, length: 20 },
+    ],
+    { downloads, incomplete, rate: 256 * 1024 },
+  );
+  try {
+    // slskd as set up by the earlier tests (or here, so this test runs on
+    // its own), with this stand-in's address and key.
+    await page.goto('/#/soulseek');
+    await api(page, 'sources.accept');
+    slskd.key = 'e2e-playlist-key-0123456789';
+    await api(page, 'slskd.configure', { url: slskd.url, apiKey: slskd.key });
+    await api(page, 'sources.configure', { folder: downloads });
+    await api(page, 'settings.update', { values: { playlistRules: { searchSeconds: 15, retryNotFound: false, maxDownloads: 2, maxQueue: 20, mode: 'automatic', lossy: false } } });
+
+    await page.goto('/#/soulseek?tab=playlist');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Download a YouTube playlist from Soulseek' })).toBeVisible();
+    const link = page.getByRole('textbox', { name: 'YouTube playlist link' });
+
+    // A private list is refused with the reason; so is a link without a playlist.
+    await link.fill('https://www.youtube.com/watch?v=e2eRain0001');
+    await page.getByRole('button', { name: 'Read the playlist' }).click();
+    await expect(page.getByText('That link has no playlist in it', { exact: false })).toBeVisible();
+    await link.fill('https://www.youtube.com/playlist?list=PLsomebodyElsesPrivateList');
+    await page.getByRole('button', { name: 'Read the playlist' }).click();
+    await expect(page.getByText('This playlist is private', { exact: false })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Try another link' }).click();
+
+    // The list, read as tracks; what is not a track is left out, and can be put back.
+    await link.fill(`https://www.youtube.com/playlist?list=${E2E_PLAYLIST}`);
+    await page.getByRole('button', { name: 'Read the playlist' }).click();
+    await expect(page.getByRole('heading', { name: 'Late Night E2E' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('3 tracks to look for, 1 left out')).toBeVisible();
+    expect(tube.requests).toEqual(['PLsomebodyElsesPrivateList', E2E_PLAYLIST]);
+    const draft = page.locator('.pl-table.is-draft').first();
+    await expect(draft.getByRole('row')).toHaveCount(4);
+    await expect(draft.getByText('Kerri Chandler – Rain')).toBeVisible();
+    await expect(draft.getByText('Original Mix', { exact: true })).toBeVisible();
+    await expect(draft.getByText('NDR001')).toBeVisible();
+    await page.getByText('Left out: 1 video').click();
+    const short = page.getByRole('checkbox', { name: 'Look for Night Drive – Lights' });
+    await short.check();
+    await expect(page.getByText('4 tracks to look for')).toBeVisible();
+    await short.uncheck();
+    await expect(page.getByText('3 tracks to look for, 1 left out')).toBeVisible();
+    // The quick rules are the settings themselves.
+    await page.getByRole('radio', { name: 'Review first' }).click();
+    await expect.poll(async () => ((await api<{ playlistRules: { mode: string } }>(page, 'settings.get')).playlistRules.mode)).toBe('review');
+    await page.getByRole('radio', { name: 'Automatic' }).click();
+
+    // Start: one search at a time, fewest words first; the pick is downloaded as soon as a track is found.
+    await page.getByRole('button', { name: 'Start' }).click();
+    await expect(page.locator('.pl-state')).toContainText('Searching for', { timeout: 15_000 });
+    await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toBeVisible();
+    await expect(page.locator('.pl-state')).toContainText('Done: 2 tracks downloaded and checked, 1 not found.', { timeout: 200_000 });
+    expect(slskd.searches[0]).toBe('Rain Original Mix');
+    expect(slskd.searches).toContain('Someone Nowhere To Be Found');
+    await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toHaveCount(0);
+
+    // Rain: found with the first search, downloaded, checked; the MP3 was out by the rules.
+    const rain = page.getByRole('row', { name: /Kerri Chandler – Rain/ }).first();
+    await expect(rain).toContainText('Done');
+    await expect(rain).toContainText('01 Rain (Original Mix).flac');
+    await rain.getByRole('button', { name: 'Details of Kerri Chandler – Rain' }).click();
+    const rainDetail = page.locator('.pl-detail').first();
+    await expect(rainDetail).toContainText('Found with search 1 of 5');
+    await expect(rainDetail).toContainText('MP3: lossy formats are off');
+    await expect(rainDetail.getByText('Downloaded')).toBeVisible();
+
+    // Afterglow: the first pick turned out to be made from an MP3, so the next file was taken.
+    const after = page.getByRole('row', { name: /Night Drive – Afterglow/ }).first();
+    await expect(after).toContainText('Done');
+    await expect(after).toContainText('Night Drive - Afterglow.wav');
+    await after.getByRole('button', { name: 'Details of Night Drive – Afterglow' }).click();
+    const afterDetail = page.locator('.pl-detail').nth(1);
+    await expect(afterDetail).toContainText('02 Afterglow.flac from crate-digger did not work out (SONORA found signs it was made from a lossy source');
+    await expect(afterDetail).toContainText('2 download tries');
+
+    // Nowhere To Be Found: everyone answered with other files, all rejected with a reason.
+    await page.getByRole('button', { name: 'Not found' }).click();
+    const none = page.getByRole('row', { name: /Someone – Nowhere To Be Found/ }).first();
+    await expect(none).toContainText('Every file found failed the rules.');
+    await none.getByRole('button', { name: 'Details of Someone – Nowhere To Be Found' }).click();
+    await expect(page.locator('.pl-detail').first()).toContainText('shares only 0% of the title’s words');
+    await page.getByRole('button', { name: /^All \d/ }).click();
+
+    // The library has the two files, checked: the arrival check is the usual one.
+    await waitIdle(page);
+    const tracks = await api<{ total: number; rows: { fileName: string; flags: string[] }[] }>(page, 'library.query', { filter: {}, limit: 500 });
+    const names = tracks.rows.map((r) => r.fileName);
+    expect(names).toContain('01 Rain (Original Mix).flac');
+    expect(names).toContain('Night Drive - Afterglow.wav');
+    expect(names).toContain('02 Afterglow.flac');
+    expect(tracks.rows.find((r) => r.fileName === '02 Afterglow.flac')?.flags).toContain('source_concern');
+
+    // Settings holds every rule.
+    await page.goto('/#/settings');
+    const rules = page.getByRole('region', { name: 'Playlist download rules' });
+    await expect(rules.getByRole('checkbox', { name: /^FLAC/ })).toBeChecked();
+    await expect(rules.getByRole('checkbox', { name: /^WavPack/ })).not.toBeChecked();
+    const bitrate = rules.getByRole('textbox', { name: 'Lowest bit rate', exact: true });
+    await expect(bitrate).toHaveCount(0);
+    await rules.getByRole('switch', { name: 'Lossy files too' }).click();
+    await expect(bitrate).toHaveValue('320');
+    await rules.getByRole('switch', { name: 'Lossy files too' }).click();
+    await expect(bitrate).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('region', { name: 'Playlist download rules' }).getByRole('switch', { name: 'Lossy files too' })).not.toBeChecked();
+  } finally {
+    await slskd.close();
+    await tube.close();
   }
 });

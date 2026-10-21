@@ -1,4 +1,4 @@
-import { LuCircleArrowUp, LuDisc3, LuShieldCheck, LuTriangleAlert, LuUsb, LuX } from 'react-icons/lu';
+import { LuCircleArrowUp, LuDisc3, LuListMusic, LuShieldCheck, LuTriangleAlert, LuUsb, LuX } from 'react-icons/lu';
 import { formatCount, formatEta, formatPercent } from '../lib/format.ts';
 import { formatRoute } from '../lib/router.ts';
 import { useCore, useScan } from '../state/core.tsx';
@@ -40,14 +40,33 @@ function UpdateItem() {
   return null;
 }
 
-/** Exports and Discogs lookups running in the background. */
+/** Exports, Discogs lookups and playlist downloads running in the background. */
 function JobItems() {
   const jobs = useJobs();
   const ex = jobs.exportProgress;
   const dg = jobs.discogsProgress;
   const usb = jobs.usbProgress;
+  const pl = jobs.playlistRun;
+  const plSettled = pl ? pl.counts.done + pl.counts.failed + pl.counts.notFound : 0;
   return (
     <>
+      {pl ? (
+        <span className="sb-item sb-job" role="status">
+          <LuListMusic aria-hidden />
+          <a className="sb-link" href={formatRoute({ view: 'soulseek', tab: 'playlist' })}>
+            {pl.state === 'paused' ? 'Playlist paused' : 'Playlist'}
+          </a>
+          <span className="num">
+            {formatCount(plSettled)}/{formatCount(pl.counts.included)}
+          </span>
+          <span className="sb-job-bar">
+            <ProgressBar value={pl.counts.included > 0 ? plSettled / pl.counts.included : 0} label="Playlist progress" size="sm" />
+          </span>
+          <button type="button" className="sb-job-stop" aria-label="Stop the playlist" data-tip="Stop the playlist" onClick={jobs.cancelPlaylist}>
+            <LuX aria-hidden />
+          </button>
+        </span>
+      ) : null}
       {jobs.usbRunning ? (
         <span className="sb-item sb-job" role="status">
           <LuUsb aria-hidden />

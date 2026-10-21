@@ -35,6 +35,9 @@ const EVENT_NAMES = Object.keys({
   'sources.imported': true,
   'slskd.setup': true,
   'preview.changed': true,
+  'playlist.changed': true,
+  'playlist.item': true,
+  'playlist.finished': true,
 } satisfies Record<CoreEventName, true>) as CoreEventName[];
 
 interface CallResponse {
