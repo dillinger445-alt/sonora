@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LuChevronDown, LuChevronRight, LuCircleAlert, LuCircleCheck, LuExternalLink, LuListMusic, LuLoaderCircle, LuPause, LuPlay, LuRefreshCw, LuSearch, LuTrash2, LuX } from 'react-icons/lu';
-import type { PlaylistCandidate, PlaylistItem, PlaylistRun, PlaylistRunState } from '../api/types.ts';
+import type { PlaylistItem, PlaylistRun, PlaylistRunState } from '../api/types.ts';
 import { Button, IconButton } from '../components/Button.tsx';
 import { Checkbox, ProgressBar } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
