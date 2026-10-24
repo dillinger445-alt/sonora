@@ -50,7 +50,7 @@ const COMPARE_ROWS: { label: string; value: (t: DuplicateMember) => string; num?
   { label: 'Duration', value: (t) => formatDuration(t.duration), num: true },
   { label: 'Loudness', value: (t) => (t.integratedLufs != null ? `${formatDb(t.integratedLufs)} LUFS` : DASH), num: true },
   { label: 'True peak', value: (t) => (t.truePeak != null ? `${formatDb(t.truePeak, 2, true)} dBTP` : DASH), num: true },
-  { label: 'Cutoff', value: (t) => (t.cutoffHz ? formatHz(t.cutoffHz) : 'None'), num: true },
+  { label: 'Cutoff', value: (t) => (t.cutoffHz ? formatHz(t.cutoffHz) : t.status === 'done' ? 'None' : DASH), num: true },
   { label: 'Confidence', value: (t) => t.confidenceLabel ?? DASH },
   { label: 'File size', value: (t) => formatBytes(t.size), num: true },
 ];

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="currentColor">
+  <line x1="200.5" y1="538.6" x2="128.8" y2="493.7" stroke="currentColor" stroke-width="77.8" stroke-linecap="round"/>
+  <line x1="345.0" y1="432.0" x2="281.8" y2="317.9" stroke="currentColor" stroke-width="77.8" stroke-linecap="round"/>
+  <line x1="512.0" y1="409.6" x2="512.0" y2="237.6" stroke="currentColor" stroke-width="77.8" stroke-linecap="round"/>
+  <line x1="679.0" y1="432.0" x2="742.2" y2="317.9" stroke="currentColor" stroke-width="77.8" stroke-linecap="round"/>
+  <line x1="823.5" y1="538.6" x2="895.2" y2="493.7" stroke="currentColor" stroke-width="77.8" stroke-linecap="round"/>
+  <line x1="512.0" y1="733.2" x2="612.1" y2="485.4" stroke="currentColor" stroke-width="79.9" stroke-linecap="round"/>
+  <circle cx="512.0" cy="733.2" r="92.2" fill="currentColor"/>
+</svg>

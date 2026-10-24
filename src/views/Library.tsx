@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { LuFolderPlus, LuLibrary, LuPlus, LuX } from 'react-icons/lu';
 import { Button } from '../components/Button.tsx';
 import { EmptyState, ViewHeader } from '../components/Layout.tsx';
-import { formatCount, formatSpan } from '../lib/format.ts';
+import { formatSpan, plural } from '../lib/format.ts';
 import { navigate } from '../lib/router.ts';
 import { useCore } from '../state/core.tsx';
 import { useImports } from '../state/imports.tsx';
@@ -25,7 +25,7 @@ export function LibraryView({ folderId }: { folderId?: number }) {
           folderId != null ? (
             <span className="selectable">{folder?.path ?? ''}</span>
           ) : t && t.total > 0 ? (
-            `${formatCount(t.total)} tracks${overview?.totalDuration ? `, ${formatSpan(overview.totalDuration)} of audio` : ''}. Double-click a track for its full analysis.`
+            `${plural(t.total, 'track')}${overview?.totalDuration ? `, ${formatSpan(overview.totalDuration)} of audio` : ''}. Double-click a track for its full analysis.`
           ) : undefined
         }
         actions={

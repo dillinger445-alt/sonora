@@ -28,6 +28,23 @@ pub struct MpegInfo {
     pub avg_bitrate_kbps: Option<f64>,
     pub encoder_delay: Option<u16>,
     pub encoder_padding: Option<u16>,
+    /// Samples per channel in one frame (1152 for MPEG-1 Layer III).
+    pub samples_per_frame: u32,
+}
+
+impl MpegInfo {
+    /// The length the Xing, Info or VBRI header declares (its frame count,
+    /// less the encoder's delay and padding). `None` without such a header:
+    /// a plain stream declares no length.
+    pub fn declared_secs(&self) -> Option<f64> {
+        let frames = self.frames.filter(|f| *f > 0)?;
+        if self.sample_rate == 0 || self.samples_per_frame == 0 {
+            return None;
+        }
+        let trim = self.encoder_delay.unwrap_or(0) as f64 + self.encoder_padding.unwrap_or(0) as f64;
+        let samples = (frames as f64 * self.samples_per_frame as f64 - trim).max(0.0);
+        Some(samples / self.sample_rate as f64)
+    }
 }
 
 const BR_V1_L1: [u32; 15] = [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448];
@@ -181,6 +198,7 @@ pub fn parse_bytes(buf: &[u8]) -> Option<MpegInfo> {
         avg_bitrate_kbps: None,
         encoder_delay: None,
         encoder_padding: None,
+        samples_per_frame: h.samples(),
     };
 
     let frame = &buf[pos..(pos + h.frame_len()).min(buf.len())];

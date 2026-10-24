@@ -443,3 +443,43 @@ fn a_download_that_does_not_match_is_not_used() {
     assert!(e.app.config.data_dir.join("sonora.db").exists(), "SONORA's own data stays");
     let _ = std::fs::remove_dir_all(&e.root);
 }
+
+#[test]
+fn removing_what_a_setup_made_puts_settings_back_and_repair_keeps_the_rest_of_slskd_yml() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(e) = env("undo") else { return };
+    let app = &e.app;
+
+    // B22: the person had another slskd (on a NAS) and watched a folder.
+    let earlier = e.root.join("Earlier downloads");
+    std::fs::create_dir_all(&earlier).unwrap();
+    call(app, "slskd.configure", &obj! { "url" => "http://nas.local:5030" });
+    call(app, "sources.configure", &obj! { "folder" => earlier.to_str().unwrap() });
+    let downloads = e.home.join("Music").join("Soulseek");
+    call(app, "slskd.setupStart", &obj! { "username" => "dj", "password" => "wrong", "downloads" => downloads.to_str().unwrap() });
+    let setup = wait_setup(app);
+    assert_eq!(failed_step(&setup).0, "signin", "{setup:?}");
+    let s = call(app, "settings.get", &obj! {});
+    assert_eq!(s.get("slskdUrl").and_then(Value::as_str), Some("http://127.0.0.1:5030"), "the setup pointed SONORA at its own slskd");
+    call(app, "slskd.setupDiscard", &obj! {});
+    let s = call(app, "settings.get", &obj! {});
+    assert_eq!(s.get("slskdUrl").and_then(Value::as_str), Some("http://nas.local:5030"), "the earlier address is back");
+    assert_eq!(s.get("soulseekFolder").and_then(Value::as_str), earlier.to_str(), "the earlier folder is back");
+    assert!(!downloads.exists(), "the empty download folder it made is gone");
+
+    // B23: after a working setup, the person renames SONORA's key entry and
+    // adds settings of their own; Repair puts the key back and keeps them.
+    call(app, "slskd.setupStart", &obj! { "username" => "dj", "password" => "right", "downloads" => downloads.to_str().unwrap() });
+    let setup = wait_setup(app);
+    assert!(setup.get("error").unwrap().is_null(), "{setup:?}");
+    let yml = std::fs::read_to_string(&e.fake.config).unwrap().replace("      sonora:\n", "      mine:\n");
+    let yml = format!("{yml}# my own notes\nglobal:\n  upload:\n    slots: 3\n");
+    std::fs::write(&e.fake.config, &yml).unwrap();
+    assert!(read_found(&e.fake.config).unwrap().api_key.is_none());
+    let _ = app.call("slskd.repair", "{}");
+    let after = std::fs::read_to_string(&e.fake.config).unwrap();
+    assert!(read_found(&e.fake.config).unwrap().api_key.is_some(), "{after}");
+    assert!(after.contains("# my own notes\nglobal:\n  upload:\n    slots: 3\n"), "{after}");
+    assert!(after.contains("      mine:\n"), "{after}");
+    let _ = std::fs::remove_dir_all(&e.root);
+}

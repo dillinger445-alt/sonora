@@ -42,18 +42,20 @@ export function formatTimecode(seconds: number, precise = false): string {
   return `${sign}${m}:${sec}`;
 }
 
-/** Decimal units, as Finder shows them. */
+/** Decimal units, as Finder shows them. Rounded before the unit is
+ *  chosen, so 999,700 bytes is "1.0 MB", never "1000 kB" (B56). */
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return DASH;
-  if (bytes < 1000) return `${bytes} B`;
+  if (Math.round(bytes) < 1000) return `${Math.round(bytes)} B`;
   const units = ['kB', 'MB', 'GB', 'TB'];
   let v = bytes;
   let i = -1;
-  while (v >= 1000 && i < units.length - 1) {
+  const shown = (x: number) => (x >= 99.95 ? Math.round(x) : Math.round(x * 10) / 10);
+  while ((v >= 1000 || shown(v) >= 1000) && i < units.length - 1) {
     v /= 1000;
     i += 1;
   }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+  return `${shown(v) >= 100 ? shown(v).toFixed(0) : shown(v).toFixed(1)} ${units[i]}`;
 }
 
 /** A frequency in Hz or kHz. */
@@ -125,10 +127,19 @@ export function formatRelative(ms: number | null | undefined, now = Date.now()):
   if (ms == null || !Number.isFinite(ms) || ms <= 0) return DASH;
   const diff = Math.max(0, now - ms) / 1000;
   if (diff < 45) return 'just now';
-  if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))} min ago`;
-  if (diff < 86400) return `${Math.round(diff / 3600)} h ago`;
+  // Rounded first, so 59.8 minutes is "1 h ago", not "60 min ago" (B75).
+  const min = Math.max(1, Math.round(diff / 60));
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(diff / 3600);
+  if (h < 24) return `${h} h ago`;
   if (diff < 2 * 86400) return 'yesterday';
   return formatDate(ms, now);
+}
+
+/** Whole minutes split into hours and minutes after rounding (B75). */
+function hoursAndMinutes(s: number): [number, number] {
+  const total = Math.round(s / 60);
+  return [Math.floor(total / 60), total % 60];
 }
 
 /** Remaining time: "about 4 min", "under a minute". */
@@ -136,9 +147,8 @@ export function formatEta(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return DASH;
   const s = ms / 1000;
   if (s < 60) return 'under a minute';
-  if (s < 3600) return `about ${Math.round(s / 60)} min`;
-  const h = Math.floor(s / 3600);
-  const m = Math.round((s % 3600) / 60);
+  const [h, m] = hoursAndMinutes(s);
+  if (h === 0) return `about ${m} min`;
   return m === 0 ? `about ${h} h` : `about ${h} h ${m} min`;
 }
 
@@ -147,9 +157,8 @@ export function formatEtaShort(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return DASH;
   const s = ms / 1000;
   if (s < 60) return '<1 min';
-  if (s < 3600) return `${Math.round(s / 60)} min`;
-  const h = Math.floor(s / 3600);
-  const m = Math.round((s % 3600) / 60);
+  const [h, m] = hoursAndMinutes(s);
+  if (h === 0) return `${m} min`;
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 

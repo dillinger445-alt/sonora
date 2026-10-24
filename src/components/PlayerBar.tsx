@@ -7,7 +7,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { LuDownload, LuLoaderCircle, LuPause, LuPlay, LuSkipForward, LuVolume2, LuVolumeX, LuX } from 'react-icons/lu';
-import { formatTimecode, plural } from '../lib/format.ts';
+import { formatDuration, formatTimecode, plural } from '../lib/format.ts';
 import { previewWords } from '../lib/previews.ts';
 import { navigate } from '../lib/router.ts';
 import { decodeWaveform, type WaveformData } from '../lib/visuals.ts';
@@ -93,7 +93,7 @@ function SeekBar({ duration, wave, onSeek, arrived }: { duration: number; wave: 
       aria-valuemin={0}
       aria-valuemax={Math.round(duration)}
       aria-valuenow={Math.round(time)}
-      aria-valuetext={`${formatTimecode(time)} of ${formatTimecode(duration)}${arrived != null && arrived < 1 ? `, ${formatTimecode(arrived * duration)} arrived` : ''}`}
+      aria-valuetext={`${formatTimecode(time)} of ${formatDuration(duration)}${arrived != null && arrived < 1 ? `, ${formatTimecode(arrived * duration)} arrived` : ''}`}
       onKeyDown={onKey}
       onPointerDown={(e) => {
         dragging.current = true;
@@ -125,7 +125,7 @@ function Clock({ duration }: { duration: number | null }) {
   return (
     <span className="player-time num" aria-hidden>
       {formatTimecode(time)}
-      <span className="faint"> / {duration != null ? formatTimecode(duration) : '–:––'}</span>
+      <span className="faint"> / {duration != null ? formatDuration(duration) : '–:––'}</span>
     </span>
   );
 }
@@ -227,7 +227,7 @@ export function PlayerBar() {
             <span className="player-badge" data-tip="A preview plays while it arrives. It is not checked, kept or added to your library.">
               Preview
             </span>{' '}
-            {preview.username} · {previewWords(p, preview.username)}
+            {preview.username} · {previewWords(p, preview.username, player.status === 'loading')}
           </span>
         ) : (
           <span className="player-sub faint">

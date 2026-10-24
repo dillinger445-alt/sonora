@@ -17,3 +17,5 @@ export const LIBRARY = join(DATA, 'library');
 export const MANAGED_SLSKD_PORT = 4319;
 /** The stand-in "release" SONORA installs in that test (SONORA_SLSKD_TEST_ARCHIVE). */
 export const SLSKD_ARCHIVE = join(DATA, 'slskd-test-release.zip');
+/** Where the stand-in YouTube answers in the playlist test (SONORA_YOUTUBE_BASE). */
+export const YOUTUBE_PORT = 4320;

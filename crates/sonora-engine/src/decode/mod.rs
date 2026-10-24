@@ -131,6 +131,10 @@ pub struct DecodeRequest {
     /// Declared length in frames, used for progress reporting when the
     /// decoder itself cannot know it in advance.
     pub frames_hint: Option<u64>,
+    /// The codec is known to be lossy (MP3 or AAC inside a WAV, say): it is
+    /// decoded as a lossy source whatever its container, so the decoder's
+    /// overshoot above full scale is kept rather than clamped (B35).
+    pub lossy: bool,
 }
 
 /// Opens the most appropriate decoder for `path`.
@@ -174,7 +178,7 @@ pub fn open_source(
             }))
         }
     };
-    let lossless_int = !req.lossless_float && (req.lossless_int || matches!(container, Container::Wav | Container::Aiff | Container::Flac));
+    let lossless_int = !req.lossless_float && !req.lossy && (req.lossless_int || matches!(container, Container::Wav | Container::Aiff | Container::Flac));
     match ffmpeg::FfmpegSource::spawn(ffmpeg, path, lossless_int, req.lossless_float, req.frames_hint) {
         Ok(src) => Ok(Box::new(src)),
         // Prefer the native decoder's diagnosis: it is usually more specific.

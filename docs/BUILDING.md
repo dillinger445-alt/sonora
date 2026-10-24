@@ -124,7 +124,10 @@ with `SONORA_SLSKD_SYSTEM=test`: SONORA "downloads" a stand-in release
 agent instead of asking launchd, and talks to its slskd on the stand-in's
 port (`SONORA_SLSKD_TEST_PORT`). `SONORA_SLSKD_SYSTEM=spawn` runs the
 installed program as a child process instead, for trying the setup with a
-real slskd on Linux.
+real slskd on Linux. YouTube playlists come from a stand-in too
+(`e2e/fakeYoutube.ts`, serving `e2e/fixtures/youtube-playlist.html`), which
+the bridge reaches through `SONORA_YOUTUBE_BASE`; the same variable points
+a development bridge at any other server.
 
 `npm run fixtures` writes the same corpus to `fixtures/library` with
 45-second tracks, which is handy as a demo library: import that folder in

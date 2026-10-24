@@ -228,3 +228,125 @@ fn drives_are_listed_and_space_is_known() {
         assert!(sonora_core::usb::space(&e.drive).is_some_and(|(total, free)| total > 0 && free <= total));
     }
 }
+
+#[test]
+fn a_stopped_send_and_a_changed_playlist_file_leave_the_drive_in_order() {
+    let e = env("stopped");
+    let app = open(&e);
+    let t = library(&app, &e, &["One", "Two", "Three", "Four", "Five", "Six"]);
+    let warm = create(&app, "playlist", "Warm-up", None, &t);
+    // B11: when the second file starts, the drive's record already holds the
+    // first, so a send cut short there still knows what it wrote.
+    let seen = Arc::new(std::sync::Mutex::new(None::<String>));
+    let (record, look) = (e.drive.join("SONORA/.sonora-sync.json"), seen.clone());
+    let sub = app.events.subscribe(Box::new(move |name, payload| {
+        if name == "usb.progress" && payload.contains("\"done\":1,") && look.lock().unwrap().is_none() {
+            *look.lock().unwrap() = std::fs::read_to_string(&record).ok();
+        }
+    }));
+    send(&app, options(&e, &[warm], false));
+    app.events.unsubscribe(sub);
+    let at_second = seen.lock().unwrap().clone().unwrap_or_default();
+    assert!(at_second.contains("001 - One.wav"), "{at_second}");
+    let m3u_path = e.drive.join("SONORA/01 Warm-up/Warm-up.m3u8");
+    let listed = |p: &Path| std::fs::read_to_string(p).unwrap().lines().filter(|l| l.ends_with(".wav")).count();
+    assert_eq!(listed(&m3u_path), 6);
+
+    // B10: the person edits SONORA's playlist file. It stays theirs; SONORA
+    // writes its own beside it, under the same other name every time.
+    let mut edited = std::fs::read_to_string(&m3u_path).unwrap();
+    edited.push_str("# my notes\n");
+    std::fs::write(&m3u_path, &edited).unwrap();
+    let r = send(&app, options(&e, &[warm], false));
+    let warnings = |r: &Value| r.get("warnings").and_then(Value::as_array).map(|w| w.len()).unwrap_or(0);
+    assert_eq!(warnings(&r), 1, "{}", r.to_string_compact());
+    let second = e.drive.join("SONORA/01 Warm-up/Warm-up (2).m3u8");
+    assert!(second.is_file());
+    let r = send(&app, options(&e, &[warm], false));
+    assert_eq!(warnings(&r), 0, "said once: {}", r.to_string_compact());
+    assert!(second.is_file(), "the same name again");
+    assert!(!e.drive.join("SONORA/01 Warm-up/Warm-up (3).m3u8").exists());
+    assert_eq!(std::fs::read_to_string(&m3u_path).unwrap(), edited, "the person's file is untouched");
+
+    // B05: every file needs updating (another key notation); the send stops
+    // after the first. The playlists still list all six files, which are all
+    // still there (B11: and the drive's record knows every file written).
+    let weak = Arc::downgrade(&app);
+    let sub = app.events.subscribe(Box::new(move |name, payload| {
+        if name == "usb.progress" && payload.contains("\"done\":1,") {
+            if let Some(app) = weak.upgrade() {
+                app.syncer.cancel();
+            }
+        }
+    }));
+    let mut opts = options(&e, &[warm], false);
+    opts.set("keyNotation", "musical");
+    call(&app, "usb.start", opts);
+    wait("the sync", || call(&app, "usb.status", Value::Null).get("running").and_then(Value::as_bool) == Some(false));
+    app.events.unsubscribe(sub);
+    let r = call(&app, "usb.status", Value::Null).get("last").cloned().unwrap();
+    assert_eq!(r.get("cancelled").and_then(Value::as_bool), Some(true), "{}", r.to_string_compact());
+    assert!(int(&r, "written") < 6, "{}", r.to_string_compact());
+    assert_eq!(files(&e).len(), 6);
+    assert_eq!(listed(&second), 6, "every file on the drive is still in the playlist");
+    let xml = std::fs::read_to_string(e.drive.join("SONORA/rekordbox.xml")).unwrap();
+    assert!(xml.contains(r#"<COLLECTION Entries="6">"#), "{xml}");
+    // What was not reached is still to do; nothing written is someone else's.
+    let mut opts = options(&e, &[warm], false);
+    opts.set("keyNotation", "musical");
+    let plan = call(&app, "usb.plan", opts);
+    let (new, update, _, keep, _) = counts(&plan);
+    assert_eq!((new, update + keep), (0, 6), "{}", plan.to_string_compact());
+    assert!(plan.get("warnings").and_then(Value::as_array).is_none_or(|w| w.is_empty()), "{}", plan.to_string_compact());
+}
+
+#[test]
+fn quitting_during_a_send_lets_it_put_the_drive_in_order() {
+    // B12: shutdown waits for the send to stop and tidy up.
+    let e = env("quit");
+    let app = open(&e);
+    let t = library(&app, &e, &["One", "Two", "Three", "Four", "Five", "Six"]);
+    let warm = create(&app, "playlist", "Warm-up", None, &t);
+    send(&app, options(&e, &[warm], false));
+    // Every file needs updating: the old ones step aside while new ones are written.
+    let mut opts = options(&e, &[warm], false);
+    opts.set("keyNotation", "musical");
+    call(&app, "usb.start", opts);
+    app.shutdown();
+    assert!(!app.syncer.is_running(), "shutdown returned while the send was still going");
+    let mut hidden = Vec::new();
+    for entry in std::fs::read_dir(e.drive.join("SONORA/01 Warm-up")).unwrap().flatten() {
+        let n = entry.file_name().to_string_lossy().to_string();
+        if n.starts_with('.') {
+            hidden.push(n);
+        }
+    }
+    assert!(hidden.is_empty(), "{hidden:?}");
+    assert_eq!(files(&e).len(), 6, "every track still has its file");
+}
+
+#[test]
+fn an_export_plan_says_when_a_send_is_running() {
+    // B48: the export dialog plans with this, and must not offer Export
+    // while a send to a drive is under way.
+    let e = env("busy");
+    let app = open(&e);
+    let t = library(&app, &e, &["One", "Two", "Three"]);
+    let warm = create(&app, "playlist", "Warm-up", None, &t);
+    let seen = Arc::new(std::sync::Mutex::new(None::<bool>));
+    let (weak, look) = (Arc::downgrade(&app), seen.clone());
+    let ids = t.clone();
+    let sub = app.events.subscribe(Box::new(move |name, _| {
+        if name == "usb.progress" && look.lock().unwrap().is_none() {
+            if let Some(app) = weak.upgrade() {
+                let plan = app.call("djexport.plan", &obj! { "ids" => ids.clone(), "format" => "aiff" }.to_string_compact()).unwrap();
+                *look.lock().unwrap() = sonora_json::parse(&plan).unwrap().get("running").and_then(Value::as_bool);
+            }
+        }
+    }));
+    send(&app, options(&e, &[warm], false));
+    app.events.unsubscribe(sub);
+    assert_eq!(*seen.lock().unwrap(), Some(true));
+    let plan = call(&app, "djexport.plan", obj! { "ids" => t.clone(), "format" => "aiff" });
+    assert_eq!(plan.get("running").and_then(Value::as_bool), Some(false));
+}

@@ -52,12 +52,19 @@ export function ArrangeDialog({
   const [width, setWidth] = useState(560);
   const first = rows[0];
 
+  // Measured whenever it changes size: the dialog is not laid out yet when
+  // it opens, so a measurement then reads 0 (B52).
   useLayoutEffect(() => {
     if (!open) return;
     const el = wrap.current;
     if (!el) return;
-    setWidth(el.clientWidth);
-  }, [open, result]);
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 0) setWidth(el.clientWidth);
+    });
+    ro.observe(el);
+    if (el.clientWidth > 0) setWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -137,7 +144,13 @@ export function ArrangeDialog({
           </div>
           <div>
             <span className="arr-label">Arranged</span>
-            {after ? <SetTimeline rows={after} notation={notation} width={width} compact label="The set in the arranged order" /> : <div className="arr-wait faint">Working it out…</div>}
+            {after ? (
+              <SetTimeline rows={after} notation={notation} width={width} compact label="The set in the arranged order" />
+            ) : error ? (
+              <div className="arr-wait faint">No order: see above.</div>
+            ) : (
+              <div className="arr-wait faint">Working it out…</div>
+            )}
           </div>
         </div>
         {result ? (

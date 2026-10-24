@@ -63,6 +63,11 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
   const [lastChecked, setLastChecked] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const busy = useRef(false);
+  // Read when a check ends; kept out of `check`'s dependencies so that a new
+  // app info (FFmpeg's "Check again") does not restart the timers (B84).
+  const found = useRef<UpdateInfo | null>(null);
+  const version = useRef(appInfo?.version);
+  version.current = appInfo?.version;
 
   const check = useCallback(
     async (manual = false) => {
@@ -71,28 +76,30 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
       setStatus((s) => (s === 'installing' ? s : 'checking'));
       setError(null);
       try {
-        const found = await updater.check();
+        const next = await updater.check();
         setLastChecked(Date.now());
-        setInfo(found);
-        setStatus(found ? 'available' : 'current');
-        if (found && (manual || readPref('updates.announced', '', isString) !== found.version)) {
-          writePref('updates.announced', found.version);
+        found.current = next;
+        setInfo(next);
+        setStatus(next ? 'available' : 'current');
+        if (next && (manual || readPref('updates.announced', '', isString) !== next.version)) {
+          writePref('updates.announced', next.version);
           if (manual) setDialogOpen(true);
           else
             toast({
               tone: 'info',
-              title: `SONORA ${found.version} is available`,
+              title: `SONORA ${next.version} is available`,
               body: 'Install it when it suits you; your library and settings are kept.',
               action: { label: 'See what’s new', run: () => setDialogOpen(true) },
               timeout: 12_000,
             });
-        } else if (!found && manual) {
-          toast({ tone: 'success', title: 'SONORA is up to date', body: `Version ${appInfo?.version ?? ''} is the newest release.` });
+        } else if (!next && manual) {
+          toast({ tone: 'success', title: 'SONORA is up to date', body: `Version ${version.current ?? ''} is the newest release.` });
         }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        // An automatic check that fails (offline, say) stays quiet.
-        setStatus('idle');
+        // An automatic check that fails (offline, say) stays quiet, and a
+        // release found before is still on offer (B83).
+        setStatus(found.current ? 'available' : 'idle');
         if (manual) {
           setError(message);
           toast({ tone: 'error', title: 'Could not check for updates', body: message });
@@ -101,7 +108,7 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
         busy.current = false;
       }
     },
-    [updater, toast, appInfo],
+    [updater, toast],
   );
 
   const install = useCallback(async () => {
@@ -143,13 +150,13 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
   }, [auto, check]);
 
   // After an update: say so once.
-  const version = appInfo?.version;
+  const running = appInfo?.version;
   useEffect(() => {
-    if (!version) return;
+    if (!running) return;
     const before = readPref('updates.lastVersion', '', isString);
-    writePref('updates.lastVersion', version);
-    if (before && before !== version) toast({ tone: 'success', title: `SONORA was updated to ${version}`, body: 'Your library and settings are as you left them.' });
-  }, [version, toast]);
+    writePref('updates.lastVersion', running);
+    if (before && before !== running) toast({ tone: 'success', title: `SONORA was updated to ${running}`, body: 'Your library and settings are as you left them.' });
+  }, [running, toast]);
 
   const value = useMemo<Updates>(
     () => ({

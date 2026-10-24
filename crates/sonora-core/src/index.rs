@@ -113,6 +113,11 @@ pub fn walk(root: &Path, opts: WalkOptions, cancel: &AtomicBool, mut on_file: im
         };
         let mut subdirs = Vec::new();
         for entry in entries.flatten() {
+            // A folder of thousands of files stops at once too, not after
+            // reading every one of them.
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
             let name = entry.file_name();
             if opts.skip_hidden && is_hidden(&name) {
                 continue;
@@ -229,6 +234,25 @@ mod tests {
         let mut all = 0;
         walk(&d, WalkOptions { skip_hidden: false, follow_symlinks: false }, &cancel, |_| all += 1);
         assert_eq!(all, 4);
+    }
+
+    #[test]
+    fn a_cancelled_walk_stops_inside_a_big_folder() {
+        // Cancel used to be looked at once per folder: a flat folder of
+        // thousands of files was read to the end first.
+        let d = tmp();
+        std::fs::create_dir_all(&d).unwrap();
+        for i in 0..50 {
+            std::fs::write(d.join(format!("{i}.wav")), b"x").unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let mut seen = 0;
+        walk(&d, WalkOptions { skip_hidden: true, follow_symlinks: false }, &cancel, |_| {
+            seen += 1;
+            cancel.store(true, Ordering::Relaxed);
+        });
+        assert_eq!(seen, 1);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

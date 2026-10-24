@@ -97,6 +97,10 @@ test('how a preview is going, in words', () => {
   assert.equal(w({ state: 'ready' }), 'Arriving as it plays');
   assert.equal(w({ state: 'ready', transfer: 'paused' }), 'Enough has arrived for now');
   assert.equal(w({ state: 'ready', transfer: 'complete' }), 'All of it has arrived');
+  // B105: while the player waits for audio, nothing says enough has arrived.
+  assert.equal(previewWords(session({ state: 'ready', transfer: 'paused' }), 'night-owl', true), 'Buffering…');
+  assert.equal(previewWords(session({ state: 'ready', transfer: 'complete' }), 'night-owl', true), 'Buffering…');
+  assert.equal(previewWords(session({ state: 'queued', ready: false, queue: 2 }), 'night-owl', true), 'Number 2 in night-owl’s queue');
   assert.equal(w({ state: 'unavailable', error: 'This WAV holds MP3 audio, which previews cannot play. Download it to listen.' }), 'This WAV holds MP3 audio, which previews cannot play. Download it to listen.');
   assert.equal(w({ state: 'failed', error: null }), 'This preview cannot be played.');
   assert.equal(w({ limitReached: true }), 'The preview stops here: its cache is full');
@@ -111,6 +115,7 @@ test('a result row says Playing, Paused or why not', () => {
   assert.equal(rowWords({ status: 'paused', error: null, preview: p }, 'night-owl'), 'Paused');
   assert.equal(rowWords({ status: 'paused', error: null, preview: session({ ready: false, state: 'connecting' }) }, 'night-owl'), 'Asking night-owl…');
   assert.equal(rowWords({ status: 'loading', error: null, preview: session({ state: 'buffering' }) }, 'night-owl'), 'Buffering…');
+  assert.equal(rowWords({ status: 'loading', error: null, preview: session({ state: 'ready', transfer: 'paused' }) }, 'night-owl'), 'Buffering…');
   assert.equal(rowWords({ status: 'error', error: 'night-owl turned the request down.', preview: p }, 'night-owl'), 'night-owl turned the request down.');
   assert.equal(rowWords({ status: 'error', error: null, preview: null }, 'night-owl'), 'Playback failed');
 });

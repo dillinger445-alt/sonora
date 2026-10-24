@@ -30,9 +30,10 @@ files with rekordbox, Serato and M3U playlists.
 And it can search Soulseek for lossless music through slskd, the Soulseek
 client that runs with your own account (on a Mac, SONORA sets it up and
 keeps it running), let you listen to a file while it arrives, download what
-you choose, and check each file as it arrives, so an MP3 passed off as FLAC
-is caught before it reaches a set. [docs/SOULSEEK.md](docs/SOULSEEK.md)
-describes how.
+you choose, turn a YouTube playlist into downloads by rules you set, and
+check each file as it arrives, so an MP3 passed off as FLAC is caught
+before it reaches a set. [docs/SOULSEEK.md](docs/SOULSEEK.md) describes
+how.
 
 ![Track analysis](docs/screenshots/track.png)
 
@@ -44,13 +45,16 @@ describes how.
 
 SONORA is local-first. Analysis and playback run on your computer, and
 audio, results and file paths never leave it. There are no uploads,
-analytics or telemetry. SONORA goes online for three things only. It asks
+analytics or telemetry. SONORA goes online for four things only. It asks
 GitHub whether a newer version exists, on launch and every six hours; the
 request carries nothing about you or your music, and Settings → Updates
 turns it off. Looking up genres on Discogs, which runs only when you start
 it, sends the artist and title of the tracks you chose (and your Discogs
-token) to Discogs, nothing else. And setting up slskd on a Mac, only when
-you allow it, downloads slskd's release from GitHub. Soulseek searches,
+token) to Discogs, nothing else. Setting up slskd on a Mac, only when
+you allow it, downloads slskd's release from GitHub. And reading a YouTube
+playlist, only when you paste its link, fetches that playlist's public page
+from YouTube the way a browser does: the requests carry the playlist's id
+and nothing about you, your account or your library. Soulseek searches,
 previews and downloads go through slskd, the Soulseek client that runs on
 your computer with your account: SONORA sends it your search words and the
 files you choose, slskd does the networking with your account and sharing
@@ -153,6 +157,15 @@ it again or bring it back from Folders.
   made from an MP3 shows as **Lossy source?**). Downloads from any Soulseek
   client's folder can join the library too, at once or after review. Off
   until you accept its notice. See [docs/SOULSEEK.md](docs/SOULSEEK.md).
+- **YouTube playlists from Soulseek**: paste a public or unlisted playlist's
+  link; SONORA reads its track list (titles read as artist, title and mix,
+  non-music left out), looks for each track on Soulseek with up to five
+  searches, picks the best file by rules you set (formats in order,
+  resolution, size, who shares it, how well the name matches) and
+  downloads it, automatically or after you review the picks. Files that
+  arrive wrong (a lossy source, damage) are swapped for the next best, up
+  to three tries. A run can be paused, stopped and retried, and survives a
+  restart.
 - **Needs attention**: problem tracks grouped by clipping, lossy source, low
   bitrate, integrity, weak-evidence issues, failures and missing files.
 - **Duplicates**: identical files (same file hash), identical audio in
@@ -163,8 +176,9 @@ it again or bring it back from Folders.
 - **History**: every scan with its summary and results.
 - **Settings**: parallel workers, longest file analyzed, rescan behaviour,
   hidden files and symlinks, default score view, key notation, BPM range,
-  folder genres, the Discogs token, Soulseek, update checks, database location and
-  backup, cache management, FFmpeg status, version and privacy information.
+  folder genres, the Discogs token, Soulseek, the rules for playlist
+  downloads, update checks, database location and backup, cache
+  management, FFmpeg status, version and privacy information.
 - **Accessibility**: full keyboard use (table, menus, dialogs, tabs, chart
   cursor), visible focus, labels and tooltips, confirmation before
   destructive actions, and reduced-motion support.
@@ -256,7 +270,7 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 | Part | Responsibility |
 | --- | --- |
 | `crates/sonora-engine` | Decoding, metadata, DSP (K-weighting, true-peak interpolation, FFT), measurements including tempo and key, findings and scores, and the export writers (AIFF, WAV, ID3 tags, MP3 re-tagging, conversion). Std-only Rust. |
-| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, playlists and smart playlists, arranging for mixing, sending playlists to USB drives, the Discogs lookup, Soulseek through slskd (search, downloads, previews decoded as they arrive, the download folder watcher) and setting up and running slskd on macOS, playback preparation, settings, the JSON API used by both shells, structured logs. |
+| `crates/sonora-core` | Library database and migrations, incremental indexing, background scans, duplicate detection, tempo/key/genre values and corrections, CSV and DJ exports, playlists and smart playlists, arranging for mixing, sending playlists to USB drives, the Discogs lookup, Soulseek through slskd (search, downloads, previews decoded as they arrive, the download folder watcher), YouTube playlists read and downloaded track by track, setting up and running slskd on macOS, playback preparation, settings, the JSON API used by both shells, structured logs. |
 | `crates/sonora-json` | A small JSON value type, parser and serializer. |
 | `crates/sonora-cli` | `sonora analyze / measure / compare / fixtures`, for development and calibration. |
 | `crates/sonora-devserver` | Serves the built interface and the core API over HTTP and Server-Sent Events on 127.0.0.1, for browser development and end-to-end tests, plus the files prepared for playback and Soulseek previews as they arrive (with range requests). Rejects other hosts and origins. |
@@ -289,17 +303,17 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 277 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, API
-npm run test:unit          # 48 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, copying to the clipboard, release notes and the release script)
+npm run test:rust          # 325 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, YouTube playlists (reading, matching, the run), API
+npm run test:unit          # 61 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, playlist runs in words, smart playlist rules in words, number fields, reused table rows, the set timeline, copying to the clipboard, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
-npm run build && npm run test:e2e   # 29 Playwright tests: real interface + real core on a generated corpus, in Chromium and (two checks) in WebKit
+npm run build && npm run test:e2e   # 37 Playwright tests: real interface + real core on a generated corpus, in Chromium and (two checks) in WebKit
 ```
 
 A few Rust tests depend on the system: on macOS and Windows one moves a
 file to the system Trash or Recycle Bin, on Linux one makes the trash
 unusable to check that a file that stays keeps its place in a scan, and
-Unix systems check symlink loops. So macOS and Linux run 277 and Windows
-276. On Windows, CI also runs a test that turns the Recycle Bin off for the
+Unix systems check symlink loops. So macOS and Linux run 325 and Windows
+324. On Windows, CI also runs a test that turns the Recycle Bin off for the
 drive for a moment, to check that Move to Recycle Bin never deletes a file
 for good; on macOS and Windows a test that stores, changes and removes
 a secret in the real keychain or Credential Manager; and on macOS a test
@@ -312,7 +326,10 @@ not installed.
 Tempo and key detection are tested on synthetic tracks: tempos from 90 to
 174 BPM (also at 48 and 96 kHz), cadences in all 24 keys, tuning off
 A = 440 Hz, a channel with inverted polarity, tempo changes, and noise and
-sustained chords that must get no tempo.
+sustained chords that must get no tempo. YouTube is never contacted in
+tests either: the playlist tests read a saved playlist page and its
+continuation (`crates/sonora-core/tests/fixtures/youtube`), and the
+end-to-end test gets them from a stand-in server.
 
 The end-to-end suite imports the corpus through the interface and
 exercises background analysis, search, sort, filter, keyboard navigation
@@ -335,9 +352,12 @@ removes only SONORA's own files, and files of the owner's left alone), and
 Soulseek through a stand-in for slskd (the notice, making a key, searching
 with the lossless filter, downloading a folder, and the downloads joining
 the library with an MP3-made "FLAC" flagged; the one-button setup with a
-step that fails and is tried again, and Repair; and previews that play
+step that fails and is tried again, and Repair; previews that play
 before the file has arrived, start no download, queue up, and leave no
-file, transfer or cache behind).
+file, transfer or cache behind; and a YouTube playlist read from a
+stand-in, its tracks searched for and downloaded by the rules, a "FLAC"
+made from an MP3 swapped for the next file on arrival, and the rules in
+Settings).
 
 ## Troubleshooting
 

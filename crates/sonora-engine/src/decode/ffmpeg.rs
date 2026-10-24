@@ -196,7 +196,7 @@ impl FfmpegSource {
             if wd.done.load(Ordering::Relaxed) {
                 break;
             }
-            let idle = wd.started.elapsed().as_millis() as u64 - wd.last_activity_ms.load(Ordering::Relaxed);
+            let idle = idle_ms(wd.started.elapsed().as_millis() as u64, wd.last_activity_ms.load(Ordering::Relaxed));
             if idle > STALL_TIMEOUT.as_millis() as u64 {
                 wd.stalled.store(true, Ordering::Relaxed);
                 wd.kill();
@@ -460,9 +460,22 @@ pub fn sibling_tool(ffmpeg: &Path, name: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// Milliseconds since the decoder last did something. The reader can note
+/// activity between the two readings, a moment after `now` (B82): that is
+/// no idle time, not a wrap-around to a huge value.
+fn idle_ms(now: u64, last_activity: u64) -> u64 {
+    now.saturating_sub(last_activity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_noted_just_after_the_clock_was_read_is_not_a_stall() {
+        assert_eq!(idle_ms(1000, 1001), 0);
+        assert_eq!(idle_ms(5000, 1000), 4000);
+    }
 
     #[test]
     fn cleans_context_prefixes() {

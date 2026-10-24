@@ -152,11 +152,12 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
     if (genres.length) f.genres = genres;
     return f;
   }, [baseFilter, rangeKind, search, formats, flags, statuses, range, showStatusFilter, bpm, keySel, genres]);
-  const filterKey = JSON.stringify(filter);
 
   const filtersActive =
     !!search || formats.length > 0 || flags.length > 0 || statuses.length > 0 || range != null || bpmActive(bpm) || keySel.keys.length > 0 || genres.length > 0;
   const clearFilters = () => {
+    // The search typed a moment ago must not apply after this (B25).
+    applySearch.cancel();
     setSearchInput('');
     setSearch('');
     setFormats([]);
@@ -166,13 +167,13 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
     setBpm(NO_BPM);
     setKeySel(NO_KEYS);
     setGenres([]);
+    // The Clear button goes away: the keyboard goes to the search field (B62).
+    searchRef.current?.focus();
   };
 
-  // Drop selected ids that left the result set only on explicit actions; keep it simple and predictable.
+  // A new filter keeps the selected tracks that are still in the results: the
+  // table prunes the selection once the new results are in (B24).
   const clearSelection = useCallback(() => setSelection(new Set()), []);
-  useEffect(() => {
-    clearSelection();
-  }, [filterKey, clearSelection]);
 
   /** Every removal path (Delete key, selection bar, details panel) ends here. */
   const removeTracks = useCallback(

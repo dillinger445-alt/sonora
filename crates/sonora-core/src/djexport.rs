@@ -143,22 +143,29 @@ fn rank(t: &TrackRow) -> (i64, i64, i64, i64) {
     )
 }
 
-/// Other copies of the same recording: identical files, identical audio, or
-/// a fingerprint match along the whole track. Alternate edits do not count.
-fn copies(c: &Connection, t: &TrackRow) -> Result<Vec<i64>, StoreError> {
-    let mut ids = c.query(
-        "SELECT id FROM tracks WHERE id != ? AND ((file_hash IS NOT NULL AND file_hash = ?) OR (audio_hash IS NOT NULL AND audio_hash = ?))",
-        params![t.id, t.file_hash.clone(), t.audio_hash.clone()],
-        |r| r.i64(0),
-    )?;
-    ids.extend(c.query(
-        "SELECT CASE WHEN a = ? THEN b ELSE a END FROM fp_matches WHERE kind = 'same_recording' AND (a = ? OR b = ?)",
-        params![t.id, t.id, t.id],
-        |r| r.i64(0),
-    )?);
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
+/// Finds other copies of the same recording: identical files, identical
+/// audio, or a fingerprint match along the whole track. Alternate edits do
+/// not count. Prepared once for a whole plan (thousands of tracks).
+struct Copies<'c> {
+    same: crate::db::sqlite::Statement<'c>,
+    matched: crate::db::sqlite::Statement<'c>,
+}
+
+impl<'c> Copies<'c> {
+    fn new(c: &'c Connection) -> Result<Self, StoreError> {
+        Ok(Copies {
+            same: c.prepare("SELECT id FROM tracks WHERE id != ? AND ((file_hash IS NOT NULL AND file_hash = ?) OR (audio_hash IS NOT NULL AND audio_hash = ?))")?,
+            matched: c.prepare("SELECT CASE WHEN a = ? THEN b ELSE a END FROM fp_matches WHERE kind = 'same_recording' AND (a = ? OR b = ?)")?,
+        })
+    }
+
+    fn of(&mut self, t: &TrackRow) -> Result<Vec<i64>, StoreError> {
+        let mut ids = self.same.query(params![t.id, t.file_hash.clone(), t.audio_hash.clone()], |r| r.i64(0))?;
+        ids.extend(self.matched.query(params![t.id, t.id, t.id], |r| r.i64(0))?);
+        ids.sort_unstable();
+        ids.dedup();
+        Ok(ids)
+    }
 }
 
 fn warnings_for(t: &TrackRow, source: &TrackRow, opts: &ExportOptions) -> Vec<Warning> {
@@ -195,10 +202,18 @@ fn warnings_for(t: &TrackRow, source: &TrackRow, opts: &ExportOptions) -> Vec<Wa
     } else if t.dj_bpm.is_none() || t.dj_key.is_none() {
         w.push(Warning { code: "no_dj_data", message: "No tempo or key known; analyze the track again to detect them.".into() });
     }
-    if opts.quality == Quality::Universal && source.lossless == Some(true) && (source.bit_depth.unwrap_or(16) > 16 || source.sample_rate.unwrap_or(44_100) > 48_000) {
+    // MP3 is always 44.1 kHz at 320 kbps: the quality choice is for AIFF
+    // and WAV, and the dialog does not show it for MP3.
+    if opts.target != Target::Mp3 && opts.quality == Quality::Universal && source.lossless == Some(true) && (source.bit_depth.unwrap_or(16) > 16 || source.sample_rate.unwrap_or(44_100) > 48_000) {
         w.push(Warning { code: "downsampled", message: "Reduced to 16-bit/44.1 kHz for compatibility (choose high resolution to keep more).".into() });
     }
     w
+}
+
+/// The bit rate of PCM audio, in kbps, rounded (24-bit at 44.1 kHz is
+/// 2116.8, so 2117, not 2116).
+pub fn pcm_bitrate_kbps(sample_rate: u32, channels: u16, bits: u16) -> u32 {
+    ((sample_rate as u64 * channels as u64 * bits as u64 + 500) / 1000).max(1) as u32
 }
 
 /// Works out what an export of `ids` would do, in the order given.
@@ -208,12 +223,13 @@ pub fn plan(c: &Connection, ids: &[i64], opts: &ExportOptions) -> Result<Vec<Pla
     let mut items = Vec::new();
     let mut used_sources: HashSet<i64> = HashSet::new();
     let mut names: HashSet<String> = HashSet::new();
+    let mut copies = Copies::new(c)?;
     for id in ids {
         let Some(t) = by_id.get(id) else { continue };
         let mut source = t.clone();
-        if opts.best_copy {
-            let others = get_tracks(c, &copies(c, t)?)?;
-            for o in others {
+        let mine = if opts.best_copy { copies.of(t)? } else { Vec::new() };
+        if !mine.is_empty() {
+            for o in get_tracks(c, &mine)? {
                 if o.missing_since.is_none() && Path::new(&o.path).exists() && rank(&o) > rank(&source) {
                     source = o;
                 }
@@ -222,7 +238,14 @@ pub fn plan(c: &Connection, ids: &[i64], opts: &ExportOptions) -> Result<Vec<Pla
         let missing = source.missing_since.is_some() || !Path::new(&source.path).exists();
         let mut skip = if missing { Some("missing") } else { None };
         // Two selected copies of one recording are exported once.
-        let group: Vec<i64> = std::iter::once(source.id).chain(if opts.best_copy { copies(c, &source)? } else { Vec::new() }).collect();
+        let others = if !opts.best_copy {
+            Vec::new()
+        } else if source.id == t.id {
+            mine
+        } else {
+            copies.of(&source)?
+        };
+        let group: Vec<i64> = std::iter::once(source.id).chain(others).collect();
         if skip.is_none() && group.iter().any(|g| used_sources.contains(g)) {
             skip = Some("duplicate");
         }
@@ -570,7 +593,7 @@ pub(crate) fn export_file(
         warnings.push(Warning { code: "decode_errors", message: format!("The decoder reported {} errors in the source.", out.decode_errors) });
     }
     let bitrate = match out.bits {
-        Some(b) => out.sample_rate * out.channels as u32 * b as u32 / 1000,
+        Some(b) => pcm_bitrate_kbps(out.sample_rate, out.channels, b),
         None => {
             if out.method == Method::Copied {
                 facts.bitrate_kbps.map(|b| b.round() as u32).unwrap_or(0)
@@ -579,6 +602,9 @@ pub(crate) fn export_file(
             }
         }
     };
+    // An MP3 copied frame for frame has no header to say how long it is;
+    // the library knows from the analysis.
+    let duration = if out.duration > 0.0 { out.duration } else { item.source.duration.unwrap_or(0.0) };
     Ok(Written {
         track_id: t.id,
         path: dest,
@@ -586,11 +612,11 @@ pub(crate) fn export_file(
         artist: tags.artist.clone(),
         album: tags.album.clone(),
         genre: tags.genre.clone(),
-        year: tags.year.as_deref().filter(|y| y.len() >= 4).map(|y| y[..4].to_string()),
+        year: tags.year.as_deref().and_then(sonora_engine::export::id3::year_of).map(str::to_string),
         bpm: tags.bpm,
         key,
         bytes: out.bytes,
-        duration: out.duration,
+        duration,
         sample_rate: out.sample_rate,
         bitrate_kbps: bitrate,
         method: out.method,
@@ -655,6 +681,38 @@ mod tests {
         assert!(x.contains(r#"Kind="AIFF File""#));
         assert!(x.contains(r#"<TRACK Key="1"/>"#));
         assert!(x.starts_with("<?xml"));
+    }
+
+    fn row(lossless: bool, bits: i64, rate: i64, duration: f64) -> TrackRow {
+        TrackRow {
+            id: 1,
+            path: "/m/a.wav".into(),
+            status: "done".into(),
+            lossless: Some(lossless),
+            bit_depth: Some(bits),
+            sample_rate: Some(rate),
+            duration: Some(duration),
+            dj_bpm: Some(124.0),
+            dj_key: Some(8),
+            ..TrackRow::default()
+        }
+    }
+
+    #[test]
+    fn mp3_exports_carry_no_resolution_warning_and_pcm_bit_rates_are_rounded() {
+        let hires = row(true, 24, 96_000, 300.0);
+        let opts = |target: Target, quality: Quality| ExportOptions { target, quality, notation: Notation::Camelot, best_copy: true, rekordbox_xml: true };
+        let codes = |o: ExportOptions| warnings_for(&hires, &hires, &o).iter().map(|w| w.code).collect::<Vec<_>>();
+        assert_eq!(codes(opts(Target::Aiff, Quality::Universal)), ["downsampled"]);
+        assert_eq!(codes(opts(Target::Wav, Quality::Universal)), ["downsampled"]);
+        assert!(codes(opts(Target::Aiff, Quality::High)).is_empty());
+        // MP3 has no quality choice: what the dialog last showed for AIFF must not change the plan.
+        assert!(codes(opts(Target::Mp3, Quality::Universal)).is_empty(), "no advice to choose a resolution that MP3 does not offer");
+        assert!(codes(opts(Target::Mp3, Quality::High)).is_empty());
+        assert_eq!(pcm_bitrate_kbps(44_100, 2, 16), 1411);
+        assert_eq!(pcm_bitrate_kbps(44_100, 2, 24), 2117, "2116.8 kbps, not 2116");
+        assert_eq!(pcm_bitrate_kbps(48_000, 2, 24), 2304);
+        assert_eq!(pcm_bitrate_kbps(44_100, 1, 16), 706);
     }
 
     #[test]

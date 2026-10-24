@@ -6,7 +6,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Bridge } from '../api/bridge.ts';
+import { EVENTS_RECONNECTED, type Bridge } from '../api/bridge.ts';
 import { Client } from '../api/client.ts';
 import type { AppInfo, ImportReport, Overview, ScanStatus, Settings } from '../api/types.ts';
 import { Emitter, throttle } from './emitter.ts';
@@ -164,6 +164,12 @@ export function CoreProvider({ bridge, children }: { bridge: Bridge; children: R
           case 'duplicates.updated':
             loadDuplicates();
             break;
+          case EVENTS_RECONNECTED:
+            // Events may have been missed: read the shared state again (B96).
+            client.scanStatus().then(setScan, () => undefined);
+            overviewThrottle.run();
+            duplicatesThrottle.run();
+            break;
           default:
             break;
         }
@@ -193,9 +199,15 @@ export function CoreProvider({ bridge, children }: { bridge: Bridge; children: R
     return () => clearInterval(t);
   }, [busy, client]);
 
+  // One change at a time, in the order made: two quick changes of one
+  // setting (a typed value, then +) could reach the core in either order and
+  // leave the first one saved (B103).
+  const saving = useRef<Promise<unknown>>(Promise.resolve());
   const saveSettings = useCallback(
     async (values: Partial<Settings>) => {
-      const s = await client.updateSettings(values);
+      const run = saving.current.then(() => client.updateSettings(values));
+      saving.current = run.catch(() => undefined);
+      const s = await run;
       setSettings(s);
       return s;
     },

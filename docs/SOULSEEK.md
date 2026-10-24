@@ -20,6 +20,7 @@ yourself.
 - [Setting up slskd yourself](#setting-up-slskd-yourself)
 - [Connecting SONORA](#connecting-sonora)
 - [Searching and downloading](#searching-and-downloading)
+- [Downloading a YouTube playlist](#downloading-a-youtube-playlist)
 - [Listening before you download](#listening-before-you-download)
 - [How downloads join the library](#how-downloads-join-the-library)
 - [What SONORA keeps and sends](#what-sonora-keeps-and-sends)
@@ -309,6 +310,88 @@ person's queue), downloading, finished or failed. **Cancel** stops one;
 **Clear finished** takes finished ones off the list in SONORA and in slskd,
 and leaves the files where they are.
 
+## Downloading a YouTube playlist
+
+**YouTube playlist** on the Soulseek page turns a playlist into downloads:
+paste the link of a public or unlisted playlist, and SONORA reads its track
+list, looks for every track on Soulseek, picks the best file by your rules
+and downloads it, one search at a time, while you do something else.
+
+**Reading the list.** SONORA fetches the playlist's page the way a browser
+does, with the playlist's id and nothing about you (no account, no
+cookies but one that says no consent dialog is wanted), and follows the
+page's own "load more" requests until the list is complete (up to 5,000
+videos). No API key and no other program is needed. Private lists cannot
+be read: Liked videos, Watch Later, Mixes and playlists set to private are
+refused with a note; set a playlist to public or unlisted (on YouTube,
+Edit → Visibility) and try again.
+
+Each video's title is read as artist and title the way people write them:
+`Artist - Title (Carl Craig Remix) [LABEL001]`, "PREMIERE:" at the front,
+side markers (`A1.`, `B2 -`), track numbers, a year, a catalogue number in
+brackets, "feat." and "ft.", hashtags, "(Official Video)", "- Preview" and
+the like. The mix name is kept apart from the title, and for an "Artist -
+Topic" channel the artist comes from the channel when the title has none.
+What is plainly not a track is **left out** and listed under the tracks,
+where a tick puts any of them back: Shorts, videos over 30 minutes (a mix
+or a set), videos under two minutes with no artist – title structure, the
+same track a second time, and deleted or private videos. Untick any track
+you do not want.
+
+**Rules.** Settings → **Playlist download rules** says which file to take
+when a track is shared in several (the bar above the list shows the
+choices made most often):
+
+- Formats, best first: FLAC, AIFF, WAV and ALAC unless you change the order
+  or turn one off; WavPack and APE off; lossy files (MP3, AAC, Ogg, Opus)
+  off, or on from a bit rate up (320 kbps unless you change it). ALAC in
+  `.m4a` files cannot be told from AAC by name, so they are taken and
+  checked on arrival.
+- Resolution: prefer 16-bit / 44.1 kHz, prefer the highest, or any; with an
+  optional limit (reject above 24-bit, say, or above 96 kHz).
+- Size: reject files far smaller than a lossless file of that length should
+  be (a lossy file renamed), and files above a size you set.
+- Who shares it: only people with a free upload slot, or a queue of at most
+  so many downloads; a lowest reported upload speed.
+- Matching: the share of the title's words the file name must have (60 %
+  unless you change it); the artist must be in the file or folder name when
+  the title names one; names that say remix, edit, live, radio or
+  instrumental are left out unless the title says so too.
+- Mode: **automatic** downloads the best file the moment a track is found;
+  **review first** searches everything, shows the picks and downloads when
+  you confirm. Downloads at a time, how long each search may run (15–25
+  seconds), and whether to look again later for tracks not found.
+
+A file must pass every rule. Among the files that do, the first format
+wins, then the resolution preference, then a free upload slot, a short
+queue and speed, then how well the name matches the title.
+
+**Searching.** For each track SONORA tries up to five searches, stopping at
+the first that finds a file passing the rules: the title (with its mix
+name), the artist and the title, the artist and the title without the mix
+name, the catalogue number, and the title with punctuation and apostrophes
+stripped. Soulseek matches every word, so fewer words find more. The run
+can be paused (searching stops after the current track; downloads on their
+way go on), resumed and stopped, and it carries on where it was if you quit
+SONORA in the middle. A run shows in the status bar from any page.
+
+**Downloads.** The pick goes to slskd like any download, shows under
+Downloads, joins your library when it finishes and is checked like every
+arrival. If the file turns out to be made from a lossy source, damaged or
+truncated, or lossy when the rules say lossless, or if the download fails
+or moves nothing for 15 minutes (an hour in someone's queue), SONORA takes
+the next best file, up to three tries per track, and notes it on the
+track. A file that turned out wrong stays in your library, marked as such,
+for you to decide on.
+
+**The results.** One row per track: its status, the file chosen with its
+format and reported quality, and a link to the video. Filter by status;
+open a row for the other files that were found, why each was rejected,
+**Use this file** to take another one instead (a download on its way is
+cancelled), and the search that found it. **Retry** looks again for the
+tracks that were not found or failed; with the rule on, SONORA looks again
+by itself an hour after a run ends, up to three times, while it is open.
+
 ## Listening before you download
 
 ▶ beside a FLAC, WAV or AIFF file in the results plays it in SONORA's
@@ -334,11 +417,14 @@ header once it arrives.
 
 **It fetches only so far ahead.** A preview fetches at most **Read ahead**
 (30 seconds, 1 minute or 2 minutes; 1 minute unless you change it, under
-Previews on the Setup tab) beyond what is playing. Further ahead, SONORA
-stops the transfer; when playback gets closer, it asks slskd for the file
-again and slskd carries on from where it stopped. So a file you skip after
-a minute is not fetched whole. The other person sees each of these as a
-download request.
+Previews on the Setup tab) beyond what is playing, or beyond what the
+player has buffered if that is further. Further ahead, SONORA stops the
+transfer; when playback gets closer, it asks slskd for the file again and
+slskd carries on from where it stopped. So a file you skip after a minute
+is not fetched whole. The other person sees each of these as a download
+request. Whatever the player is waiting for is always fetched: the macOS
+player buffers a while before it starts, and looks at the end of the file
+first (SONORA answers that look at once, without fetching the rest).
 
 **It keeps nothing.** When a preview stops (you close the player, play
 something else, or quit SONORA), SONORA cancels the transfer, takes it off
@@ -437,6 +523,13 @@ have it.
   other users see them.
 - **Downloads from GitHub**: slskd's release file, only when you allow the
   setup or an update. The request carries nothing about you.
+- **Fetches from YouTube**: a playlist's page and its "load more" answers,
+  only when you paste a playlist link. The requests carry the playlist's
+  id, a browser's User-Agent and a cookie that declines the consent dialog;
+  no account, no history, nothing about your library. What SONORA keeps of
+  a playlist (its videos, what was searched for and found, and which
+  Soulseek users shared each file) stays in the library database until you
+  remove the run.
 - **Keeps**: the API key (in the system's keychain or Credential Manager),
   slskd's address, the download folder, and for each download that it came
   from Soulseek, its name on arrival and when it arrived. A track's
@@ -573,3 +666,7 @@ changed how SONORA is signed, macOS asks once; choose **Always Allow**.
   Windows.
 - SONORA does not bring slskd inside its installer; the setup downloads
   slskd's own release. It does not set up slskd's chat or other settings.
+- A YouTube playlist is read from its public page; if YouTube changes the
+  page, reading may stop working until SONORA is updated. Titles are read
+  as people write them, so an unusual title can come out as the wrong
+  artist or title: untick it, or change what was found afterwards.

@@ -92,7 +92,7 @@
 }
 
 .sk-fine {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 /* Search */
@@ -112,7 +112,7 @@
 
 .sk-error {
   margin: 12px 0 0;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .sk-summary {
@@ -121,13 +121,13 @@
   gap: 12px;
   min-height: 28px;
   margin-top: 14px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   color: var(--c-text-2);
 }
 
 .sk-unverified {
   margin: 2px 0 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 .sk-results {
@@ -155,7 +155,7 @@
 }
 
 .sk-folder-name {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-strong);
 }
 
@@ -169,14 +169,14 @@
   flex-wrap: wrap;
   gap: 2px 14px;
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .sk-user {
   color: var(--c-text-2);
 }
 
-/* Availability: a five-step level ladder, like the wordmark's bars. */
+/* Availability: a five-step level ladder. */
 .sk-avail {
   display: inline-flex;
   align-items: flex-end;
@@ -248,7 +248,7 @@
 }
 
 .sk-fmt {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   font-weight: var(--w-medium);
   letter-spacing: 0.02em;
   color: var(--c-text-2);
@@ -262,7 +262,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .sk-mark svg {
@@ -282,11 +282,11 @@
 .sk-section-head > p {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .sk-section-title {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-strong);
   white-space: nowrap;
 }
@@ -324,7 +324,7 @@
 }
 
 .sk-status {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .sk-progress {
@@ -353,7 +353,7 @@
 
 .sk-key {
   margin-bottom: 14px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   line-height: var(--lh-prose);
 }
 
@@ -365,7 +365,7 @@
   background: var(--c-well);
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   line-height: 1.6;
   white-space: pre;
   overflow-x: auto;
@@ -414,7 +414,7 @@
 }
 
 .sk-manual-link {
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .sk-setup-form .field {
@@ -477,7 +477,7 @@
 
 .sk-will-title {
   margin-top: 18px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: var(--w-strong);
   color: var(--c-text-2);
 }
@@ -498,12 +498,12 @@
   color: var(--c-text-3);
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .sk-note {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .sk-progress-panel {
@@ -591,12 +591,12 @@
 .sk-file-list {
   margin: 8px 0 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .sk-made {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-3);
 }
 
@@ -638,7 +638,7 @@
 
 .sk-pv-state {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   line-height: 1.3;
 }
 
@@ -660,7 +660,7 @@
 
 .sk-queue-advance {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-2);
 }
 
@@ -687,4 +687,318 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* ------------------------------------------- YouTube playlists (SoulseekPlaylist) */
+
+.pl-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pl-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pl-titles {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pl-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-lg);
+  font-weight: var(--w-strong);
+  min-width: 0;
+}
+
+.pl-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-ui);
+  color: var(--c-text-2);
+}
+
+.pl-state svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.pl-run-error {
+  font-size: var(--fs-sm);
+}
+
+.pl-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pl-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pl-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: var(--fs-sm);
+  color: var(--c-text-3);
+}
+
+.pl-quick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 8px 0;
+  border-top: 1px solid var(--c-line-faint);
+  border-bottom: 1px solid var(--c-line-faint);
+}
+
+.pl-quick-all {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}
+
+.pl-quick-note {
+  flex-basis: 100%;
+  font-size: var(--fs-sm);
+}
+
+.pl-filters {
+  padding-top: 2px;
+}
+
+.pl-table {
+  table-layout: fixed;
+}
+
+.pl-table .c-check {
+  width: 30px;
+}
+
+.pl-table .c-n {
+  width: 36px;
+}
+
+.pl-table .c-status {
+  width: 24%;
+}
+
+.pl-table .c-pick {
+  width: 30%;
+}
+
+.pl-table .c-act {
+  width: 68px;
+}
+
+.pl-table td {
+  height: 44px;
+}
+
+.pl-table tr.is-left-out td {
+  color: var(--c-text-3);
+}
+
+.pl-check {
+  padding-right: 0;
+}
+
+.pl-track,
+.pl-pick {
+  min-width: 0;
+}
+
+.pl-track > span,
+.pl-pick > span {
+  display: block;
+}
+
+.pl-sub {
+  display: flex;
+  gap: 10px;
+  font-size: var(--fs-xs);
+  margin-top: 1px;
+}
+
+.pl-sub > span {
+  white-space: nowrap;
+}
+
+.pl-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-ui);
+}
+
+.pl-status svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.pl-status > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-act {
+  white-space: nowrap;
+}
+
+.pl-detail-row td {
+  height: auto;
+  padding: 0 0 12px;
+  background: var(--c-panel);
+}
+
+.pl-detail {
+  padding: 10px 12px 0 66px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-ui);
+}
+
+.pl-detail p {
+  margin: 0;
+}
+
+.pl-detail p svg {
+  width: 13px;
+  height: 13px;
+  vertical-align: -2px;
+}
+
+.pl-note {
+  color: var(--c-text-2);
+}
+
+.pl-detail-meta {
+  font-size: var(--fs-sm);
+}
+
+.pl-detail-empty {
+  font-size: var(--fs-sm);
+}
+
+.pl-cands {
+  margin-top: 4px;
+}
+
+.pl-cands td,
+.pl-cands th {
+  font-size: var(--fs-sm);
+}
+
+.pl-cands tr.is-rejected td {
+  color: var(--c-text-3);
+}
+
+.pl-cands tr.is-pick td:first-child {
+  color: var(--c-text);
+  font-weight: var(--w-medium);
+}
+
+.pl-cands td.ellipsis {
+  max-width: 300px;
+}
+
+.pl-left-out summary {
+  cursor: default;
+  font-size: var(--fs-ui);
+  color: var(--c-text-2);
+  padding: 6px 0;
+}
+
+.pl-left-hint,
+.pl-none {
+  font-size: var(--fs-sm);
+  padding: 6px 0;
+}
+
+.pl-earlier {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--c-line-faint);
+}
+
+.pl-earlier-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-ui);
+}
+
+.pl-earlier-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+/* The rules form in Settings. */
+.pl-rules {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pl-formats {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 260px;
+}
+
+.pl-formats li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 26px;
+}
+
+.pl-format-order {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.pl-format-order .stepper-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.pl-limits {
+  flex-wrap: wrap;
+}
+
+.sb-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.sb-link:hover {
+  color: var(--c-text);
 }

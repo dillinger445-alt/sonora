@@ -37,6 +37,9 @@ export function kindLabel(kind: string): string {
 
 function duration(s: ScanRecord): string {
   if (s.summary?.elapsedMs != null) return formatSpan(s.summary.elapsedMs / 1000);
+  // Interrupted (SONORA quit or crashed): its end was only noted at the next
+  // launch, so that is no length (B70).
+  if (s.state === 'interrupted') return '—';
   if (s.finishedAt) return formatSpan((s.finishedAt - s.startedAt) / 1000);
   return '—';
 }

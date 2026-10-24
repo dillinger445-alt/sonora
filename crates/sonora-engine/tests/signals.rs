@@ -513,11 +513,96 @@ fn real_lossy_encodes_and_transcodes() {
     // A transcode is never better than its lossy source.
     assert!(tc.assessment.scores.overall <= lo.assessment.scores.overall + 5.0);
 
-    let fake = run(&d.join("fake320.mp3"), tools);
+    let fake = run(&d.join("fake320.mp3"), tools.clone());
     let f = find(&fake, "bandwidth_below_bitrate").expect("fake 320 detected");
     assert_eq!(f.evidence, Evidence::Strong);
+    assert!(f.detail.starts_with("This 320 kbps MP3 file has no content above"), "{}", f.detail);
+
+    // B33: an MP3 cut short (an incomplete download) declares its length in
+    // its Info header, and is found truncated.
+    assert!(hi.facts.header_duration_secs.is_some_and(|d| (d - 45.0).abs() < 0.1), "{:?}", hi.facts.header_duration_secs);
+    assert!(!hi.signal.measurements.truncated);
+    let whole = std::fs::read(d.join("enc320.mp3")).unwrap();
+    // Cut at a frame start in the middle (an MPEG-1 Layer III sync word).
+    let mid = (whole.len() / 2..whole.len() - 4).find(|&i| whole[i] == 0xFF && whole[i + 1] & 0xFE == 0xFA).unwrap();
+    std::fs::write(d.join("half.mp3"), &whole[..mid]).unwrap();
+    let half = run(&d.join("half.mp3"), tools);
+    assert!(half.signal.measurements.truncated, "{:?}", ids(&half));
+    assert!(find(&half, "truncated").is_some(), "{:?}", ids(&half));
     assert!(fake.assessment.scores.overall < hi.assessment.scores.overall - 15.0);
     assert!(fake.assessment.flags.contains(&"source_concern".to_string()));
+}
+
+/// B35: the same MP3 stream judged the same inside a WAV: decoded as a lossy
+/// source, its overshoot above full scale kept, not clamped into "clipping".
+#[test]
+fn an_mp3_inside_a_wav_is_judged_as_the_mp3_it_is() {
+    let Some(ffm) = ffmpeg() else { return };
+    let d = dir();
+    // Loud enough that the MP3 decoder overshoots full scale.
+    // Mastered loud, flattened at full scale: an MP3 of it rings above 0 dBFS.
+    let hot: Vec<f32> = track(20.0).iter().map(|v| (v * 4.0).clamp(-0.999, 0.999)).collect();
+    let src = write("hot_src.wav", 16, &quantize16(&hot));
+    let p = |n: &str| d.join(n).to_string_lossy().to_string();
+    ff(&ffm, &["-i", &src.to_string_lossy(), "-c:a", "libmp3lame", "-b:a", "128k", &p("hot.mp3")]);
+    ff(&ffm, &["-i", &p("hot.mp3"), "-c:a", "copy", "-f", "wav", &p("hot_in.wav")]);
+    let tools = ToolPaths::discover(&[]);
+    let bare = run(&d.join("hot.mp3"), tools.clone());
+    let wrapped = run(&d.join("hot_in.wav"), tools);
+    assert_eq!(wrapped.facts.lossless, Some(false));
+    assert_eq!(wrapped.signal.measurements.sample_kind, "lossy");
+    assert!(bare.signal.measurements.decoded_overs > 0, "the test needs an overshooting MP3");
+    assert_eq!(wrapped.signal.measurements.decoded_overs, bare.signal.measurements.decoded_overs);
+    assert_eq!(find(&wrapped, "clipping").is_some(), find(&bare, "clipping").is_some(), "{:?} / {:?}", ids(&wrapped), ids(&bare));
+}
+
+/// B78: sounds shorter than one analysis block or one spectrum frame get no
+/// findings that contradict their own numbers.
+#[test]
+fn very_short_sounds_are_not_called_silent_or_cut_at_0_khz() {
+    for (name, ms) in [("burst8ms.wav", 8.0), ("oneshot80ms.wav", 80.0)] {
+        let n = (FS as f64 * ms / 1000.0) as usize * 2;
+        let p = write(name, 16, &quantize16(&white_noise(3, n, 0.35)));
+        let a = native(&p);
+        assert!(!a.signal.measurements.silence.all_silent, "{name}");
+        assert!(find(&a, "near_silent").is_none() && find(&a, "silent_file").is_none(), "{name}: {:?}", ids(&a));
+        assert!(!a.assessment.findings.iter().any(|f| f.detail.contains("0.0 kHz")), "{name}: {:?}", ids(&a));
+    }
+}
+
+/// B37: a file over the length limit is reported with its own length.
+#[test]
+fn a_file_over_the_length_limit_says_how_long_it_is() {
+    let p = write("five_minutes.wav", 16, &quantize16(&track(300.0)));
+    let cancel = AtomicBool::new(false);
+    let mut progress = |_f: f64| {};
+    let mut ctl = Control { cancel: &cancel, progress: &mut progress, max_duration_secs: 120.0 };
+    let err = analyze_file(&p, &AnalyzeOptions { tools: ToolPaths::none(), ..Default::default() }, &mut ctl).unwrap_err();
+    assert_eq!(err.code(), "too_long");
+    assert_eq!(err.to_string(), "Audio is 5 min long, above the 2 min analysis limit");
+    // Only how far decoding got is known: no length is claimed.
+    let e = sonora_engine::AnalysisError::TooLong { seconds: 120.4, limit: 120.0, known: false };
+    assert_eq!(e.to_string(), "Audio is longer than the 2 min analysis limit");
+}
+
+/// B34: a lossless file at a low sample rate falls steeply just below its
+/// top frequency (the resampler's anti-alias filter); that is not a lossy
+/// encoder's cut-off.
+#[test]
+fn a_low_sample_rate_is_not_taken_for_a_lossy_source() {
+    let Some(ffm) = ffmpeg() else { return };
+    let d = dir();
+    let src = write("rate_src.wav", 16, &quantize16(&white_noise(7, 30 * FS as usize * 2, 0.25)));
+    let out = d.join("rate32.wav");
+    // FFmpeg's own resampler with a long, steep filter, as good resamplers
+    // use (soxr would do too, but not every FFmpeg build has it).
+    ff(&ffm, &["-i", &src.to_string_lossy(), "-af", "aresample=32000:filter_size=256:cutoff=0.98", "-c:a", "pcm_s16le", &out.to_string_lossy()]);
+    let a = native(&out);
+    assert_eq!(a.facts.sample_rate, 32_000);
+    for id in ["lossy_source_suspected", "steep_cutoff"] {
+        assert!(find(&a, id).is_none(), "{id}: {:?}", ids(&a));
+    }
+    assert!(a.assessment.scores.overall >= 90.0, "{:?} {:?}", a.assessment.scores, ids(&a));
 }
 
 /// Stored facts and measurements re-score to exactly the same assessment,

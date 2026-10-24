@@ -16,6 +16,7 @@ import { throttle } from '../state/emitter.ts';
 import { useToast } from '../state/toasts.tsx';
 import { useResource, type Resource } from '../state/useResource.ts';
 import { SoulseekDownloads } from './SoulseekDownloads.tsx';
+import { SoulseekPlaylist } from './SoulseekPlaylist.tsx';
 import { SoulseekSearch } from './SoulseekSearch.tsx';
 import { SoulseekSetup } from './SoulseekSetup.tsx';
 
@@ -166,20 +167,26 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
   // Downloads are asked for once slskd has answered.
   const downloads = useDownloads(accepted && keySaved && connection?.ok === true, current === 'downloads');
 
+  // Tests can overlap (one hangs while slskd starts): only the newest
+  // answer counts (B59).
+  const testSeq = useRef(0);
+  const testsRunning = useRef(0);
   const test = useCallback(async (): Promise<Connection> => {
+    const seq = ++testSeq.current;
+    testsRunning.current += 1;
     setTesting(true);
+    let c: Connection;
     try {
       const info = await client.slskdTest();
-      const c: Connection = { ok: true, info, at: Date.now() };
-      setConnection(c);
-      return c;
+      c = { ok: true, info, at: Date.now() };
     } catch (e) {
-      const c: Connection = { ok: false, code: (e as { code?: string }).code ?? 'failed', error: e instanceof Error ? e.message : String(e), at: Date.now() };
-      setConnection(c);
-      return c;
+      c = { ok: false, code: (e as { code?: string }).code ?? 'failed', error: e instanceof Error ? e.message : String(e), at: Date.now() };
     } finally {
-      setTesting(false);
+      testsRunning.current -= 1;
+      if (testsRunning.current === 0) setTesting(false);
     }
+    if (seq === testSeq.current) setConnection(c);
+    return c;
   }, [client]);
 
   // Ask slskd how it is doing once, when the page opens with slskd set up.
@@ -212,7 +219,8 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
     const timer = setInterval(() => {
       if (document.hidden) return;
       managed.reload();
-      void test();
+      // A test still waiting for slskd is not started again (B59).
+      if (testsRunning.current === 0) void test();
     }, 6000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -271,6 +279,7 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
           <TabList
             items={[
               { id: 'search', label: 'Search' },
+              { id: 'playlist', label: 'YouTube playlist' },
               { id: 'downloads', label: 'Downloads', count: activeCount + waiting || undefined },
               { id: 'setup', label: 'Setup' },
             ]}
@@ -290,6 +299,8 @@ export function SoulseekView({ tab }: { tab?: SoulseekTab }) {
                   Searching needs slskd. <a className="link" href={formatRoute({ view: 'soulseek', tab: 'setup' })}>Set it up</a> first.
                 </p>
               )
+            ) : current === 'playlist' ? (
+              <SoulseekPlaylist state={state} />
             ) : current === 'downloads' ? (
               <SoulseekDownloads state={state} />
             ) : (

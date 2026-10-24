@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { LuCircleArrowUp, LuDatabaseBackup, LuFolderSearch, LuRadioTower, LuRefreshCw, LuShieldCheck, LuTrash2 } from 'react-icons/lu';
 import type { KeyNotation, Settings } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
-import { Segmented, Switch } from '../components/Controls.tsx';
+import { NumberStepper, Segmented, Switch } from '../components/Controls.tsx';
 import { useConfirm } from '../components/Dialog.tsx';
 import { ViewHeader } from '../components/Layout.tsx';
 import { formatBytes, formatCount, formatRelative, plural } from '../lib/format.ts';
@@ -15,6 +15,7 @@ import { useToast } from '../state/toasts.tsx';
 import { revealLabel } from '../lib/platform.ts';
 import { useResource } from '../state/useResource.ts';
 import { useUpdates } from '../state/updates.tsx';
+import { PlaylistRulesForm } from '../components/PlaylistRules.tsx';
 import { DiscogsSettings } from './DiscogsSettings.tsx';
 
 /** Tempo ranges DJs commonly use (each spans an octave, so every tempo has one reading in it). */
@@ -106,55 +107,6 @@ function UpdateSettings({ version, checkUpdates, onAutoChange }: { version: stri
   );
 }
 
-function NumberStepper({ value, min, max, step = 1, onChange, label, unit }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; label: string; unit?: string }) {
-  const [text, setText] = useState(String(value));
-  const [lastValue, setLastValue] = useState(value);
-  if (value !== lastValue) {
-    setLastValue(value);
-    setText(String(value));
-  }
-  const commit = (raw: string) => {
-    const v = Number(raw);
-    if (!Number.isFinite(v)) {
-      setText(String(value));
-      return;
-    }
-    const clamped = Math.max(min, Math.min(max, Math.round(v / step) * step));
-    setText(String(clamped));
-    if (clamped !== value) onChange(clamped);
-  };
-  return (
-    <div className="stepper">
-      <button type="button" className="stepper-btn" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - step))}>
-        −
-      </button>
-      <input
-        className="stepper-input num"
-        inputMode="numeric"
-        aria-label={label}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={(e) => commit(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
-          if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            onChange(Math.min(max, value + step));
-          }
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            onChange(Math.max(min, value - step));
-          }
-        }}
-      />
-      <button type="button" className="stepper-btn" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + step))}>
-        +
-      </button>
-      {unit ? <span className="stepper-unit faint">{unit}</span> : null}
-    </div>
-  );
-}
-
 export function SettingsView() {
   const { settings, saveSettings, info, client, bridge, refreshInfo, overview } = useCore();
   const busy = useScanBusy();
@@ -225,8 +177,11 @@ export function SettingsView() {
   const checkTools = async () => {
     setChecking(true);
     try {
-      await client.refreshTools();
+      const tools = await client.refreshTools();
       await refreshInfo();
+      // Say what was found, also when nothing changed (B85).
+      if (tools.ffmpeg.available) toast({ tone: 'success', title: 'FFmpeg found', body: tools.ffmpeg.version ? `Version ${tools.ffmpeg.version}.` : undefined });
+      else toast({ tone: 'warning', title: 'FFmpeg is still not found', body: 'Install FFmpeg on your PATH, then check again.' });
     } catch (e) {
       toast({ tone: 'error', title: 'Could not check for FFmpeg', body: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -287,8 +242,9 @@ export function SettingsView() {
               options={SCORE_KINDS.map((k) => ({ value: k, label: SCORE_LABEL[k], hint: SCORE_HINT[k] }))}
             />
           </Row>
+          {/* A value, not a control: there is nothing to choose yet. */}
           <Row label="Theme" description="Only the dark theme is available in this version.">
-            <Segmented label="Theme" size="sm" value="dark" onChange={() => undefined} options={[{ value: 'dark', label: 'Dark' }]} />
+            <span className="setting-value">Dark</span>
           </Row>
         </Group>
 
@@ -348,9 +304,21 @@ export function SettingsView() {
           </Row>
         </Group>
 
+        <Group
+          title="Playlist download rules"
+          description={
+            <>
+              How SONORA picks a Soulseek file for each track of a YouTube playlist (Soulseek → YouTube playlist). A file must pass every rule; among those that do, the first format wins, then the
+              resolution preference, then a free upload slot, a short queue and speed, then how well the name matches.
+            </>
+          }
+        >
+          <PlaylistRulesForm />
+        </Group>
+
         <Group title="Library" description={<>Folders are managed on the <a className="link" href={formatRoute({ view: 'folders' })}>Folders</a> page.</>}>
           <Row label="Library database" description={<span className="selectable mono-path">{info.dbPath}</span>}>
-            <Button size="sm" icon={LuFolderSearch} onClick={() => void bridge.reveal(info.dbPath).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: String(e) }))}>
+            <Button size="sm" icon={LuFolderSearch} onClick={() => void bridge.reveal(info.dbPath).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: e instanceof Error ? e.message : String(e) }))}>
               {revealLabel(bridge.platform)}
             </Button>
           </Row>

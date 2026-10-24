@@ -8,7 +8,7 @@
  * interface asks for paths instead.
  */
 
-import { CoreError, type Bridge, type DropHandlers, type Updater, type UpdateStep } from './bridge.ts';
+import { CoreError, EVENTS_RECONNECTED, type Bridge, type DropHandlers, type Updater, type UpdateStep } from './bridge.ts';
 import type { CoreEventName, PreparedPlayback } from './types.ts';
 
 /**
@@ -35,6 +35,9 @@ const EVENT_NAMES = Object.keys({
   'sources.imported': true,
   'slskd.setup': true,
   'preview.changed': true,
+  'playlist.changed': true,
+  'playlist.item': true,
+  'playlist.finished': true,
 } satisfies Record<CoreEventName, true>) as CoreEventName[];
 
 interface CallResponse {
@@ -67,6 +70,14 @@ export function createHttpBridge(base = ''): Bridge {
 
   const subscribe = (handler: (name: string, payload: unknown) => void): Promise<() => void> => {
     const source = new EventSource(`${base}/api/events`);
+    // EventSource reconnects by itself after a dropped connection (the bridge
+    // restarted, the computer slept); what was sent meanwhile is lost (B96).
+    let opened = false;
+    const onOpen = () => {
+      if (opened) handler(EVENTS_RECONNECTED, null);
+      opened = true;
+    };
+    source.addEventListener('open', onOpen);
     const listeners = EVENT_NAMES.map((name) => {
       const listener = (e: MessageEvent<string>) => {
         try {
@@ -79,6 +90,7 @@ export function createHttpBridge(base = ''): Bridge {
       return [name, listener] as const;
     });
     return Promise.resolve(() => {
+      source.removeEventListener('open', onOpen);
       for (const [name, listener] of listeners) source.removeEventListener(name, listener);
       source.close();
     });

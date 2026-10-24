@@ -188,6 +188,16 @@ export function SoulseekDownloads({ state }: { state: SoulseekState }) {
             </p>
           </EmptyState>
         ) : null
+      ) : !state.connection ? (
+        // A key just made (or no test yet): say so instead of a blank page (B61).
+        <EmptyState icon={LuDownload} title={state.testing ? 'Checking slskd…' : 'slskd is not checked yet'}>
+          <p>The downloads are listed once slskd answers.</p>
+          {!state.testing ? (
+            <Button size="sm" onClick={() => void state.test()}>
+              Test the connection
+            </Button>
+          ) : null}
+        </EmptyState>
       ) : state.connection && !state.connection.ok ? (
         <ErrorState title="slskd did not answer" error={state.connection.error} onRetry={() => void state.test()} />
       ) : state.downloads.error && !list ? (

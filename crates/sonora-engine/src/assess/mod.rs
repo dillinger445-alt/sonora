@@ -29,7 +29,9 @@ use crate::meta::FileFacts;
 use sonora_json::{num, obj, ToJson, Value};
 
 /// Version of the scoring model. Stored with every result.
-pub const SCORE_MODEL_VERSION: &str = "sonora-dsp-1.0";
+/// 1.1: no lossy cut-off in the anti-alias band of low sample rates, no
+/// bandwidth finding for sounds too short to measure (see docs/SCORING.md).
+pub const SCORE_MODEL_VERSION: &str = "sonora-dsp-1.1";
 
 /// How a conclusion was reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

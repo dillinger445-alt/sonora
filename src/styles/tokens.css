@@ -77,11 +77,21 @@
   --stretch-wide: 118%;
   --stretch-num: 78%;
 
+  /* Chart axes and counts inside small marks (monospace). */
+  --fs-2xs: 10px;
+  /* Badges and counts in buttons. */
+  --fs-badge: 10.5px;
   --fs-xs: 11px;
+  /* Labels: field and column names, hints, paths. */
+  --fs-label: 11.5px;
   --fs-sm: 12px;
+  /* Controls and running text: buttons, menus, inputs, panels. */
+  --fs-ui: 12.5px;
   --fs-md: 13px;
   --fs-lg: 15px;
   --fs-xl: 18px;
+  /* Numerals: 18 (counters), 24 (tempo and key on the track page), 30 (scores). */
+  --fs-num-md: 24px;
   --fs-num-lg: 30px;
 
   --lh-tight: 1.2;
@@ -103,6 +113,8 @@
 
   /* Shape. */
   --r-ctl: 3px;
+  /* Menus, popovers, toasts and the selection bar: floating, but not dialogs. */
+  --r-pop: 4px;
   --r-dlg: 6px;
   --h-ctl: 28px;
   --h-row: 32px;

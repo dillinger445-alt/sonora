@@ -12,6 +12,7 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -23,12 +24,14 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
   type ReactNode,
   type Ref,
 } from 'react';
 import { LuArrowDown, LuArrowUp } from 'react-icons/lu';
 import type { LibraryFilter, ScoreKind, Sort, TrackRow } from '../api/types.ts';
 import { plural } from '../lib/format.ts';
+import { reuseRows } from '../lib/rows.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
 import { useDragStart } from '../state/dnd.tsx';
 import { throttle } from '../state/emitter.ts';
@@ -75,6 +78,59 @@ export interface TrackTableProps {
   refreshOn?: string[];
   handle?: Ref<TrackTableHandle>;
 }
+
+/** What a row does with the pointer; the table answers with its latest state. */
+interface RowEvents {
+  click: (e: MouseEvent, i: number, r: TrackRow) => void;
+  toggle: (i: number, r: TrackRow) => void;
+  open: (r: TrackRow) => void;
+  menu: (e: MouseEvent, i: number, r: TrackRow) => void;
+  pointerDown: (e: PointerEvent, r: TrackRow) => void;
+}
+
+interface TableRowProps {
+  index: number;
+  row: TrackRow;
+  id: string;
+  selected: boolean;
+  active: boolean;
+  playing: boolean;
+  template: string;
+  columns: Column[];
+  ctx: ColumnContext;
+  events: RowEvents;
+}
+
+/**
+ * One row. Memoised: while a scan updates tracks, or the rows are fetched
+ * again with nothing changed, only rows whose track (or selection, focus,
+ * playback) changed render again, not every row on screen.
+ */
+const TableRow = memo(function TableRow({ index, row: r, id, selected, active, playing, template, columns, ctx, events }: TableRowProps) {
+  return (
+    <div
+      id={id}
+      role="row"
+      aria-rowindex={index + 2}
+      aria-selected={selected}
+      className={`trow ${selected ? 'is-selected' : ''} ${active ? 'is-active' : ''} ${r.missing ? 'is-missing' : ''} ${playing ? 'is-playing' : ''}`}
+      style={{ top: index * ROW, gridTemplateColumns: template }}
+      onClick={(e) => events.click(e, index, r)}
+      onDoubleClick={() => events.open(r)}
+      onContextMenu={(e) => events.menu(e, index, r)}
+      onPointerDown={(e) => events.pointerDown(e, r)}
+    >
+      <div role="gridcell" className="tcell tcell-check" onClick={(e) => e.stopPropagation()}>
+        <Checkbox checked={selected} tabIndex={-1} aria-label={`Select ${r.displayTitle}`} onChange={() => events.toggle(index, r)} />
+      </div>
+      {columns.map((c) => (
+        <div key={c.id} role="gridcell" className={`tcell tcell-${c.id} ${c.align === 'end' ? 'is-end' : ''}`}>
+          {c.render(r, ctx)}
+        </div>
+      ))}
+    </div>
+  );
+});
 
 type PendingMove =
   /** A keyboard move to a row that has not loaded yet. */
@@ -128,6 +184,10 @@ export function TrackTable({
 
   const cache = useRef(new Map<number, TrackRow[]>());
   const stale = useRef(new Map<number, TrackRow[]>());
+  /** `stale` holds the previous query's rows (shown until the new ones come). */
+  const foreign = useRef(false);
+  /** A new query whose first page will prune the selection and the active track. */
+  const prune = useRef<string | null>(null);
   const inflight = useRef(new Set<number>());
   const generation = useRef(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -159,7 +219,15 @@ export function TrackTable({
         .then(
           (res) => {
             if (gen !== generation.current) return;
-            cache.current.set(p, res.rows);
+            // The previous query's rows were only stand-ins until now.
+            if (foreign.current) {
+              stale.current = new Map();
+              foreign.current = false;
+            }
+            // Tracks that did not change keep their objects, so their rows
+            // do not render again.
+            const before = cache.current.get(p) ?? stale.current.get(p);
+            cache.current.set(p, before ? reuseRows(before, res.rows) : res.rows);
             stale.current.delete(p);
             setTotal(res.total);
             setLoadError(null);
@@ -167,6 +235,11 @@ export function TrackTable({
           },
           (e: unknown) => {
             if (gen !== generation.current) return;
+            if (foreign.current) {
+              stale.current = new Map();
+              foreign.current = false;
+              setTotal(null);
+            }
             setLoadError(e instanceof Error ? e.message : String(e));
             // A move waiting for these rows cannot finish; keep the keyboard usable.
             if (pending.current?.kind === 'replace') setActiveRow(null);
@@ -206,18 +279,21 @@ export function TrackTable({
     return null;
   }, []);
 
-  // New query: start over at the top.
+  // New query: start over at the top. The rows on screen stay until the new
+  // ones arrive, so the table does not blank on every keystroke and a click
+  // in between lands on a row; the selection and the active track keep what
+  // is in the new results (B24).
   useLayoutEffect(() => {
     generation.current += 1;
+    stale.current = new Map([...stale.current, ...cache.current]);
+    foreign.current = true;
     cache.current = new Map();
-    stale.current = new Map();
     inflight.current = new Set();
-    setTotal(null);
     setLoadError(null);
     setActive(-1);
-    setActiveRow(null);
     anchor.current = { index: -1, id: null };
     pending.current = null;
+    prune.current = key;
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     setScrollTop(0);
     fetchPage(0);
@@ -400,6 +476,30 @@ export function TrackTable({
   useLayoutEffect(() => {
     const p = pending.current;
     const { active: cur, activeRow: row, total: n } = latest.current;
+    // A new query's first page: keep only what is in the new results.
+    const first = cache.current.get(0);
+    if (prune.current != null && prune.current === keyRef.current && first && n != null) {
+      const query = prune.current;
+      prune.current = null;
+      const keep = (ids: Set<number>) => {
+        if (query !== keyRef.current) return;
+        const sel = selectionRef.current;
+        const next = new Set([...sel].filter((id) => ids.has(id)));
+        if (next.size !== sel.size) onSelection(next);
+        const r = latest.current.activeRow;
+        if (r && !ids.has(r.id)) {
+          setActiveRow(null);
+          setActive(-1);
+        }
+      };
+      if (n <= first.length) keep(new Set(first.map((r) => r.id)));
+      else if (selectionRef.current.size > 0 || row) {
+        client.ids(filterRef.current).then(
+          (r) => keep(new Set(r.ids)),
+          () => undefined,
+        );
+      }
+    }
     if (p?.kind === 'index') {
       const idx = n != null ? Math.min(p.index, n - 1) : p.index;
       const r = idx >= 0 ? rowAt(idx) : undefined;
@@ -660,6 +760,43 @@ export function TrackTable({
     else onSort({ key: c.sortKey, desc: !ASCENDING_FIRST.has(c.sortKey) });
   };
 
+  // Rows call the table through one stable object, so they can skip
+  // rendering; it reaches the handlers of the latest render.
+  const handlers = useRef<RowEvents | null>(null);
+  const latestHandlers: RowEvents = {
+    click: onRowClick,
+    toggle: toggleOne,
+    open: onOpen,
+    menu: (e, i, r) => {
+      if (!rowMenu) return;
+      // Our menu, not the web view's own (Back, Reload).
+      e.preventDefault();
+      gridRef.current?.focus({ preventScroll: true });
+      openRowMenu(i, r, e.clientX, e.clientY, false);
+    },
+    pointerDown: (e, r) => {
+      // Rows drag onto playlists in the sidebar: the selection, or this row.
+      if ((e.target as HTMLElement).closest('button, input, a')) return;
+      beginDrag(e, () => {
+        const ids = selectionRef.current.has(r.id) ? [...selectionRef.current] : [r.id];
+        return { kind: 'tracks', ids, label: ids.length === 1 ? r.displayTitle : plural(ids.length, 'track') };
+      });
+    },
+  };
+  useLayoutEffect(() => {
+    handlers.current = latestHandlers;
+  });
+  const rowEvents = useMemo<RowEvents>(
+    () => ({
+      click: (e, i, r) => handlers.current?.click(e, i, r),
+      toggle: (i, r) => handlers.current?.toggle(i, r),
+      open: (r) => handlers.current?.open(r),
+      menu: (e, i, r) => handlers.current?.menu(e, i, r),
+      pointerDown: (e, r) => handlers.current?.pointerDown(e, r),
+    }),
+    [],
+  );
+
   const activeId = activeRow?.id ?? null;
   const rows: ReactNode[] = [];
   let activeElementId: string | undefined;
@@ -677,41 +814,19 @@ export function TrackTable({
       const id = `${gridId}-r${i}`;
       if (isActive && (activeElementId === undefined || i === active)) activeElementId = id;
       rows.push(
-        <div
+        <TableRow
           key={i}
+          index={i}
+          row={r}
           id={id}
-          role="row"
-          aria-rowindex={i + 2}
-          aria-selected={selected}
-          className={`trow ${selected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''} ${r.missing ? 'is-missing' : ''} ${r.id === playingId ? 'is-playing' : ''}`}
-          style={{ top, gridTemplateColumns: template }}
-          onClick={(e) => onRowClick(e, i, r)}
-          onDoubleClick={() => onOpen(r)}
-          onContextMenu={(e) => {
-            if (!rowMenu) return;
-            // Our menu, not the web view's own (Back, Reload).
-            e.preventDefault();
-            gridRef.current?.focus({ preventScroll: true });
-            openRowMenu(i, r, e.clientX, e.clientY, false);
-          }}
-          onPointerDown={(e) => {
-            // Rows drag onto playlists in the sidebar: the selection, or this row.
-            if ((e.target as HTMLElement).closest('button, input, a')) return;
-            beginDrag(e, () => {
-              const ids = selectionRef.current.has(r.id) ? [...selectionRef.current] : [r.id];
-              return { kind: 'tracks', ids, label: ids.length === 1 ? r.displayTitle : plural(ids.length, 'track') };
-            });
-          }}
-        >
-          <div role="gridcell" className="tcell tcell-check" onClick={(e) => e.stopPropagation()}>
-            <Checkbox checked={selected} tabIndex={-1} aria-label={`Select ${r.displayTitle}`} onChange={() => toggleOne(i, r)} />
-          </div>
-          {columns.map((c) => (
-            <div key={c.id} role="gridcell" className={`tcell tcell-${c.id} ${c.align === 'end' ? 'is-end' : ''}`}>
-              {c.render(r, cellCtx)}
-            </div>
-          ))}
-        </div>,
+          selected={selected}
+          active={isActive}
+          playing={r.id === playingId}
+          template={template}
+          columns={columns}
+          ctx={cellCtx}
+          events={rowEvents}
+        />,
       );
     }
   }

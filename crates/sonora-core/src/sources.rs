@@ -107,9 +107,17 @@ impl Watcher {
         });
     }
 
-    /// Looks again soon (after the settings changed).
+    /// Looks again soon, from scratch (after the settings changed).
     pub fn wake(&self) {
         lock(&self.inner.looks).clear();
+        self.nudge();
+    }
+
+    /// Looks again soon, keeping what the last looks saw: a file is taken
+    /// once two looks in a row find it unchanged, so a caller that asks
+    /// often (a playlist run waiting for its downloads) must not make the
+    /// watcher forget them.
+    pub fn nudge(&self) {
         *lock(&self.inner.woken) = true;
         self.inner.wake.notify_all();
     }

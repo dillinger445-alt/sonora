@@ -4,6 +4,102 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.4.0
+
+### New
+
+- **Download a YouTube playlist from Soulseek.** On the Soulseek page,
+  **YouTube playlist** takes the link of a public or unlisted playlist,
+  reads its track list (titles read as artist, title and mix name; Shorts,
+  mixes and repeats left out, with a tick to put any back), looks for every
+  track through slskd, one search at a time with up to five searches each,
+  picks the best file by the rules under Settings → **Playlist download
+  rules** (formats in order, resolution, size, who shares it, how well the
+  name matches) and downloads it, automatically or after you review the
+  picks. A file that arrives made from a lossy source, damaged or lossy is
+  swapped for the next best, up to three tries. The run can be paused,
+  stopped and retried, shows in the status bar, and carries on after a
+  restart. YouTube sees the playlist's id and nothing about you.
+
+### Changed
+
+- **A new icon.** SONORA's icon is now a meter whose scale is a sound wave,
+  lime on graphite, drawn simpler at small sizes so it stays readable down
+  to 16 pixels; the sidebar's wordmark carries it too.
+- **Faster with large libraries.** With thousands of tracks, a running scan
+  no longer redraws every row of the library on each update (about 93 %
+  less drawing), long playlists open in about half the time and move with
+  the arrow keys without lag, their set timeline fits the window, and an
+  export of thousands of tracks is planned about five times faster.
+- **Design.** Type sizes and corner radii follow one scale throughout; the
+  Theme setting shows its one value instead of a control with one choice.
+- **Scores, version 1.1.** A lossless file at a low sample rate (32 kHz,
+  say) is no longer called a likely transcode, an MP3 or AAC stream inside
+  a WAV is judged as the lossy file it is (not as heavily clipped), and an
+  MP3 cut short is no longer called clean. Tracks already analysed are
+  scored again from their stored measurements when SONORA starts; the
+  changes that need the audio apply when a track is analysed again.
+
+### Fixed
+
+- **Listening before you download works on a Mac.** A Soulseek preview
+  said "Enough has arrived for now" and stayed silent. The Mac's player
+  looks at the end of a file before it starts playing, and buffers a
+  while; SONORA kept it waiting for the end of the file, which had not
+  arrived, and stopped fetching because nothing played yet. Previews play
+  now, and say "Buffering…" while the player waits for audio. Windows was
+  not affected.
+
+SONORA was reviewed function by function before this version; every
+finding is listed, with how to reproduce it and the test that now guards
+it, in `docs/BUGS.md`. The ones you could meet:
+
+- **Playlist downloads** arrive in the library again: finished files no
+  longer stay on "Arrived; checking it" until SONORA gives up on them. A
+  second playlist started while another works waits instead of being left
+  "running" with nothing running it; a track removed while it is checked no
+  longer holds the run for ever; "Could not reach slskd" goes once slskd is
+  back; choosing another file while a download is checked is not
+  overruled; rules changed while a run is paused apply when it resumes;
+  sizes are decimal megabytes, as everywhere else.
+- **DJ export and Send to USB**: a date tag that is not a plain year (a
+  Japanese date, say) no longer stops the export with an internal error.
+  MP3 exports no longer warn about a resolution choice MP3 does not have,
+  and rekordbox gets the length of copied MP3s. A stopped send keeps every
+  file it did not reach in the drive's playlists, a playlist file you
+  changed on the drive no longer gets a new number on every send, and
+  quitting during a send lets it tidy up first. The USB dialog notices when
+  an export ends.
+- **Soulseek**: "Set up Soulseek" no longer switches sharing back on after
+  you turned it off. Repair and the setup add what is missing to
+  slskd.yml instead of rewriting it, and removing what a setup made puts
+  your earlier settings back. A search keeps going after one failed look;
+  a preview ends when its download is cancelled; downloads that match files
+  already in the folder are no longer labelled "Added, then removed".
+- **Library and analysis**: a row clicked right after typing a search stays
+  selected; Clear right after typing really clears; library search ignores
+  case in every script ("ночь" finds "Ночь"). Tracks added to a running
+  scan are analysed by every worker; Cancel stops imports waiting their
+  turn; a file that disappears during a scan is marked missing, not failed;
+  a failed re-analysis is shown on the track page; history lists every
+  result of a large scan; Opus and Vorbis bit rates leave out cover art;
+  iTunes' own comment numbers, numeric ID3 genres and Latin-1 text read
+  properly.
+- **Playlists**: smart playlists saved from library filters match what the
+  library showed; a genre outside the most common ones can be seen and
+  turned off; selections follow tracks out of a playlist, and tracks taken
+  out go at once.
+- **Settings and the rest**: clearing a number field no longer saves its
+  minimum, and − / + step from what you typed; two settings changed
+  quickly no longer undo each other; one unreadable playlist rule no longer
+  resets all of them; a failed automatic update check keeps an update it
+  already found; "Check again" for FFmpeg says what it found; the CSV export
+  opens with accents intact in Excel; Discogs lookups of artists whose
+  names start with digits work, and stopping one says it was stopped.
+  A value typed into a number field and then stepped with + is saved as
+  stepped; Cancel stops the import of a folder of thousands of files at
+  once; on Duplicates, Remove and Move to Trash are no longer cut off.
+
 ## 0.3.2
 
 ### Fixed

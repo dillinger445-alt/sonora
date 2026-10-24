@@ -225,15 +225,19 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
   const watching = open && phase === 'running';
   useEffect(() => (watching ? watch() : undefined), [watching, watch]);
 
+  // MP3 has no quality choice (the dialog hides it): what is sent must not
+  // depend on it (B08).
   const options = useMemo<UsbOptions>(
-    () => ({ format, quality, keyNotation: notation, bestCopy: true, rekordboxXml: xml, m3u, serato, removeStale, numberFolders: numbered }),
+    () => ({ format, quality: format === 'mp3' ? 'universal' : quality, keyNotation: notation, bestCopy: true, rekordboxXml: xml, m3u, serato, removeStale, numberFolders: numbered }),
     [format, quality, notation, xml, m3u, serato, removeStale, numbered],
   );
+  // Plans again when an export or another send ends while this is set up (B09).
+  const [planTick, setPlanTick] = useState(0);
   const ids = useMemo(() => [...selected], [selected]);
   const target = root.trim();
 
   // What sending would do, as choices change.
-  const planKey = JSON.stringify([target, ids, options]);
+  const planKey = JSON.stringify([target, ids, options, planTick]);
   useEffect(() => {
     if (!open || phase !== 'setup') return;
     if (!target || !isAbsolutePath(target) || ids.length === 0) {
@@ -266,12 +270,26 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, phase, planKey]);
 
-  useCoreEvent(['usb.finished'], (_n, payload) => {
-    if (!open || !awaiting.current) return;
+  useCoreEvent(['usb.finished', 'djexport.finished'], (name, payload) => {
+    if (!open) return;
+    if (name !== 'usb.finished' || !awaiting.current) {
+      // Someone else's job ended: this send may start now.
+      setPlanTick((n) => n + 1);
+      return;
+    }
     awaiting.current = false;
     setReport(payload as UsbReport);
     setPhase('done');
   });
+
+  // Says why when the folder cannot be shown (the drive was ejected, say) (B50).
+  const reveal = async (path: string) => {
+    try {
+      await bridge.reveal(path);
+    } catch (e) {
+      toast({ tone: 'error', title: 'Could not show the files', body: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   const chooseFolder = async () => {
     let f: string | null = null;
@@ -518,7 +536,7 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
           {d?.tone === 'success' ? <LuCircleCheck aria-hidden /> : <LuTriangleAlert aria-hidden />}
           {d?.title}
         </p>
-        {d?.body ? <p>{d.body}.</p> : null}
+        {d?.body ? <p>{/[.!?]$/.test(d.body) ? d.body : `${d.body}.`}</p> : null}
         <p className="mono-path selectable">{report.folder}</p>
         {(report.failed ?? []).length ? (
           <div className="xp-list">
@@ -541,42 +559,45 @@ export function UsbDialog({ playlistIds, onClose }: { playlistIds: number[] | nu
             ))}
           </ul>
         ) : null}
-        <div className="xp-howto">
-          <h3 className="xp-howto-title">Using the drive</h3>
-          <dl>
-            <div>
-              <dt>CDJs, XDJs, controllers</dt>
-              <dd>Browse the drive's folders: each playlist is a folder, its tracks numbered in set order.</dd>
-            </div>
-            {report.rekordboxXml ? (
+        {/* How to use the drive, when something is on it (B51). */}
+        {!report.error && report.written + report.kept + report.renamed > 0 ? (
+          <div className="xp-howto">
+            <h3 className="xp-howto-title">Using the drive</h3>
+            <dl>
               <div>
-                <dt>rekordbox</dt>
-                <dd>
-                  In Preferences → Advanced → Database, choose SONORA/rekordbox.xml on the drive under “rekordbox xml”. The playlists appear under “rekordbox xml”: right-click one and choose Import Playlist. To export the drive for CDJs with waveforms, do it from rekordbox afterwards.
-                </dd>
+                <dt>CDJs, XDJs, controllers</dt>
+                <dd>Browse the drive's folders: each playlist is a folder, its tracks numbered in set order.</dd>
               </div>
-            ) : null}
-            {report.crates ? (
-              <div>
-                <dt>Serato DJ</dt>
-                <dd>The crates are in the drive's _Serato_ folder; Serato DJ lists them under the drive when it is connected.</dd>
-              </div>
-            ) : null}
-            {report.m3u ? (
-              <div>
-                <dt>Engine DJ, Traktor, VirtualDJ</dt>
-                <dd>Open the M3U playlist in a playlist's folder, or add the folder to the collection.</dd>
-              </div>
-            ) : null}
-          </dl>
-          <p className="faint">Eject the drive in Finder or File Explorer before unplugging it.</p>
-        </div>
+              {report.rekordboxXml ? (
+                <div>
+                  <dt>rekordbox</dt>
+                  <dd>
+                    In Preferences → Advanced → Database, choose SONORA/rekordbox.xml on the drive under “rekordbox xml”. The playlists appear under “rekordbox xml”: right-click one and choose Import Playlist. To export the drive for CDJs with waveforms, do it from rekordbox afterwards.
+                  </dd>
+                </div>
+              ) : null}
+              {report.crates ? (
+                <div>
+                  <dt>Serato DJ</dt>
+                  <dd>The crates are in the drive's _Serato_ folder; Serato DJ lists them under the drive when it is connected.</dd>
+                </div>
+              ) : null}
+              {report.m3u ? (
+                <div>
+                  <dt>Engine DJ, Traktor, VirtualDJ</dt>
+                  <dd>Open the M3U playlist in a playlist's folder, or add the folder to the collection.</dd>
+                </div>
+              ) : null}
+            </dl>
+            <p className="faint">Eject the drive in Finder or File Explorer before unplugging it.</p>
+          </div>
+        ) : null}
       </div>
     ) : null;
     footer = (
       <>
         {report?.folder && !report.error ? (
-          <Button icon={LuFolderOpen} onClick={() => void bridge.reveal(report.folder).catch(() => undefined)}>
+          <Button icon={LuFolderOpen} onClick={() => void reveal(report.folder)}>
             {revealLabel(bridge.platform)}
           </Button>
         ) : null}

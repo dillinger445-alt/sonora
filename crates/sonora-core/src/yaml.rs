@@ -405,9 +405,122 @@ pub fn replace_list(text: &str, path: &[&str], items: &[String]) -> Option<Strin
     Some(out)
 }
 
+/// Adds the keys of `path` the file lacks, the last holding `raw` (written
+/// as it should appear), below the part of the path that is there and
+/// after what that block already holds; everything else stays. `None` when
+/// the deepest key that is there holds a value of its own (it cannot take
+/// keys below it), or the result would not read back.
+fn insert_path(text: &str, path: &[&str], raw: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let ending = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let indent_of = |l: &str| l.len() - l.trim_start().len();
+    let meaningful = |l: &str| !strip_comment(l).trim().is_empty();
+    // The deepest part of the path that is there.
+    let mut have = 0;
+    let mut at = None;
+    for n in 1..path.len() {
+        match key_line(text, &path[..n]) {
+            Some(l) => {
+                have = n;
+                at = Some(l);
+            }
+            None => break,
+        }
+    }
+    let (insert, indent) = match at {
+        None => {
+            let top = lines.iter().find(|l| meaningful(l)).map(|l| indent_of(l)).unwrap_or(0);
+            (lines.len(), top)
+        }
+        Some(l) => {
+            let body = strip_comment(lines[l]).trim_end();
+            // "key: value" (or "key: []") cannot take keys below it.
+            if !body.trim_end().ends_with(':') {
+                return None;
+            }
+            let ind = indent_of(lines[l]);
+            let mut end = l + 1;
+            while end < lines.len() && (!meaningful(lines[end]) || indent_of(lines[end]) > ind) {
+                end += 1;
+            }
+            while end > l + 1 && !meaningful(lines[end - 1]) {
+                end -= 1;
+            }
+            let child = (l + 1..end).find(|&i| meaningful(lines[i])).map(|i| indent_of(lines[i])).unwrap_or(ind + 2);
+            (end, child)
+        }
+    };
+    let mut out = String::with_capacity(text.len() + 64);
+    for l in &lines[..insert] {
+        out.push_str(l);
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push_str(ending);
+    }
+    let rest = &path[have..];
+    for (k, key) in rest.iter().enumerate() {
+        out.push_str(&" ".repeat(indent + 2 * k));
+        out.push_str(key);
+        if k + 1 == rest.len() {
+            out.push_str(": ");
+            out.push_str(raw);
+        } else {
+            out.push(':');
+        }
+        out.push_str(ending);
+    }
+    for l in &lines[insert..] {
+        out.push_str(l);
+    }
+    parse(&out).get(path).is_some().then_some(out)
+}
+
+/// Sets the scalar at `path` to `value` (already quoted as it should
+/// appear): in place when the file has it, otherwise added where it belongs
+/// (B23: a missing line no longer means writing the whole file anew).
+pub fn set_scalar(text: &str, path: &[&str], value: &str) -> Option<String> {
+    if parse(text).line_of(path).is_some() {
+        return replace_scalar(text, path, value);
+    }
+    insert_path(text, path, value)
+}
+
+/// Sets the list at `path` to `items`, adding the key when the file lacks it.
+pub fn set_list(text: &str, path: &[&str], items: &[String]) -> Option<String> {
+    if key_line(text, path).is_some() {
+        return replace_list(text, path, items);
+    }
+    replace_list(&insert_path(text, path, "[]")?, path, items)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_keys_are_added_where_they_belong_and_nothing_else_moves() {
+        // B23: SONORA's key renamed away, and the person's own settings.
+        let text = "soulseek:\n  username: dj\nweb:\n  port: 5030\n  authentication:\n    password: 'w'\n    api_keys:\n      mine:\n        key: 'abc'\n# notes\nglobal:\n  upload:\n    slots: 3\n";
+        let out = set_scalar(text, &["web", "authentication", "api_keys", "sonora", "key"], "'NEW'").unwrap();
+        let n = parse(&out);
+        assert_eq!(n.str_at(&["web", "authentication", "api_keys", "sonora", "key"]), Some("NEW"));
+        assert_eq!(n.str_at(&["web", "authentication", "api_keys", "mine", "key"]), Some("abc"));
+        assert_eq!(n.str_at(&["global", "upload", "slots"]), Some("3"));
+        assert!(out.contains("# notes\n"), "{out}");
+        assert!(out.contains("      mine:\n        key: 'abc'\n      sonora:\n        key: 'NEW'\n"), "{out}");
+        // A whole branch missing, and a file without a final line break.
+        let out = set_scalar("soulseek:\n  username: dj", &["web", "https", "disabled"], "true").unwrap();
+        assert_eq!(parse(&out).str_at(&["web", "https", "disabled"]), Some("true"));
+        assert_eq!(parse(&out).str_at(&["soulseek", "username"]), Some("dj"));
+        // A value already there is replaced, not added twice.
+        let again = set_scalar(&out, &["web", "https", "disabled"], "false").unwrap();
+        assert_eq!(again.matches("disabled").count(), 1);
+        // A key holding a value cannot take keys below it.
+        assert!(set_scalar("web: 5030\n", &["web", "port"], "1").is_none());
+        // Lists too.
+        let l = set_list("soulseek:\n  username: dj\n", &["shares", "directories"], &["/a".to_string()]).unwrap();
+        assert_eq!(parse(&l).strings_at(&["shares", "directories"]), vec!["/a".to_string()]);
+    }
 
     #[test]
     fn lists_are_replaced_and_nothing_else() {

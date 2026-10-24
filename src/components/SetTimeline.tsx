@@ -8,48 +8,32 @@
  * It is a picture of the table below it, which says the same in words and
  * works from the keyboard; pointing at a block shows its details, and
  * clicking it selects the track there.
+ *
+ * Drawn for long sets too: the blocks are drawn once and kept while the
+ * selection, the pointer and the playhead change on top of them, and when
+ * a track gets less than two pixels, each pixel shows the track under it
+ * (a set of thousands of tracks is a strip of colour, not thousands of
+ * shapes).
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type MouseEvent } from 'react';
 import type { KeyNotation, TrackRow } from '../api/types.ts';
 import { formatDuration } from '../lib/format.ts';
 import { formatBpm, formatKey, keyHue } from '../lib/keys.ts';
-import { formatChange, MATCH_LABEL, transition, type Transition } from '../lib/mixing.ts';
+import { formatChange, MATCH_LABEL } from '../lib/mixing.ts';
+import { columnsOf, layoutSet, segmentAt, selectedRuns, type Seg, type SetRow } from '../lib/setLayout.ts';
 import { usePlaybackTime, usePlayer } from '../state/player.tsx';
 
 type Row = Pick<TrackRow, 'id' | 'displayTitle' | 'artist' | 'duration' | 'djBpm' | 'djKey'>;
-
-interface Seg {
-  r: Row;
-  i: number;
-  x: number;
-  w: number;
-  t: Transition | null;
-}
 
 const H = 64;
 const TOP = 6;
 const BAR = 30;
 
-function layout(rows: Row[], width: number): Seg[] {
-  // Unknown lengths count as four minutes; every track stays visible.
-  const len = rows.map((r) => (r.duration && r.duration > 0 ? r.duration : 240));
-  const total = len.reduce((a, b) => a + b, 0) || 1;
-  const gap = rows.length > 1 ? 2 : 0;
-  const usable = Math.max(1, width - gap * (rows.length - 1));
-  const min = Math.min(4, usable / Math.max(1, rows.length));
-  const raw = len.map((l) => Math.max(min, (l / total) * usable));
-  const scale = usable / raw.reduce((a, b) => a + b, 0);
-  let x = 0;
-  return rows.map((r, i) => {
-    const w = (raw[i] ?? 0) * scale;
-    const seg: Seg = { r, i, x, w, t: i > 0 ? transition(rows[i - 1] as Row, r) : null };
-    x += w + gap;
-    return seg;
-  });
-}
+const bodyFill = (k: number | null | undefined) => (k != null ? `hsl(${keyHue(k)} 30% 46% / 0.26)` : 'var(--c-unlit)');
+const stripeFill = (k: number | null | undefined) => (k != null ? `hsl(${keyHue(k)} 36% 64%)` : 'var(--c-text-off)');
 
-function Playhead({ seg }: { seg: Seg }) {
+function Playhead({ seg }: { seg: Seg<SetRow> }) {
   const time = usePlaybackTime();
   const d = seg.r.duration ?? 0;
   if (!(d > 0)) return null;
@@ -76,22 +60,66 @@ export function SetTimeline({
 }) {
   const player = usePlayer();
   const [hover, setHover] = useState<number | null>(null);
-  const segs = useMemo(() => layout(rows, Math.max(40, width)), [rows, width]);
+  const w = Math.max(40, width);
+  const segs = useMemo(() => layoutSet(rows, w), [rows, w]);
+  // Under two pixels a track: one column of colour per pixel.
+  const dense = rows.length * 2 > w;
   const height = compact ? BAR + TOP * 2 : H;
-  const bpms = rows.map((r) => r.djBpm).filter((b): b is number => b != null && b > 0);
-  const lo = bpms.length ? Math.min(...bpms) : 0;
-  const hi = bpms.length ? Math.max(...bpms) : 0;
-  const span = Math.max(4, hi - lo);
-  // The tempo line runs below the key labels.
-  const lineTop = compact ? TOP + 6 : TOP + 14;
-  const lineBottom = TOP + BAR - 4;
-  const yOf = (b: number) => lineBottom - ((b - lo + (span - (hi - lo)) / 2) / span) * (lineBottom - lineTop);
-  const line = segs
-    .filter((s) => s.r.djBpm != null && s.r.djBpm > 0)
-    .map((s) => `${(s.x + s.w / 2).toFixed(1)},${yOf(s.r.djBpm as number).toFixed(1)}`)
-    .join(' ');
+
+  const { lo, hi } = useMemo(() => {
+    const bpms = rows.map((r) => r.djBpm).filter((b): b is number => b != null && b > 0);
+    return bpms.length ? { lo: Math.min(...bpms), hi: Math.max(...bpms) } : { lo: 0, hi: 0 };
+  }, [rows]);
+  const hasBpm = hi > 0;
+
+  // The blocks, marks and tempo line: drawn again only when the set or the
+  // width changes, not on every selection or pointer move.
+  const base = useMemo(() => {
+    const span = Math.max(4, hi - lo);
+    const lineTop = compact ? TOP + 6 : TOP + 14;
+    const lineBottom = TOP + BAR - 4;
+    const yOf = (b: number) => lineBottom - ((b - lo + (span - (hi - lo)) / 2) / span) * (lineBottom - lineTop);
+    const line = segs
+      .filter((s) => s.r.djBpm != null && s.r.djBpm > 0)
+      .map((s) => `${(s.x + s.w / 2).toFixed(1)},${yOf(s.r.djBpm as number).toFixed(1)}`)
+      .join(' ');
+    return (
+      <>
+        <g className="tl-segs">
+          {dense
+            ? columnsOf(segs, w).map((c) => (
+                <g key={c.x}>
+                  <rect x={c.x} y={TOP} width={c.w} height={BAR} style={{ fill: bodyFill(c.key) }} />
+                  <rect x={c.x} y={TOP} width={c.w} height={3} style={{ fill: stripeFill(c.key) }} />
+                </g>
+              ))
+            : segs.map((s) => (
+                <g key={`${s.r.id}-${s.i}`}>
+                  <rect x={s.x} y={TOP} width={Math.max(1, s.w)} height={BAR} rx={2} style={{ fill: bodyFill(s.r.djKey) }} />
+                  <rect x={s.x} y={TOP} width={Math.max(1, s.w)} height={3} rx={1} style={{ fill: stripeFill(s.r.djKey) }} />
+                  {!compact && s.r.djKey != null && s.w >= 30 ? (
+                    <text className="tl-key" x={s.x + 5} y={TOP + 13}>
+                      {formatKey(s.r.djKey, notation)}
+                    </text>
+                  ) : null}
+                </g>
+              ))}
+        </g>
+        {line ? <polyline className="tl-bpm" points={line} /> : null}
+        {dense
+          ? null
+          : segs.map((s) =>
+              s.t ? <rect key={`m${s.i}`} className={`tl-mark is-${s.t.tone}`} x={s.x - 4} y={TOP + BAR + 3} width={6} height={6} rx={1} transform={`rotate(45 ${s.x - 1} ${TOP + BAR + 6})`} /> : null,
+            )}
+      </>
+    );
+  }, [segs, dense, w, lo, hi, compact, notation]);
+
+  const marks = useMemo(() => (selected && selected.size ? selectedRuns(segs, selected, dense) : []), [segs, selected, dense]);
   const playing = player.track ? segs.find((s) => s.r.id === player.track?.id) : undefined;
   const h = hover != null ? segs[hover] : undefined;
+
+  const at = (e: MouseEvent<SVGSVGElement>) => segmentAt(segs, e.clientX - e.currentTarget.getBoundingClientRect().left);
 
   return (
     <div className={`tl ${compact ? 'is-compact' : ''}`} style={{ width }}>
@@ -100,40 +128,22 @@ export function SetTimeline({
         height={height}
         role="img"
         aria-label={label}
+        onMouseMove={(e) => {
+          const i = at(e);
+          if (i !== hover) setHover(i);
+        }}
         onMouseLeave={() => setHover(null)}
+        onClick={(e) => {
+          const i = at(e);
+          const s = i != null ? segs[i] : undefined;
+          if (s) onPick?.(s.r.id, s.i);
+        }}
       >
-        {segs.map((s) => {
-          const k = s.r.djKey;
-          const hue = k != null ? keyHue(k) : null;
-          const isSel = selected?.has(s.r.id);
-          return (
-            <g
-              key={`${s.r.id}-${s.i}`}
-              className={`tl-seg ${isSel ? 'is-selected' : ''} ${hover === s.i ? 'is-hover' : ''}`}
-              onMouseEnter={() => setHover(s.i)}
-              onClick={() => onPick?.(s.r.id, s.i)}
-            >
-              <rect
-                x={s.x}
-                y={TOP}
-                width={Math.max(1, s.w)}
-                height={BAR}
-                rx={2}
-                style={{ fill: hue != null ? `hsl(${hue} 30% 46% / 0.26)` : 'var(--c-unlit)', stroke: isSel ? 'var(--c-text)' : 'none' }}
-              />
-              <rect x={s.x} y={TOP} width={Math.max(1, s.w)} height={3} rx={1} style={{ fill: hue != null ? `hsl(${hue} 36% 64%)` : 'var(--c-text-off)' }} />
-              {!compact && k != null && s.w >= 30 ? (
-                <text className="tl-key" x={s.x + 5} y={TOP + 13}>
-                  {formatKey(k, notation)}
-                </text>
-              ) : null}
-            </g>
-          );
-        })}
-        {line ? <polyline className="tl-bpm" points={line} /> : null}
-        {segs.map((s) =>
-          s.t ? <rect key={`m${s.i}`} className={`tl-mark is-${s.t.tone}`} x={s.x - 4} y={TOP + BAR + 3} width={6} height={6} rx={1} transform={`rotate(45 ${s.x - 1} ${TOP + BAR + 6})`} /> : null,
-        )}
+        {base}
+        {h ? <rect className="tl-hover" x={h.x} y={TOP} width={Math.max(1, h.w)} height={BAR} rx={dense ? 0 : 2} style={{ fill: bodyFill(h.r.djKey) }} /> : null}
+        {marks.map((m) => (
+          <rect key={m.x} className="tl-selected" x={m.x} y={TOP} width={Math.max(1, m.w)} height={BAR} rx={dense ? 0 : 2} />
+        ))}
         {playing ? <Playhead seg={playing} /> : null}
       </svg>
       {!compact && h ? (
@@ -152,7 +162,7 @@ export function SetTimeline({
           ) : null}
         </div>
       ) : null}
-      {!compact && bpms.length ? (
+      {!compact && hasBpm ? (
         <span className="tl-range num faint" aria-hidden>
           {formatBpm(lo) === formatBpm(hi) ? `${formatBpm(lo)} BPM` : `${formatBpm(lo)}–${formatBpm(hi)} BPM`}
         </span>

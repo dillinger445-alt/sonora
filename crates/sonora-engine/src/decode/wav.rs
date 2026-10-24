@@ -38,6 +38,9 @@ pub struct WavHeader {
     pub data_len: u64,
     /// Declared data size exceeds what the file contains.
     pub truncated: bool,
+    /// The data size the header declares (`None` for a streaming
+    /// placeholder that declares nothing).
+    pub declared_len: Option<u64>,
     pub rf64: bool,
     /// RIFF INFO tags (title, artist, ...) if present.
     pub info_tags: Vec<(String, String)>,
@@ -68,6 +71,15 @@ impl WavHeader {
         } else {
             Some(self.data_len / self.block_align as u64)
         }
+    }
+
+    /// The length in frames the header declares, which a truncated file no
+    /// longer holds (B38: its declared length is the original one).
+    pub fn declared_frames(&self) -> Option<u64> {
+        if self.block_align == 0 {
+            return None;
+        }
+        Some(self.declared_len.unwrap_or(self.data_len) / self.block_align as u64)
     }
 }
 
@@ -220,6 +232,7 @@ pub fn parse_header_from<R: Read + Seek>(f: &mut R, file_len: u64, stop_at_audio
         data_offset,
         data_len,
         truncated,
+        declared_len: (!placeholder).then_some(declared),
         rf64,
         info_tags,
         id3_chunk,
@@ -235,7 +248,7 @@ fn parse_info_list(b: &[u8]) -> Vec<(String, String)> {
         let start = i + 8;
         let end = (start + size).min(b.len());
         let raw = &b[start..end];
-        let text = String::from_utf8_lossy(raw).trim_end_matches('\0').trim().to_string();
+        let text = crate::util::text_utf8_or_latin1(raw).trim_end_matches('\0').trim().to_string();
         let key = match id.as_str() {
             "INAM" => Some("title"),
             "IART" => Some("artist"),
@@ -443,6 +456,11 @@ mod tests {
         // 4000 samples = 2000 stereo frames = 8000 bytes; 1000 bytes removed.
         assert_eq!(frames, (8000 - 1000) / 4);
         assert!(src.finish().truncated);
+        // B38: the header still declares the original length.
+        assert_eq!(h.declared_frames(), Some(2000));
+        assert_eq!(h.frames(), Some(1750));
+        let facts = crate::meta::probe_file(&p, &crate::decode::ToolPaths::none()).unwrap();
+        assert!(facts.header_duration_secs.is_some_and(|d| (d - 2000.0 / 48_000.0).abs() < 1e-9), "{:?}", facts.header_duration_secs);
     }
 
     #[test]

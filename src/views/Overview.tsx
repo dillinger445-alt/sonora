@@ -32,7 +32,8 @@ function Histogram({ bins, average, kind }: { bins: number[]; average: number | 
         })}
         {average != null ? (
           <div className="histo-avg" style={{ left: `${average}%` }} aria-hidden>
-            <span className="histo-avg-label num">avg {average.toFixed(1)}</span>
+            {/* Rounded as the averages beside it are. */}
+            <span className="histo-avg-label num">avg {Math.round(average)}</span>
           </div>
         ) : null}
       </div>
@@ -217,7 +218,8 @@ export function OverviewView() {
           <>
             {plural(o.tracks.total, 'track')} in {plural(o.folders, 'folder')}
             {o.totalDuration ? `, ${formatSpan(o.totalDuration)} of audio` : ''}.
-            {lastScan ? ` Last scan ${formatRelative(lastScan.finishedAt ?? lastScan.startedAt)}.` : ''}
+            {/* An interrupted scan's end was only noted at the next launch (B70). */}
+            {lastScan ? ` Last scan ${formatRelative(lastScan.state === 'interrupted' ? lastScan.startedAt : (lastScan.finishedAt ?? lastScan.startedAt))}.` : ''}
           </>
         }
         actions={

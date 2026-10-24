@@ -428,7 +428,7 @@ export function SoulseekSetup({ state }: { state: SoulseekState }) {
         title="Previews"
         description="A preview asks slskd for the file and plays it as it arrives. It reads only so far ahead of what plays, stops fetching when you stop listening, and keeps nothing."
       >
-        <Row label="Read ahead" description="How much a preview fetches beyond what is playing. More rides out a slow connection; less fetches less of what you may not listen to.">
+        <Row label="Read ahead" description="How much a preview fetches beyond what is playing (or the player has buffered). More rides out a slow connection; less fetches less of what you may not listen to.">
           <Segmented
             label="Read ahead"
             size="sm"

@@ -55,6 +55,22 @@ impl Prepared {
     }
 }
 
+/// Removes partial decoded copies left by an earlier run of SONORA (quit
+/// while a track was being prepared): their names carry the process that
+/// made them (B76).
+fn remove_stale_parts(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let me = std::process::id().to_string();
+    for p in rd.flatten().map(|e| e.path()) {
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        let Some(base) = name.strip_prefix("track-").and_then(|n| n.strip_suffix(".part")) else { continue };
+        let pid = base.rsplit_once('.').and_then(|(_, tail)| tail.split_once('-')).map(|(pid, _)| pid);
+        if pid.is_some_and(|pid| pid != me) {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
 /// Keeps the newest decoded copies and removes the rest (only SONORA's own cache files).
 fn trim_cache(dir: &Path, keep: &Path) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -85,6 +101,7 @@ pub fn prepare(cache_dir: &Path, t: &TrackRow, playable: &[String], force_decode
         }
     }
     std::fs::create_dir_all(cache_dir).map_err(|e| format!("cannot create the playback cache: {e}"))?;
+    remove_stale_parts(cache_dir);
     let stamp = t.file_hash.as_deref().map(|h| h.chars().take(16).collect::<String>()).unwrap_or_else(|| format!("{}-{}", t.size, t.mtime));
     let dest = cache_dir.join(format!("track-{}-{stamp}.wav", t.id));
     if dest.is_file() {

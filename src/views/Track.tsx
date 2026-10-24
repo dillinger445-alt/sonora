@@ -308,7 +308,7 @@ function TechTables({ a, steepCutoff, origin }: { a: StoredAnalysis; steepCutoff
                 : 'At this sample rate inter-sample peaks equal the sample peak; no oversampling is needed (ITU-R BS.1770-4)'
             }
           />
-          <Row label="Overs above 0 dBTP" value={m.tpOverEvents > 0 ? `${formatCount(m.tpOverEvents)} events` : 'None'} tone={m.tpOverEvents > 0 ? 'amber' : undefined} />
+          <Row label="Overs above 0 dBTP" value={m.tpOverEvents > 0 ? plural(m.tpOverEvents, 'event') : 'None'} tone={m.tpOverEvents > 0 ? 'amber' : undefined} />
           <Row label="RMS" value={db(m.rmsDbfs, 'dBFS')} />
           <Row label="Crest factor" value={db(m.crestDb, 'dB')} tip="Peak to RMS ratio; low values mean heavy limiting" />
           <Row label="Peak to loudness" value={db(m.plrDb, 'dB')} tip="True peak minus integrated loudness (PLR)" />
@@ -327,11 +327,11 @@ function TechTables({ a, steepCutoff, origin }: { a: StoredAnalysis; steepCutoff
                   ? 'Not measured'
                   : 'Not measured for lossy files'
                 : clip.events > 0
-                  ? `${formatCount(clip.events)} events, ${formatCount(clip.samples)} samples (longest ${clip.longestRun}) at ${formatDb(clip.ceilingDbfs, 2)} dBFS`
+                  ? `${plural(clip.events, 'event')}, ${plural(clip.samples, 'sample')} (longest ${clip.longestRun}) at ${formatDb(clip.ceilingDbfs, 2)} dBFS`
                   : 'None detected'
             }
           />
-          {m.decodedOvers > 0 ? <Row label="Decoded overs" value={`${formatCount(m.decodedOvers)} samples beyond full scale`} tone="red" /> : null}
+          {m.decodedOvers > 0 ? <Row label="Decoded overs" value={`${plural(m.decodedOvers, 'sample')} beyond full scale`} tone="red" /> : null}
         </dl>
       </section>
       <section className="tech-block">
@@ -416,6 +416,38 @@ function NotAnalyzed({ d, onRetry }: { d: TrackDetail; onRetry: () => void }) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Above results kept from an earlier analysis: the latest one failed (B27),
+ * or the track is being analysed again (B68).
+ */
+function EarlierResults({ d, onRetry }: { d: TrackDetail; onRetry: () => void }) {
+  const t = d.track;
+  if (t.status === 'failed') {
+    return (
+      <div className="earlier-results is-failed" role="status">
+        <StatusMark track={t} />
+        <p className="selectable">
+          The latest analysis failed: {t.errorMessage ?? 'the file could not be analyzed'}. The results below are from an earlier analysis.
+        </p>
+        {d.fileExists ? (
+          <Button size="sm" icon={LuRefreshCw} onClick={onRetry}>
+            Try again
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+  if (t.status === 'analyzing' || t.status === 'pending') {
+    return (
+      <div className="earlier-results" role="status">
+        <StatusMark track={t} />
+        <p>{t.status === 'analyzing' ? 'Being analyzed again' : 'Waiting to be analyzed again'}. The results below are from the earlier analysis.</p>
+      </div>
+    );
+  }
+  return null;
 }
 
 export function TrackView({ id }: { id: number }) {
@@ -606,6 +638,7 @@ export function TrackView({ id }: { id: number }) {
         <NotAnalyzed d={d} onRetry={() => void actions.reanalyze([t.id])} />
       ) : (
         <>
+          <EarlierResults d={d} onRetry={() => void actions.reanalyze([t.id])} />
           <section className="score-block" aria-label="Scores">
             <div className="score-meters">
               {SCORE_KINDS.map((k) => (

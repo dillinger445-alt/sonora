@@ -12,6 +12,7 @@ import { Dialog } from '../components/Dialog.tsx';
 import { KeyWheel } from '../components/KeyWheel.tsx';
 import { formatCount, plural } from '../lib/format.ts';
 import { expandCompatible, formatBpm, formatKey } from '../lib/keys.ts';
+import { bpmMaxText, otherRules } from '../lib/rules.ts';
 import { useCore } from '../state/core.tsx';
 import { usePlaylists } from '../state/playlists.tsx';
 import { useToast } from '../state/toasts.tsx';
@@ -80,30 +81,6 @@ function scoreChoice(f: LibraryFilter): string {
   return f.scoreKind === 'dj' && f.maxScore == null && f.minScore != null && SCORES.some((s) => s.value === String(f.minScore)) ? String(f.minScore) : 'any';
 }
 
-/** A saved score range in words: "overall score 55+", "DJ score 75–89". */
-function scoreRange(f: LibraryFilter): string | null {
-  if (f.minScore == null && f.maxScore == null) return null;
-  const kind = f.scoreKind === 'dj' ? 'DJ' : f.scoreKind === 'listening' ? 'listening' : 'overall';
-  const lo = f.minScore != null ? Math.round(f.minScore) : null;
-  // "up to 54.999" is how "below 55" is saved.
-  const hi = f.maxScore != null ? Math.floor(f.maxScore) : null;
-  if (lo != null && hi != null) return `${kind} score ${lo}–${hi}`;
-  return lo != null ? `${kind} score ${lo}+` : `${kind} score up to ${hi}`;
-}
-
-/** Saved filters this dialog does not edit, in words. */
-function others(f: LibraryFilter, withScore: boolean): string[] {
-  const out: string[] = [];
-  if (f.formats?.length) out.push(`format ${f.formats.join(', ')}`);
-  if (f.flags?.length) out.push(`${plural(f.flags.length, 'issue')}`);
-  if (f.statuses?.length) out.push(`status ${f.statuses.join(', ')}`);
-  if (f.folderId != null) out.push('one library folder');
-  const range = withScore ? scoreRange(f) : null;
-  if (range) out.push(range);
-  if (f.attention) out.push('needs attention');
-  return out;
-}
-
 export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | null; onClose: () => void }) {
   const { client, settings } = useCore();
   const pl = usePlaylists();
@@ -128,6 +105,9 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
   const [limit, setLimit] = useState('');
   const [allGenres, setAllGenres] = useState<{ id: string; count: number }[]>([]);
   const [count, setCount] = useState<number | null>(null);
+  // The upper tempo as it was opened: kept exactly unless edited here, so
+  // filters saved from the library match what the library showed (B42).
+  const [bpmMaxOpened, setBpmMaxOpened] = useState('');
   const [busy, setBusy] = useState(false);
 
   // A fresh form for every opening.
@@ -139,7 +119,11 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
     setSearch(f.search ?? '');
     setBpmMin(f.bpmMin != null ? formatBpm(f.bpmMin) : '');
     // "to 125" is saved as 125.999 (so 125.9 is in): show it as typed.
-    setBpmMax(f.bpmMax != null ? formatBpm(f.bpmMax % 1 > 0.99 ? Math.floor(f.bpmMax) : f.bpmMax) : '');
+    const maxText = f.bpmMax != null ? bpmMaxText(f.bpmMax) : '';
+    setBpmMax(maxText);
+    setBpmMaxOpened(maxText);
+    // The count of the playlist opened last is not this one's (B94).
+    setCount(null);
     setHalfDouble(!!f.bpmHalfDouble);
     setKeys(f.keys ?? []);
     setMix(false);
@@ -183,14 +167,14 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
     }
     if (search.trim()) f.search = search.trim();
     if (lo != null) f.bpmMin = lo;
-    // "to 125" includes 125.9.
-    if (hi != null) f.bpmMax = Number.isInteger(hi) ? hi + 0.999 : hi;
+    // "to 125" includes 125.9; a range opened here and left alone stays as it was.
+    if (hi != null) f.bpmMax = bpmMax === bpmMaxOpened && initial.filter.bpmMax != null ? initial.filter.bpmMax : Number.isInteger(hi) ? hi + 0.999 : hi;
     if ((lo != null || hi != null) && halfDouble) f.bpmHalfDouble = true;
     if (matchedKeys.length) f.keys = matchedKeys;
     if (genres.length) f.genres = genres;
     return { filter: f, sort, limit: lim != null && !limitBad ? lim : null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, search, lo, hi, halfDouble, matchedKeys, genres, score, sort, lim, limitBad]);
+  }, [key, search, lo, hi, halfDouble, matchedKeys, genres, score, sort, lim, limitBad, bpmMax, bpmMaxOpened]);
 
   // How many tracks match, as the rules change.
   const rulesKey = JSON.stringify(rules);
@@ -236,7 +220,13 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
   };
 
   const toggleKey = (k: number) => setKeys(keys.includes(k) ? keys.filter((x) => x !== k) : [...keys, k]);
-  const kept = others(initial.filter, score === initialScore && initialScore === 'any');
+  const kept = otherRules(initial.filter, score === initialScore && initialScore === 'any');
+  // The most common genres, and every chosen one even when it is not among
+  // them, so a rule can always be seen and turned off (B41).
+  const genreChips: { id: string; count: number | null }[] = [
+    ...allGenres,
+    ...genres.filter((g) => !allGenres.some((x) => x.id.toLowerCase() === g.toLowerCase())).map((id) => ({ id, count: null })),
+  ];
   const selected = new Set(keys);
   const related = new Set(mix ? matchedKeys.filter((k) => !selected.has(k)) : []);
 
@@ -338,11 +328,11 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
             </div>
           </div>
         </div>
-        {allGenres.length ? (
+        {genreChips.length ? (
           <div className="field">
-            <span className="field-label">Genres {genres.length ? null : <span className="faint">(any)</span>}</span>
+            <span className="field-label">Genres {genres.length ? <span className="faint">({genres.join(', ')})</span> : <span className="faint">(any)</span>}</span>
             <div className="genre-chips" role="group" aria-label="Genres">
-              {allGenres.map((g) => {
+              {genreChips.map((g) => {
                 const on = genres.some((x) => x.toLowerCase() === g.id.toLowerCase());
                 return (
                   <button
@@ -352,7 +342,7 @@ export function SmartRulesDialog({ target, onClose }: { target: RulesTarget | nu
                     aria-pressed={on}
                     onClick={() => setGenres(on ? genres.filter((x) => x.toLowerCase() !== g.id.toLowerCase()) : [...genres, g.id])}
                   >
-                    {g.id} <span className="num faint">{formatCount(g.count)}</span>
+                    {g.id} {g.count != null ? <span className="num faint">{formatCount(g.count)}</span> : null}
                   </button>
                 );
               })}

@@ -18,6 +18,7 @@ pub mod index;
 pub mod jobs;
 pub mod library;
 pub mod logging;
+pub mod matching;
 pub mod model;
 pub mod net;
 pub mod playback;
@@ -32,6 +33,7 @@ pub mod sources;
 pub mod trash;
 pub mod usb;
 pub mod yaml;
+pub mod youtube;
 
 pub use api::ApiError;
 pub use app::{App, AppConfig, CoreError};

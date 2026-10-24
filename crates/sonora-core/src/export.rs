@@ -56,8 +56,11 @@ pub fn iso_utc(ms: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, (rem / 60) % 60, rem % 60)
 }
 
+/// The columns, after a byte-order mark: Excel reads a CSV as UTF-8 only
+/// with one, and shows accented titles and paths garbled without (B92).
 pub fn header() -> String {
-    let mut s = COLUMNS.join(",");
+    let mut s = String::from("\u{FEFF}");
+    s.push_str(&COLUMNS.join(","));
     s.push_str("\r\n");
     s
 }
@@ -133,6 +136,7 @@ mod tests {
         assert!(line.contains(",-9.7,"), "numbers are not guarded: {line}");
         assert!(line.ends_with("\r\n"));
         assert_eq!(header().trim_end().split(',').count(), COLUMNS.len());
+        assert!(header().starts_with("\u{FEFF}path,"), "UTF-8 that Excel recognises");
         assert!(line.trim_end().matches(',').count() >= COLUMNS.len() - 1);
     }
 

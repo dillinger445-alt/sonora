@@ -1,4 +1,4 @@
-//! Built-in deterministic assessment rules (model `sonora-dsp-1.0`).
+//! Built-in deterministic assessment rules (model `sonora-dsp-1.1`).
 //!
 //! Thresholds were calibrated against real encodes (LAME MP3 128/320/V0,
 //! FFmpeg AAC 128/256, libopus 160, libvorbis q6), lossless transcodes of
@@ -173,8 +173,14 @@ fn expected_min_bandwidth(codec: &str, kbps: f64) -> Option<f64> {
     }
 }
 
+/// A steep edge in the spectrum, as an encoder's low-pass leaves it. An edge
+/// within 1.5 kHz of the top frequency the sample rate allows is the
+/// anti-alias filter every converter and resampler has, not an encoder's: a
+/// lossless 32 kHz file falls steeply just below 16 kHz (B34). At 44.1 and
+/// 48 kHz such edges were above every cut-off the rules look at anyway.
 fn steep_edge<'a>(ctx: &AssessContext<'a>) -> Option<&'a Edge> {
-    ctx.m.bandwidth.edge.as_ref().filter(|e| e.is_steep())
+    let nyquist = ctx.m.sample_rate as f64 / 2.0;
+    ctx.m.bandwidth.edge.as_ref().filter(|e| e.is_steep() && nyquist - e.hz > 1500.0)
 }
 
 fn is_lossless(f: &FileFacts) -> bool {
@@ -401,8 +407,10 @@ impl SourceRules {
                                 "Bandwidth suggests a lower-quality source",
                                 format!("likely re-encoded from {label}"),
                                 format!(
-                                    "This {} file has no content above {}, but {}. The pattern is typical of a file re-encoded from {} (for example a 128 kbps file saved as 320 kbps).",
-                                    rate.trim(),
+                                    "This {}{} file has no content above {}, but {}. The pattern is typical of a file re-encoded from {} (for example a 128 kbps file saved as 320 kbps).",
+                                    // "320 kbps MP3", not "at 320 kbps" (B77).
+                                    kbps.map(|k| format!("{k:.0} kbps ")).unwrap_or_default(),
+                                    f.codec_name,
                                     khz(e.hz),
                                     basis,
                                     label
@@ -429,6 +437,11 @@ impl SourceRules {
     fn lossless_container(&self, ctx: &AssessContext, out: &mut Vec<Finding>) {
         let m = ctx.m;
         let bw = &m.bandwidth;
+        // Too short for a single spectrum frame: nothing to say about the
+        // source's bandwidth (B78), rather than "fades out around 0.0 kHz".
+        if bw.upper_hz <= 0.0 {
+            return;
+        }
         let holes = m.artifacts.top_hole_ratio.unwrap_or(0.0);
         let Some(e) = steep_edge(ctx).filter(|e| e.hz < 20_500.0) else {
             // No encoder-style cutoff.

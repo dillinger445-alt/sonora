@@ -362,10 +362,12 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let filter = p.get("filter").and_then(Value::as_str).unwrap_or("all");
             let cond = match filter {
                 "all" => "i.outcome IN ('done', 'failed')",
-                "problems" => "(i.outcome = 'failed' OR t.flags LIKE '%,attention,%' OR t.flags LIKE '%,review,%')",
+                // Only what this scan finished: queued or cancelled tracks still
+                // carry the flags of an earlier analysis (B31).
+                "problems" => "(i.outcome = 'failed' OR (i.outcome = 'done' AND (t.flags LIKE '%,attention,%' OR t.flags LIKE '%,review,%')))",
                 "failed" => "i.outcome = 'failed'",
-                "clipping" => "t.flags LIKE '%,clipping,%'",
-                "source" => "t.flags LIKE '%,source_concern,%'",
+                "clipping" => "i.outcome = 'done' AND t.flags LIKE '%,clipping,%'",
+                "source" => "i.outcome = 'done' AND t.flags LIKE '%,source_concern,%'",
                 other => return Err(ApiError::invalid(format!("unknown filter '{other}'"))),
             };
             let limit = p.get("limit").and_then(Value::as_i64).unwrap_or(200).clamp(1, 2000);
@@ -383,7 +385,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                     v
                 },
             )?;
-            Ok(obj! { "total" => total, "rows" => Value::Array(rows) })
+            // Moved in, not copied: a scan's results run to thousands of rows.
+            Ok(sonora_json::obj_move! { "total" => total, "rows" => rows })
         }
 
         // ---------------------------------------------------- duplicates
@@ -456,7 +459,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let id = id_param(p, "id")?;
             let c = app.db.read();
             let rows = playlists::tracks(&c, id)?;
-            Ok(obj! { "id" => id, "rows" => Value::Array(rows.iter().map(ToJson::to_json).collect()), "total" => rows.len() })
+            // Built straight from the rows (a playlist can hold thousands).
+            Ok(obj! { "id" => id, "total" => rows.len(), "rows" => rows })
         }
         "playlists.addTracks" => {
             let id = id_param(p, "id")?;
@@ -550,13 +554,14 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let problem = crate::djexport::check_tools(&opts, &items, &tools).err();
             let exported = items.iter().filter(|i| i.skip.is_none()).count();
             Ok(obj! {
-                "items" => Value::Array(items.iter().map(ToJson::to_json).collect()),
+                "items" => items,
                 "exported" => exported,
                 "skipped" => items.len() - exported,
                 "betterCopies" => items.iter().filter(|i| i.skip.is_none() && i.source.id != i.track.id).count(),
                 "withWarnings" => items.iter().filter(|i| i.skip.is_none() && !i.warnings.is_empty()).count(),
                 "problem" => problem,
-                "running" => app.exporter.is_running(),
+                // Either job blocks a new export (B48).
+                "running" => app.exporter.is_running() || app.syncer.is_running(),
             })
         }
         "djexport.start" => {
@@ -631,6 +636,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             Ok(crate::sources::status_json(app)?)
         }
         "sources.configure" => {
+            let _change = app.settings_change();
             let mut s = app.settings();
             if let Some(v) = p.get("folder") {
                 if v.is_null() {
@@ -699,6 +705,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             if let Some(v) = p.get("url") {
                 let url = v.as_str().ok_or_else(|| ApiError::invalid("url must be a web address"))?;
                 let url = crate::slskd::normalize_url(url).map_err(ApiError::invalid)?;
+                let _change = app.settings_change();
                 let mut s = app.settings();
                 s.slskd_url = url;
                 s.save(&app.db.write())?;
@@ -891,6 +898,55 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             Ok(obj! { "ok" => true })
         }
 
+        // ---------------------------- YouTube playlists from Soulseek (jobs.rs)
+        // The person pastes a playlist link; SONORA reads the list from
+        // YouTube's page, looks for each track through slskd and downloads
+        // the pick by the rules in Settings.
+        "playlist.fetch" => {
+            if crate::sources::accepted_at(&app.db.read()).is_none() {
+                return Err(ApiError::new("not_accepted", "Read and accept the notice on the Soulseek page first."));
+            }
+            let source = p.get("source").and_then(Value::as_str).map(str::trim).unwrap_or("");
+            if source.is_empty() || source.chars().count() > 500 {
+                return Err(ApiError::invalid("Paste the link of a YouTube playlist."));
+            }
+            let id = app.playlist.fetch(app, source)?;
+            Ok(obj! { "id" => id })
+        }
+        "playlist.list" => Ok(obj! { "runs" => app.playlist.list(app)? }),
+        "playlist.get" => app.playlist.get(app, id_param(p, "id")?),
+        "playlist.delete" => {
+            app.playlist.delete(app, id_param(p, "id")?)?;
+            Ok(obj! { "ok" => true })
+        }
+        "playlist.include" => {
+            let id = id_param(p, "id")?;
+            let items = ids_param(p, "itemIds")?;
+            let included = p.req_bool("included").map_err(|e| ApiError::invalid(e.to_string()))?;
+            app.playlist.include(app, id, &items, included)
+        }
+        "playlist.start" => {
+            if app.slskd.key(app)?.is_none() {
+                return Err(ApiError::new("slskd_not_set_up", "Set slskd up on the Soulseek page first."));
+            }
+            app.playlist.start(app, id_param(p, "id")?)
+        }
+        "playlist.pause" => app.playlist.pause(app, id_param(p, "id")?),
+        "playlist.resume" => app.playlist.resume_run(app, id_param(p, "id")?),
+        "playlist.cancel" => app.playlist.cancel(app, id_param(p, "id")?),
+        "playlist.confirm" => app.playlist.confirm(app, id_param(p, "id")?),
+        "playlist.choose" => {
+            let id = id_param(p, "id")?;
+            let item = id_param(p, "itemId")?;
+            let candidate = id_param(p, "candidate")?;
+            app.playlist.choose(app, id, item, candidate)
+        }
+        "playlist.retry" => {
+            let id = id_param(p, "id")?;
+            let items = opt_ids(p, "itemIds")?;
+            app.playlist.retry(app, id, items.as_deref())
+        }
+
         // ------------------------------------------------------ Discogs
         "discogs.status" => Ok(obj! {
             "configured" => crate::discogs::Discogs::token(&app.db).is_some(),
@@ -931,6 +987,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         "settings.get" => Ok(app.settings().to_json()),
         "settings.update" => {
             let values = p.get("values").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("values must be an object"))?;
+            let _change = app.settings_change();
             let mut s = app.settings();
             for (k, v) in values.iter() {
                 s.apply(k, v).map_err(ApiError::invalid)?;

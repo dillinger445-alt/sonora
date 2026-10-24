@@ -63,6 +63,8 @@ const env = {
   SONORA_SLSKD_TEST_ARCHIVE: ARCHIVE,
   SONORA_SLSKD_TEST_PORT: '4319',
   SONORA_SLSKD_WAIT_SECONDS: '6',
+  // YouTube playlists come from a stand-in started by the playlist test.
+  SONORA_YOUTUBE_BASE: 'http://127.0.0.1:4320',
   HOME: join(DATA, 'home'),
 };
 mkdirSync(env.HOME, { recursive: true });

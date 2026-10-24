@@ -4,7 +4,7 @@ import { Button } from './Button.tsx';
 import { Menu } from './Menu.tsx';
 import { formatCount } from '../lib/format.ts';
 import { formatRoute, type Route, type View } from '../lib/router.ts';
-import { useCore, useScan } from '../state/core.tsx';
+import { useCore, useScan, useScanBusy } from '../state/core.tsx';
 import { useImports } from '../state/imports.tsx';
 import { PlaylistTree } from './PlaylistTree.tsx';
 
@@ -36,15 +36,20 @@ const GROUPS: NavItem[][] = [
 export const NAV_ORDER: Route[] = [...GROUPS.flat().map((i) => i.route), { view: 'settings' }];
 
 function Wordmark() {
-  // Five bars, like the app icon: a level ladder reading left to right.
+  // The app icon's mark at its smallest: a meter whose scale is a sound wave
+  // (drawn by src-tauri/icons/generate.py, "tiny").
   return (
     <div className="wordmark" data-tauri-drag-region>
-      <svg className="wordmark-glyph" viewBox="0 0 18 14" aria-hidden>
-        <rect x="0" y="6" width="2" height="2" rx="0.5" />
-        <rect x="4" y="3.5" width="2" height="7" rx="0.5" />
-        <rect x="8" y="0" width="2" height="14" rx="0.5" />
-        <rect x="12" y="3.5" width="2" height="7" rx="0.5" />
-        <rect x="16" y="6" width="2" height="2" rx="0.5" />
+      <svg className="wordmark-glyph" viewBox="8 17 84 66" aria-hidden>
+        <g stroke="currentColor" strokeWidth="7.6" strokeLinecap="round">
+          <line x1="19.6" y1="52.6" x2="12.6" y2="48.2" />
+          <line x1="33.7" y1="42.2" x2="27.5" y2="31" />
+          <line x1="50" y1="40" x2="50" y2="23.2" />
+          <line x1="66.3" y1="42.2" x2="72.5" y2="31" />
+          <line x1="80.4" y1="52.6" x2="87.4" y2="48.2" />
+          <line x1="50" y1="71.6" x2="59.8" y2="47.4" strokeWidth="7.8" />
+        </g>
+        <circle cx="50" cy="71.6" r="9" fill="currentColor" />
       </svg>
       <span className="wordmark-text" data-tauri-drag-region>
         SONORA
@@ -53,21 +58,27 @@ function Wordmark() {
   );
 }
 
+/** The import queue's count: progress while a scan runs. Its own component,
+ *  so the rest of the sidebar does not render again on every tick. */
+function ScanCount() {
+  const { scan } = useScan();
+  const text = scan && scan.total > 0 ? `${formatCount(scan.done)}/${formatCount(scan.total)}` : '…';
+  return <span className="nav-count num t-lime">{text}</span>;
+}
+
 export function Sidebar({ active }: { active: View }) {
   const { overview, duplicateGroups, bridge } = useCore();
-  const { scan } = useScan();
+  const busy = useScanBusy();
   const imports = useImports();
   const mod = bridge.platform === 'macos' ? '⌘' : 'Ctrl+';
-  const busy = scan != null && scan.state !== 'idle';
 
-  const count = (view: View): { text: string; tone?: 'lime' | 'amber' } | null => {
+  const count = (view: View): { text: string; tone?: 'lime' | 'amber' } | 'scan' | null => {
     if (!overview) return null;
     switch (view) {
       case 'library':
         return { text: formatCount(overview.tracks.total) };
       case 'queue':
-        if (busy && scan && scan.total > 0) return { text: `${formatCount(scan.done)}/${formatCount(scan.total)}`, tone: 'lime' };
-        if (busy) return { text: '…', tone: 'lime' };
+        if (busy) return 'scan';
         return overview.tracks.pendingPresent > 0 ? { text: formatCount(overview.tracks.pendingPresent) } : null;
       case 'folders':
         return overview.folders > 0 ? { text: formatCount(overview.folders) } : null;
@@ -94,7 +105,7 @@ export function Sidebar({ active }: { active: View }) {
         >
           <Icon className="nav-icon" aria-hidden />
           <span className="nav-label">{item.label}</span>
-          {c ? <span className={`nav-count num ${c.tone ? `t-${c.tone}` : ''}`}>{c.text}</span> : null}
+          {c === 'scan' ? <ScanCount /> : c ? <span className={`nav-count num ${c.tone ? `t-${c.tone}` : ''}`}>{c.text}</span> : null}
         </a>
       </li>
     );

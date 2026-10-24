@@ -90,7 +90,12 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
   const awaiting = useRef(false);
   const open = target != null;
 
-  const options = useMemo<ExportOptions>(() => ({ format, quality, keyNotation: notation, bestCopy, rekordboxXml: xml }), [format, quality, notation, bestCopy, xml]);
+  // MP3 is always 320 kbps at 44.1 kHz, so the dialog hides the quality
+  // choice for it; what it sends must not depend on a choice it hides.
+  const options = useMemo<ExportOptions>(
+    () => ({ format, quality: format === 'mp3' ? 'universal' : quality, keyNotation: notation, bestCopy, rekordboxXml: xml }),
+    [format, quality, notation, bestCopy, xml],
+  );
 
   // A new export starts from the setup page.
   const targetKey = target ? target.ids.join(',') : '';
@@ -136,9 +141,9 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetKey, options, phase, client, planTick]);
 
-  useCoreEvent(['djexport.finished'], (_n, payload) => {
+  useCoreEvent(['djexport.finished', 'usb.finished'], (name, payload) => {
     if (!open) return;
-    if (!awaiting.current) {
+    if (name !== 'djexport.finished' || !awaiting.current) {
       // Someone else's export ended: this one may start now.
       setPlanTick((n) => n + 1);
       return;
@@ -294,7 +299,7 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
                   <LuCircleAlert aria-hidden /> {plan.problem}
                 </p>
               ) : null}
-              {busyElsewhere ? <p className="t-amber">Another export is running; wait for it to finish.</p> : null}
+              {busyElsewhere ? <p className="t-amber">Another export or a send to a drive is running; wait for it to finish.</p> : null}
               {problems.length ? (
                 <>
                   <button type="button" className="link" aria-expanded={showItems} onClick={() => setShowItems(!showItems)}>
@@ -364,7 +369,12 @@ export function DjExportDialog({ target, onClose }: { target: ExportTarget | nul
     footer = (
       <>
         {first ? (
-          <Button icon={LuFolderOpen} onClick={() => void bridge.reveal(first).catch(() => undefined)}>
+          <Button
+            icon={LuFolderOpen}
+            onClick={() =>
+              void bridge.reveal(first).catch((e: unknown) => toast({ tone: 'error', title: 'Could not show the files', body: e instanceof Error ? e.message : String(e) }))
+            }
+          >
             {revealLabel(bridge.platform)}
           </Button>
         ) : null}
