@@ -45,12 +45,12 @@
 .upd-ver {
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   color: var(--c-text-2);
 }
 
 .upd-ver.is-new {
-  font-size: 19px;
+  font-size: var(--fs-xl);
   font-weight: 520;
   color: var(--c-lime);
 }
@@ -83,7 +83,7 @@
 
 .upd-date {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .upd-notes {
@@ -91,7 +91,7 @@
   overflow: auto;
   padding: 10px 14px;
   border: 1px solid var(--c-line-faint);
-  border-radius: 3px;
+  border-radius: var(--r-ctl);
   background: var(--c-well);
 }
 
@@ -116,7 +116,7 @@
 }
 
 .upd-how {
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .upd-run {
@@ -133,7 +133,7 @@
 /* --------------------------------------------------------- release notes */
 
 .notes {
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: var(--lh-prose);
   color: var(--c-text-2);
 }
@@ -144,7 +144,7 @@
 
 .notes-h {
   margin-top: 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: var(--w-medium);
   color: var(--c-text);
 }

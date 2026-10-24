@@ -23,6 +23,16 @@ written for the people using SONORA.
 
 ### Changed
 
+- **A new icon.** SONORA's icon is now a meter whose scale is a sound wave,
+  lime on graphite, drawn simpler at small sizes so it stays readable down
+  to 16 pixels; the sidebar's wordmark carries it too.
+- **Faster with large libraries.** With thousands of tracks, a running scan
+  no longer redraws every row of the library on each update (about 93 %
+  less drawing), long playlists open in about half the time and move with
+  the arrow keys without lag, their set timeline fits the window, and an
+  export of thousands of tracks is planned about five times faster.
+- **Design.** Type sizes and corner radii follow one scale throughout; the
+  Theme setting shows its one value instead of a control with one choice.
 - **Scores, version 1.1.** A lossless file at a low sample rate (32 kHz,
   say) is no longer called a likely transcode, an MP3 or AAC stream inside
   a WAV is judged as the lossy file it is (not as heavily clipped), and an
@@ -78,6 +88,9 @@ it, in `docs/BUGS.md`. The ones you could meet:
   already found; "Check again" for FFmpeg says what it found; the CSV export
   opens with accents intact in Excel; Discogs lookups of artists whose
   names start with digits work, and stopping one says it was stopped.
+  A value typed into a number field and then stepped with + is saved as
+  stepped; Cancel stops the import of a folder of thousands of files at
+  once; on Duplicates, Remove and Move to Trash are no longer cut off.
 
 ## 0.3.2
 

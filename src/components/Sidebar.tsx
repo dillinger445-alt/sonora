@@ -36,15 +36,20 @@ const GROUPS: NavItem[][] = [
 export const NAV_ORDER: Route[] = [...GROUPS.flat().map((i) => i.route), { view: 'settings' }];
 
 function Wordmark() {
-  // Five bars, like the app icon: a level ladder reading left to right.
+  // The app icon's mark at its smallest: a meter whose scale is a sound wave
+  // (drawn by src-tauri/icons/generate.py, "tiny").
   return (
     <div className="wordmark" data-tauri-drag-region>
-      <svg className="wordmark-glyph" viewBox="0 0 18 14" aria-hidden>
-        <rect x="0" y="6" width="2" height="2" rx="0.5" />
-        <rect x="4" y="3.5" width="2" height="7" rx="0.5" />
-        <rect x="8" y="0" width="2" height="14" rx="0.5" />
-        <rect x="12" y="3.5" width="2" height="7" rx="0.5" />
-        <rect x="16" y="6" width="2" height="2" rx="0.5" />
+      <svg className="wordmark-glyph" viewBox="8 17 84 66" aria-hidden>
+        <g stroke="currentColor" strokeWidth="7.6" strokeLinecap="round">
+          <line x1="19.6" y1="52.6" x2="12.6" y2="48.2" />
+          <line x1="33.7" y1="42.2" x2="27.5" y2="31" />
+          <line x1="50" y1="40" x2="50" y2="23.2" />
+          <line x1="66.3" y1="42.2" x2="72.5" y2="31" />
+          <line x1="80.4" y1="52.6" x2="87.4" y2="48.2" />
+          <line x1="50" y1="71.6" x2="59.8" y2="47.4" strokeWidth="7.8" />
+        </g>
+        <circle cx="50" cy="71.6" r="9" fill="currentColor" />
       </svg>
       <span className="wordmark-text" data-tauri-drag-region>
         SONORA

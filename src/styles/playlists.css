@@ -24,7 +24,7 @@
 }
 
 .pl-title {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   font-weight: var(--w-medium);
   color: var(--c-text-3);
 }
@@ -58,7 +58,7 @@
   border: 1px dashed var(--c-line);
   border-radius: var(--r-ctl);
   color: var(--c-text-3);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -83,7 +83,7 @@
   padding-right: 4px;
   border-radius: var(--r-ctl);
   color: var(--c-text-2);
-  font-size: 13px;
+  font-size: var(--fs-md);
   cursor: default;
   user-select: none;
   outline: none;
@@ -214,7 +214,7 @@
 }
 
 .pl-count {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--c-text-3);
 }
 
@@ -295,7 +295,7 @@ body.is-dragging * {
   background: var(--c-raised);
   box-shadow: var(--shadow-pop);
   color: var(--c-text);
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   pointer-events: none;
 }
 
@@ -325,7 +325,7 @@ body.is-dragging * {
   background: var(--c-lime);
   color: var(--c-lime-ink);
   font-weight: 700;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1;
 }
 
@@ -384,7 +384,7 @@ body.is-dragging * {
 .tl-key {
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   fill: var(--c-text-2);
   pointer-events: none;
 }
@@ -429,7 +429,7 @@ body.is-dragging * {
   position: absolute;
   right: 0;
   top: -16px;
-  font-size: 10.5px;
+  font-size: var(--fs-badge);
 }
 
 .tl-tip {
@@ -444,7 +444,7 @@ body.is-dragging * {
   border-radius: var(--r-ctl);
   background: var(--c-raised);
   box-shadow: var(--shadow-pop);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
   pointer-events: none;
 }
@@ -477,7 +477,7 @@ body.is-dragging * {
 
 .pt-pos {
   color: var(--c-text-3);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .pt-row.is-dragged {
@@ -510,7 +510,7 @@ body.is-dragging * {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .mix-mark {
@@ -535,7 +535,7 @@ body.is-dragging * {
 }
 
 .mix-hd {
-  font-size: 10.5px;
+  font-size: var(--fs-badge);
 }
 
 .pt-empty {
@@ -564,7 +564,7 @@ body.is-dragging * {
   border-bottom: 1px solid var(--c-line-faint);
   color: var(--c-text);
   text-decoration: none;
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 
 .folder-item:hover {
@@ -589,7 +589,7 @@ body.is-dragging * {
   gap: 7px;
   align-items: flex-start;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-3);
 }
 
@@ -610,7 +610,7 @@ body.is-dragging * {
   background: var(--c-well);
   color: var(--c-text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .organize {
@@ -628,7 +628,7 @@ body.is-dragging * {
 .organize-example {
   margin-top: -4px;
   padding-left: 110px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .rules {
@@ -666,11 +666,11 @@ body.is-dragging * {
 
 .rules-count {
   margin-right: auto;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .rules-kept {
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .genre-chips {
@@ -688,10 +688,10 @@ body.is-dragging * {
   height: 24px;
   padding: 0 9px;
   border: 1px solid var(--c-line);
-  border-radius: 12px;
+  border-radius: var(--r-ctl);
   background: transparent;
   color: var(--c-text-2);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .genre-chip:hover {
@@ -726,7 +726,7 @@ body.is-dragging * {
 .arr-label {
   display: block;
   margin-bottom: 2px;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   font-weight: var(--w-medium);
 }
 
@@ -734,7 +734,7 @@ body.is-dragging * {
   height: 42px;
   display: flex;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .arr-stats {
@@ -746,7 +746,7 @@ body.is-dragging * {
 }
 
 .arr-stat dt {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   color: var(--c-text-3);
 }
 
@@ -755,12 +755,12 @@ body.is-dragging * {
   align-items: baseline;
   gap: 8px;
   margin-top: 4px;
-  font-size: 18px;
+  font-size: var(--fs-xl);
 }
 
 .arr-arrow {
   color: var(--c-text-off);
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 /* ------------------------------------------------------------ USB dialog */
@@ -787,7 +787,7 @@ body.is-dragging * {
 }
 
 .usb-h {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: var(--w-medium);
   color: var(--c-text-2);
 }
@@ -843,7 +843,7 @@ body.is-dragging * {
 .drive-name {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-medium);
 }
 
@@ -853,11 +853,11 @@ body.is-dragging * {
   border: 1px solid var(--c-line);
   border-radius: 2px;
   color: var(--c-text-3);
-  font-size: 10.5px;
+  font-size: var(--fs-badge);
 }
 
 .drive-space {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 /* Capacity: used in grey, about to be written in lime, the rest dark. */
@@ -894,7 +894,7 @@ body.is-dragging * {
 }
 
 .usb-none {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .usb-cols {
@@ -937,7 +937,7 @@ body.is-dragging * {
 
 .pick-count {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .usb-checks {
@@ -980,7 +980,7 @@ body.is-dragging * {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .usb-warnings li {
@@ -1002,7 +1002,7 @@ body.is-dragging * {
   border: 1px solid var(--c-line-faint);
   border-radius: var(--r-ctl);
   background: var(--c-well);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .usb-dir + .usb-dir {
@@ -1045,7 +1045,7 @@ body.is-dragging * {
   flex-shrink: 0;
   padding: 0 5px;
   border-radius: 2px;
-  font-size: 10.5px;
+  font-size: var(--fs-badge);
   line-height: 16px;
   color: var(--c-text-2);
   background: var(--c-active);

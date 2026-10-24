@@ -46,7 +46,7 @@
   display: block;
   margin-bottom: 4px;
   text-align: center;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--c-text-3);
   min-height: 12px;
 }
@@ -87,7 +87,7 @@
   position: absolute;
   top: -12px;
   left: 4px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--c-text-2);
   white-space: nowrap;
 }
@@ -96,7 +96,7 @@
   display: flex;
   justify-content: space-between;
   margin-top: 5px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--c-text-3);
 }
 
@@ -115,7 +115,7 @@
 }
 
 .profile-stats dt {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-3);
 }
 
@@ -137,7 +137,7 @@
   border-bottom: 1px solid var(--c-line-faint);
   color: var(--c-text);
   text-decoration: none;
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .attn-row:hover {
@@ -164,7 +164,7 @@
 }
 
 .attn-n {
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .attn-chev {
@@ -175,7 +175,7 @@
 
 .attn-none {
   padding: 10px 2px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .formats-bar {
@@ -203,7 +203,7 @@
   border-bottom: 1px solid var(--c-line-faint);
   color: var(--c-text);
   text-decoration: none;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .scan-row:hover {
@@ -211,11 +211,11 @@
 }
 
 .scan-row .num {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 .scan-state {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-2);
 }
 
@@ -241,11 +241,11 @@
 .welcome-main {
   padding: 32px 32px 28px;
   border: 1px dashed var(--c-line-strong);
-  border-radius: 6px;
+  border-radius: var(--r-dlg);
 }
 
 .welcome-title {
-  font-size: 20px;
+  font-size: var(--fs-xl);
   font-weight: var(--w-strong);
   letter-spacing: -0.005em;
 }
@@ -254,7 +254,7 @@
   margin-top: 10px;
   max-width: 58ch;
   color: var(--c-text-2);
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   line-height: var(--lh-prose);
 }
 
@@ -266,7 +266,7 @@
 
 .welcome-note {
   margin-top: 14px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .welcome-facts {
@@ -283,13 +283,13 @@
 .welcome-facts dt {
   display: flex;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-3);
 }
 
 .welcome-facts dd {
   margin-top: 3px;
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -307,13 +307,13 @@
 }
 
 .live-title {
-  font-size: 15px;
+  font-size: var(--fs-lg);
   font-weight: var(--w-strong);
 }
 
 .live-fraction {
   margin-left: 10px;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 400;
   color: var(--c-text-2);
 }
@@ -330,7 +330,7 @@
 }
 
 .live > p {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .counters {
@@ -341,17 +341,17 @@
 }
 
 .counter dt {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   color: var(--c-text-3);
 }
 
 .counter dd {
   margin-top: 3px;
-  font-size: 17px;
+  font-size: var(--fs-xl);
 }
 
 .counter dd .score-cell .score-num {
-  font-size: 15px;
+  font-size: var(--fs-lg);
 }
 
 .workers {
@@ -366,22 +366,22 @@
   gap: 14px;
   height: 32px;
   border-bottom: 1px solid var(--c-line-faint);
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .worker .num {
   text-align: right;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 .summary-line {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
 .results-empty {
   padding: 16px 0;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .results-table tr.is-failed td:first-child {
@@ -391,7 +391,7 @@
 
 .results-more {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 /* ----------------------------------------------------------------- folders */
@@ -410,7 +410,7 @@
 
 .dup-status {
   margin: -2px 0 16px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   line-height: 1.5;
   max-width: 100ch;
 }
@@ -447,19 +447,19 @@
 }
 
 .dup-title {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   font-weight: var(--w-strong);
 }
 
 .dup-expl {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
   max-width: 90ch;
 }
 
 .dup-sim {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
   padding-top: 2px;
 }
@@ -478,7 +478,7 @@
   border: 1px solid var(--c-lime-line);
   border-radius: 2px;
   color: var(--c-lime);
-  font-size: 10.5px;
+  font-size: var(--fs-badge);
   font-weight: var(--w-medium);
   line-height: 16px;
   white-space: nowrap;
@@ -501,7 +501,7 @@
   margin: 8px 0 12px;
   padding: 8px 14px 4px;
   border: 1px solid var(--c-line);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   background: var(--c-panel);
   overflow-x: auto;
 }
@@ -509,7 +509,7 @@
 .compare-table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .compare-table th,
@@ -542,7 +542,7 @@
 /* ----------------------------------------------------------------- history */
 
 .roots li {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   padding: 3px 0;
 }
 
@@ -563,13 +563,13 @@
 }
 
 .settings-title {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-strong);
 }
 
 .settings-desc {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-3);
   line-height: 1.45;
   /* Paths (slskd's settings file, say) break where they must, inside the column. */
@@ -594,6 +594,12 @@
   flex-shrink: 0;
 }
 
+/* A setting with a single value shows it as text, set like a control's label. */
+.setting-value {
+  font-size: var(--fs-ui);
+  color: var(--c-text-2);
+}
+
 .stepper {
   display: inline-flex;
   align-items: center;
@@ -608,7 +614,7 @@
   border: 0;
   background: transparent;
   color: var(--c-text-2);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   line-height: 1;
 }
 
@@ -629,13 +635,13 @@
   border-right: 1px solid var(--c-line);
   background: transparent;
   text-align: center;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   outline: none;
 }
 
 .stepper-unit {
   padding: 0 8px 0 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .privacy {
@@ -655,7 +661,7 @@
 
 .privacy p + p {
   margin-top: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .about {
@@ -665,13 +671,13 @@
 }
 
 .about dt {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   color: var(--c-text-3);
 }
 
 .about dd {
   margin-top: 2px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 /* ------------------------------------------------------------- track view */
@@ -696,13 +702,13 @@
 }
 
 .spec dt {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--c-text-3);
 }
 
 .spec dd {
   margin-top: 2px;
-  font-size: 13px;
+  font-size: var(--fs-md);
   white-space: nowrap;
 }
 
@@ -720,7 +726,7 @@
 }
 
 .verdict-text {
-  font-size: 15px;
+  font-size: var(--fs-lg);
   line-height: 1.45;
   max-width: 62ch;
 }
@@ -730,11 +736,11 @@
   align-items: baseline;
   gap: 8px;
   margin-top: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .verdict-conf .conf {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   color: var(--c-text);
 }
 
@@ -744,14 +750,14 @@
 
 .conf-reasons {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   max-width: 70ch;
 }
 
 .lanes-missing {
   padding: 18px 0;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .track-grid {
@@ -765,7 +771,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   font-weight: var(--w-strong);
 }
 
@@ -806,12 +812,12 @@
 }
 
 .finding-title {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-medium);
 }
 
 .finding-summary {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   color: var(--c-text-2);
   line-height: 1.45;
 }
@@ -826,7 +832,7 @@
 }
 
 .finding-penalty {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-2);
   padding-top: 1px;
   text-align: right;
@@ -842,7 +848,7 @@
   align-items: center;
   gap: 4px 12px;
   margin: -2px 0 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .evidence-key-item {
@@ -885,13 +891,13 @@
 }
 
 .finding-text dt {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   color: var(--c-text-3);
   margin-bottom: 2px;
 }
 
 .finding-text dd {
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: var(--lh-prose);
   max-width: 76ch;
 }
@@ -903,7 +909,7 @@
 
 .metrics th {
   padding: 3px 18px 3px 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: var(--w-regular);
   color: var(--c-text-3);
   text-align: left;
@@ -912,7 +918,7 @@
 
 .metrics td {
   padding: 3px 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .finding-times {
@@ -921,7 +927,7 @@
   align-items: center;
   gap: 4px;
   margin-top: 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .time-chip {
@@ -931,7 +937,7 @@
   border-radius: 2px;
   background: var(--c-raised);
   color: var(--c-text);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .time-chip:hover {
@@ -944,7 +950,7 @@
   align-items: baseline;
   gap: 6px 16px;
   margin-top: 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .impact {
@@ -973,13 +979,13 @@
 }
 
 .subscore-label {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-medium);
 }
 
 .subscore-desc {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -991,7 +997,7 @@
 
 .tech-title {
   margin-bottom: 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   font-weight: var(--w-strong);
 }
 
@@ -1001,7 +1007,7 @@
   gap: 12px;
   padding: 5px 0;
   border-bottom: 1px solid var(--c-line-faint);
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .tech-row dt {
@@ -1009,7 +1015,7 @@
 }
 
 .tech-row dd.num {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -1022,8 +1028,8 @@
   margin-top: 22px;
   padding: 20px 22px;
   border: 1px dashed var(--c-line-strong);
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: var(--r-ctl);
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -1040,8 +1046,8 @@
   margin-top: 18px;
   padding: 10px 14px;
   border: 1px dashed var(--c-line-strong);
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: var(--r-ctl);
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -1061,7 +1067,7 @@
   align-items: center;
   height: 30px;
   border-bottom: 1px solid var(--c-line-faint);
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 @media (max-width: 1280px) {
@@ -1115,8 +1121,9 @@
   width: 80px;
 }
 
+/* Five icon buttons: play, open, show, remove, move to the Trash. */
 .dup-table .c-actions {
-  width: 120px;
+  width: 150px;
 }
 
 .cell-actions .icon-btn.is-current {
@@ -1129,6 +1136,12 @@
   white-space: nowrap;
 }
 
+/* Buttons are never cut short with an ellipsis (B104). */
+.dup-table td.cell-actions {
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .scan-counts {
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }

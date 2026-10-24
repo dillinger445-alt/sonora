@@ -280,6 +280,11 @@ test('needs attention groups problems and explains failures', async ({ page }) =
 test('duplicates: identical files at once, similar recordings after a fingerprint comparison', async ({ page }) => {
   await page.goto('/#/duplicates');
   await expect(page.getByRole('heading', { name: /^Identical files/ }).first()).toBeVisible();
+  // B104: each row's five buttons fit their cell (the last two were cut off).
+  const cut = await page.locator('.dup-table td.cell-actions').evaluateAll(
+    (cells) => cells.filter((td) => [...td.querySelectorAll('button')].some((b) => b.getBoundingClientRect().right > td.getBoundingClientRect().right + 0.5)).length,
+  );
+  expect(cut).toBe(0);
   await page.getByRole('button', { name: 'Find similar recordings' }).click();
   await expect(page.getByRole('heading', { name: /^Same recording, different encoding/ }).first()).toBeVisible({ timeout: 60_000 });
   // Comparing is read-only: the side-by-side view shows the metrics.

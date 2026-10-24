@@ -15,7 +15,7 @@
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
   font-weight: 420;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text);
   white-space: nowrap;
 }
@@ -29,7 +29,7 @@
 
 .key-badge.is-lg {
   gap: 7px;
-  font-size: 17px;
+  font-size: var(--fs-xl);
   font-weight: 460;
 }
 
@@ -48,7 +48,7 @@
 }
 
 .dj-source {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--c-text-3);
   white-space: nowrap;
 }
@@ -133,7 +133,7 @@
   position: fixed;
   z-index: var(--z-dialog);
   border: 1px solid var(--c-line-strong);
-  border-radius: 4px;
+  border-radius: var(--r-pop);
   background: var(--c-raised);
   box-shadow: var(--shadow-pop);
   overflow-y: auto;
@@ -144,12 +144,12 @@
   display: flex;
   flex-direction: column;
   padding: 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .pop-title {
   margin-bottom: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: var(--w-strong);
   color: var(--c-text-2);
 }
@@ -157,7 +157,7 @@
 .pop-body .check-row {
   align-items: flex-start;
   margin-top: 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   line-height: 1.4;
 }
 
@@ -195,7 +195,7 @@
 
 .bpm-inputs .text-input {
   width: 72px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .text-input.is-invalid,
@@ -217,7 +217,7 @@
 
 .key-type-hint {
   margin-top: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 /* ----------------------------------------------------- Camelot wheel */
@@ -274,7 +274,7 @@
   fill: var(--c-text);
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 460;
   text-anchor: middle;
   dominant-baseline: central;
@@ -285,7 +285,7 @@
   fill: var(--c-text-3);
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   text-anchor: middle;
   dominant-baseline: central;
   pointer-events: none;
@@ -323,19 +323,19 @@
 .wheel-center-code {
   font-family: var(--font-mono);
   font-stretch: var(--stretch-num);
-  font-size: 19px;
+  font-size: var(--fs-xl);
   font-weight: 480;
   line-height: 1.1;
 }
 
 .wheel-center-name {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.25;
   color: var(--c-text-2);
 }
 
 .wheel-center-count {
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   color: var(--c-text-3);
 }
 
@@ -408,7 +408,7 @@
 }
 
 .dj-strip dt {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   color: var(--c-text-3);
 }
 
@@ -417,16 +417,16 @@
   min-height: 24px;
   display: flex;
   align-items: center;
-  font-size: 17px;
+  font-size: var(--fs-xl);
 }
 
 .dj-strip-value .bpm-text {
-  font-size: 18px;
+  font-size: var(--fs-xl);
   font-weight: 420;
 }
 
 .dj-strip-genre {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -436,7 +436,7 @@
 
 .dj-discogs-link {
   margin-left: 6px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 /* -------------------------------------------------------- track page */
@@ -465,7 +465,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   font-weight: var(--w-regular);
   color: var(--c-text-3);
 }
@@ -475,17 +475,17 @@
   align-items: baseline;
   gap: 6px;
   min-height: 30px;
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .track-dj-value .bpm-text {
-  font-size: 26px;
+  font-size: var(--fs-num-md);
   font-weight: 400;
   line-height: 1.1;
 }
 
 .track-dj-value .key-badge.is-lg {
-  font-size: 24px;
+  font-size: var(--fs-num-md);
   align-self: center;
 }
 
@@ -494,7 +494,7 @@
 }
 
 .track-dj-genre {
-  font-size: 17px;
+  font-size: var(--fs-xl);
   line-height: 30px;
 }
 
@@ -502,7 +502,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -554,7 +554,7 @@
 
 .dj-edit-fields .text-input {
   width: 100%;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .bpm-edit {
@@ -575,7 +575,7 @@
 
 .field-hint {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 .dialog-foot .dj-reset {
@@ -584,7 +584,7 @@
 
 .dj-reset-ask {
   max-width: 300px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   line-height: 1.4;
   color: var(--c-text-2);
 }
@@ -601,13 +601,13 @@
 
 .xp-label {
   padding-top: 5px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text-2);
 }
 
 .xp-about {
   margin-top: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -633,7 +633,7 @@
 
 .xp-checks .check-row {
   margin-top: 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .xp-playlist {
@@ -641,14 +641,14 @@
   align-items: center;
   gap: 10px;
   margin: 8px 0 0 24px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .xp-playlist .text-input {
   flex: 1;
   font-family: var(--font-sans);
   font-stretch: var(--stretch-ui);
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .xp-plan {
@@ -659,9 +659,9 @@
   margin-top: 16px;
   padding: 10px 12px;
   border: 1px solid var(--c-line);
-  border-radius: 3px;
+  border-radius: var(--r-ctl);
   background: var(--c-well);
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }
 
 .xp-problem {
@@ -683,7 +683,7 @@
   max-height: 180px;
   width: 100%;
   overflow-y: auto;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .xp-items li {
@@ -713,7 +713,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--fs-lg);
   font-weight: var(--w-medium);
 }
 
@@ -727,7 +727,7 @@
   margin-top: 4px;
   padding-left: 16px;
   list-style: disc;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .xp-howto {
@@ -737,7 +737,7 @@
 }
 
 .xp-howto-title {
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   font-weight: var(--w-strong);
 }
 
@@ -749,12 +749,12 @@
 }
 
 .xp-howto dt {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: var(--w-medium);
 }
 
 .xp-howto dd {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--c-text-2);
 }
@@ -781,13 +781,13 @@
   align-items: center;
   gap: 6px;
   margin-right: 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   white-space: nowrap;
 }
 
 .discogs-help,
 .discogs-legal {
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   line-height: 1.5;
 }
 
@@ -892,7 +892,7 @@
   border: 0;
   background: none;
   color: var(--c-text);
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: var(--w-medium);
   text-align: left;
 }
@@ -906,7 +906,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .player-note {
@@ -963,7 +963,7 @@
   border: 1px solid var(--c-line-strong);
   border-radius: var(--r-ctl);
   color: var(--c-text-2);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .player-dj.is-hidden {
@@ -987,7 +987,7 @@
 
 .player-time {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--c-text);
 }
 
@@ -996,11 +996,11 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .player-unit {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   margin-right: 6px;
 }
 
@@ -1041,12 +1041,12 @@ button.link {
 }
 
 .dj-edit-title {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   font-weight: var(--w-medium);
   overflow-wrap: anywhere;
 }
 
 .dj-edit-note {
   margin-top: 2px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
 }

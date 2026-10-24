@@ -242,8 +242,9 @@ export function SettingsView() {
               options={SCORE_KINDS.map((k) => ({ value: k, label: SCORE_LABEL[k], hint: SCORE_HINT[k] }))}
             />
           </Row>
+          {/* A value, not a control: there is nothing to choose yet. */}
           <Row label="Theme" description="Only the dark theme is available in this version.">
-            <Segmented label="Theme" size="sm" value="dark" onChange={() => undefined} options={[{ value: 'dark', label: 'Dark' }]} />
+            <span className="setting-value">Dark</span>
           </Row>
         </Group>
 

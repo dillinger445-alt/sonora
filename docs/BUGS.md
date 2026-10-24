@@ -464,6 +464,8 @@ say why, and how the fix was checked instead.
   - Test: `playback_uses_the_original_or_one_decoded_copy` (crates/sonora-core/tests/dj.rs).
 - [x] **B102. Cancel during the import of a folder holding thousands of files waits until every file is read** (minutes on Windows). Found by CI after the review. Fix: the folder walk looks at Cancel between files, not only between folders.
   - Test: `a_cancelled_walk_stops_inside_a_big_folder` (crates/sonora-core/src/index.rs).
+- [x] **B104. On Duplicates, Remove from library and Move to Trash are cut off, shown as "…".** Found in the design pass. The actions column was narrower than its five buttons. Fix: a wider column that never cuts its buttons short.
+  - Test: e2e “duplicates: …” checks that every row's buttons fit their cell.
 
 ### Analysis engine
 

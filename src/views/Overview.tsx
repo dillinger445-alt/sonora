@@ -32,7 +32,8 @@ function Histogram({ bins, average, kind }: { bins: number[]; average: number | 
         })}
         {average != null ? (
           <div className="histo-avg" style={{ left: `${average}%` }} aria-hidden>
-            <span className="histo-avg-label num">avg {average.toFixed(1)}</span>
+            {/* Rounded as the averages beside it are. */}
+            <span className="histo-avg-label num">avg {Math.round(average)}</span>
           </div>
         ) : null}
       </div>

@@ -26,9 +26,11 @@ LEDs: as a signal, not as decoration.
    shown, not hidden.
 5. **Quiet structure.** Tonal layers and hairlines instead of cards. Only
    floating layers (menus, dialogs, toasts) cast a shadow, to lift them off
-   the content beneath. Corner radii are small (3 px on controls, 6 px on
-   dialogs). There are no gradients except in the loudness area fill, which
-   follows the data.
+   the content beneath. Corner radii are small and come from three tokens:
+   3 px on controls and boxes within a page, 4 px on menus, popovers, toasts
+   and the selection bar, 6 px on dialogs; only switches are pills. There
+   are no gradients except in the loudness area fill, which follows the
+   data.
 6. **Stable layouts.** Selecting rows, opening the details panel, setting
    filters or receiving live updates never moves content under the pointer.
    The library toolbar has two fixed rows (search, score and actions; then
@@ -46,8 +48,9 @@ All tokens live in `src/styles/tokens.css`.
 | Text | `--c-text` #e3e6e9, `--c-text-2` #a3abb3, `--c-text-3` #8c949d, `--c-text-off` |
 | Signal | `--c-lime` #c0e84e, `--c-amber` #e9ae40, `--c-red` #f06a5e, each with `-dim` (fills) and `-line` (borders) variants |
 | Data | `--c-band-low`, `--c-band-mid`, `--c-band-high` (waveform bands), `--c-data-1`, `--c-data-2`, `--c-grid`, `--c-unlit` |
-| Type | `--font-sans` Archivo (variable width; interface text at 94 %), `--font-mono` Martian Mono (numbers at 78 % width); sizes 11 / 12 / 13 / 15 / 18 px, score numerals 30 px |
-| Space and shape | 4 px grid (`--s-1` to `--s-8`), `--r-ctl` 3 px, `--r-dlg` 6 px, control height 28 px, table rows 32 px |
+| Type | `--font-sans` Archivo (variable width; interface text at 94 %), `--font-mono` Martian Mono (numbers at 78 % width) |
+| Type sizes | `--fs-2xs` 10 (chart axes, counts inside small marks), `--fs-badge` 10.5 (badges and counts in buttons), `--fs-xs` 11, `--fs-label` 11.5 (field and column names, hints, paths), `--fs-sm` 12, `--fs-ui` 12.5 (controls and running text), `--fs-md` 13 (section titles), `--fs-lg` 15, `--fs-xl` 18 (view titles, counters); numerals `--fs-num-md` 24 (tempo and key on the track page) and `--fs-num-lg` 30 (scores). Every size in the stylesheets is one of these. |
+| Space and shape | 4 px grid (`--s-1` to `--s-8`), `--r-ctl` 3 px, `--r-pop` 4 px, `--r-dlg` 6 px, control height 28 px, table rows 32 px |
 
 Text colours meet WCAG AA contrast (4.5:1) on the surfaces they are used
 on. Tertiary text and red reach at least 4.7:1 even on raised surfaces;
@@ -81,16 +84,49 @@ The building blocks are in `src/components/`:
 - **Marks**: `ScoreMeter` (20-segment ladder), `ScoreCell` (number plus a
   10-segment mini ladder), `EvidenceMark`, `SeverityIcon`, `FlagList`,
   `StatusMark`. On the Soulseek page, each folder of results carries a
-  five-bar availability ladder, rising like the wordmark's bars: lime when
+  five-bar availability ladder, rising like a level meter: lime when
   the person has a free upload slot (more bars for a faster connection),
   amber when the download would wait in a queue.
 - **Tables and layout**: `TrackTable` (virtualized and paged from the core;
-  columns drop by priority as space shrinks), `Sidebar`, `StatusBar`,
-  `ViewHeader`, `Section`, `EmptyState`, `ErrorState`.
+  columns drop by priority as space shrinks; its rows are memoised, so a
+  scan that updates tracks redraws only those), `Sidebar`, `StatusBar`
+  (the parts that show scan progress are components of their own, so the
+  rest does not redraw on every tick), `ViewHeader`, `Section`,
+  `EmptyState`, `ErrorState`.
+- **Playlists**: `SetTimeline` (a playlist as a set: a block per track,
+  tinted by key, the tempo as a line, a mark at each change for how the
+  keys mix). The blocks are drawn once per set; selection, the pointer and
+  the playhead are drawn over them. A set too long for two pixels a track
+  becomes a strip of colour, each pixel showing the key of the track under
+  it.
 - **Charts** (`src/charts/`): `Lanes` (canvas), `SpectrumChart` (uPlot),
   `BandBars`.
 
 Icons come from Lucide (`react-icons/lu`).
+
+## The mark
+
+SONORA's mark is a meter whose scale is a sound wave: a needle on a pivot
+reads a scale bent round an arc, and the scale's graduations are the
+samples of a waveform, centred on the arc as on a zero line, quiet at the
+ends and loud in the middle. It says what the app is, an instrument that
+measures sound, without a speaker, a note or a headphone.
+
+- **One colour.** The mark is lime on graphite for the app icon and the
+  favicon (`--c-lime` on `--c-canvas`, a hairline `--c-line` edge from
+  64 px up), and any single colour elsewhere (`public/sonora-mark*.svg` use
+  `currentColor`). No gradients, glow or shadow on the mark; the macOS icon
+  has the system's drop shadow under its body.
+- **Three drawings.** In full (19 graduations, above 96 px), small (7, from
+  25 to 96 px) and tiny (5, at 16 and 24 px and in the sidebar's wordmark),
+  with heavier strokes and less room round them as they get smaller, so
+  the needle and the scale stay apart at every size.
+- **Files.** `src-tauri/icons/generate.py` draws every size from one
+  geometry: the PNGs, `icon.ico` and `icon.icns` Tauri bundles, the
+  Windows tiles, and the SVGs in `public/` (`favicon.svg`, `sonora-icon.svg`,
+  `sonora-mark.svg`, `sonora-mark-small.svg`, `sonora-mark-tiny.svg`).
+  `docs/screenshots/icon-before-after.png` shows the earlier icon (bars of a
+  waveform under a gradient) beside this one.
 
 ## Motion
 
