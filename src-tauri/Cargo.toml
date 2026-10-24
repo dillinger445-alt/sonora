@@ -1,6 +1,6 @@
 [package]
 name = "sonora-desktop"
-version = "0.4.0"
+version = "0.4.1"
 description = "SONORA desktop application (Tauri 2 shell around sonora-core)"
 authors = ["SONORA"]
 edition = "2021"

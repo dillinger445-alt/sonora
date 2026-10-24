@@ -4,6 +4,31 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.4.1
+
+### Fixed
+
+- **YouTube playlists are read again.** YouTube has changed how it builds
+  playlist pages, and SONORA found no videos in the new ones: a playlist
+  showed "0 tracks to look for", or stopped with "YouTube says:
+  Unavailable videos are hidden". Both kinds of page are read now, every
+  available video is listed, and YouTube's notices no longer stop the
+  reading. If a page ever yields no videos, SONORA says so instead of
+  showing an empty list. Titles written "Artist ─ Title", or with
+  invisible characters in them, are split into artist and title too.
+
+### Changed
+
+- **More ways to find a track on Soulseek.** Soulseek only finds files
+  whose names hold every word you search for, so SONORA now tries up to
+  ten searches per track instead of five, stopping at the first that
+  finds a file passing your rules: the title alone first, then with its
+  mix name, the artist and the title, the first artist with the title
+  stripped of brackets and "feat.", the artist alone (narrowed to files
+  whose names hold the title's words), a long title's main words, the
+  catalogue number, and simpler spellings without accents or punctuation.
+  A track's details say which search found it.
+
 ## 0.4.0
 
 ### New
