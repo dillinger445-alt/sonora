@@ -199,9 +199,15 @@ export function CoreProvider({ bridge, children }: { bridge: Bridge; children: R
     return () => clearInterval(t);
   }, [busy, client]);
 
+  // One change at a time, in the order made: two quick changes of one
+  // setting (a typed value, then +) could reach the core in either order and
+  // leave the first one saved (B103).
+  const saving = useRef<Promise<unknown>>(Promise.resolve());
   const saveSettings = useCallback(
     async (values: Partial<Settings>) => {
-      const s = await client.updateSettings(values);
+      const run = saving.current.then(() => client.updateSettings(values));
+      saving.current = run.catch(() => undefined);
+      const s = await run;
       setSettings(s);
       return s;
     },

@@ -508,6 +508,8 @@ say why, and how the fix was checked instead.
   - Test: e2e “review: smart playlists keep their rules as saved…”.
 - [x] **B95. Taking tracks out of a playlist leaves them on screen until the reload.**
   - Test: e2e “review: smart playlists keep their rules as saved…”.
+- [x] **B103. A value typed in a number field, then stepped with +, can end up saved as the typed value.** Found by an e2e test after the review. The two saves could reach the core in either order. Fix: the interface sends settings changes one at a time, in the order they were made.
+  - Test: e2e “review: the USB dialog plans again…” slows the first save down; the second still wins.
 
 ### Browser build, tests and tooling
 

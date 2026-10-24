@@ -1701,7 +1701,7 @@ test('review: smart playlists keep their rules as saved, and their selection and
   }
 });
 
-test('review: the USB dialog plans again when another job ends and says plainly when a send fails; settings steppers and rules read right (B09, B46, B51, B57, B86)', async ({ page }) => {
+test('review: the USB dialog plans again when another job ends and says plainly when a send fails; settings steppers and rules read right (B09, B46, B51, B57, B86, B103)', async ({ page }) => {
   await page.addInitScript(() => {
     const Original = window.EventSource;
     const streams: EventSource[] = [];
@@ -1782,12 +1782,23 @@ test('review: the USB dialog plans again when another job ends and says plainly 
     // B57: with units.
     await expect(page.getByText('Files above this are left out: 24-bit, 96 kHz.')).toBeVisible();
     // B86: + steps from what was typed, not from the value saved before.
-    const workers = page.getByRole('textbox', { name: 'Parallel analyses' });
+    // B103: and the two saves (the typed value, then +) arrive in that order,
+    // even when the first is slow to get there.
     const typed = before.workers === 3 ? 5 : 3;
+    await page.route('**/api/call', async (route) => {
+      const body = route.request().postDataJSON() as { method?: string; params?: { values?: { workers?: number } } };
+      if (body.method === 'settings.update' && body.params?.values?.workers === typed) await new Promise((r) => setTimeout(r, 800));
+      return route.continue();
+    });
+    const workers = page.getByRole('textbox', { name: 'Parallel analyses' });
     await workers.fill(String(typed));
     await page.getByRole('button', { name: 'Increase Parallel analyses' }).click();
     await expect(workers).toHaveValue(String(typed + 1));
     await expect.poll(async () => (await api<{ workers: number }>(page, 'settings.get')).workers).toBe(typed + 1);
+    await page.waitForTimeout(1000);
+    expect((await api<{ workers: number }>(page, 'settings.get')).workers).toBe(typed + 1);
+    await expect(workers).toHaveValue(String(typed + 1));
+    await page.unroute('**/api/call');
     // B46: an emptied field goes back to the saved value, not to its minimum.
     const longest = page.getByRole('textbox', { name: 'Longest file in minutes' });
     await longest.fill('');
