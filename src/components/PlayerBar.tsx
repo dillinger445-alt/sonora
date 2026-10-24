@@ -227,7 +227,7 @@ export function PlayerBar() {
             <span className="player-badge" data-tip="A preview plays while it arrives. It is not checked, kept or added to your library.">
               Preview
             </span>{' '}
-            {preview.username} · {previewWords(p, preview.username)}
+            {preview.username} · {previewWords(p, preview.username, player.status === 'loading')}
           </span>
         ) : (
           <span className="player-sub faint">

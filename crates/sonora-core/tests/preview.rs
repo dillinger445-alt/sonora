@@ -459,6 +459,83 @@ fn plays_before_the_file_has_arrived_reads_ahead_only_so_far_and_leaves_nothing(
 }
 
 #[test]
+fn the_macos_player_is_answered_though_it_reads_the_end_first_and_buffers_before_it_plays() {
+    // B105: AVFoundation (the macOS app's player) asks for two bytes, then
+    // for everything, then for the last 64 KB, and buffers a while before it
+    // starts to play, so before it says how far it got. The end used to wait
+    // for the whole file while the transfer paused 20 s ahead of a playhead
+    // that never moved: the preview said enough had arrived, and stayed silent.
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("avfoundation");
+    let app = &e.app;
+    let size = share(&e, FILE, flac(120, true));
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => FILE, "size" => size }).get("id").and_then(Value::as_i64).unwrap() as u64;
+    wait_for("the preview to be ready", 20, || status(app, id as i64).get("ready").and_then(Value::as_bool) == Some(true));
+    let wait = Duration::from_secs(20);
+    let ask = |range: &str| app.previews.answer(id, false, Some(range), wait);
+
+    let a = ask("bytes=0-1");
+    assert_eq!((a.status, a.body.as_slice()), (206, &b"RI"[..]));
+    let total: u64 = a.header("Content-Range").and_then(|r| r.rsplit('/').next()).unwrap().parse().unwrap();
+    assert_eq!(total, 44 + 120 * 44_100 * 4);
+    // Everything, as an open range (Chromium, recent WebKit): what is there
+    // now; with an end (AVFoundation itself): as much as a finished file
+    // gives, 2 MB, once it is there.
+    let a = ask("bytes=0-");
+    assert_eq!(a.status, 206);
+    assert!(!a.body.is_empty() && a.body.len() as u64 <= 2 * 1024 * 1024);
+    let a = ask(&format!("bytes=0-{}", total - 1));
+    assert_eq!((a.status, a.body.len()), (206, 2 * 1024 * 1024));
+
+    // The end of the file, long before it arrives: at once, as silence, and
+    // without fetching the rest for it.
+    let tail = total - total % 65_536;
+    let asked = Instant::now();
+    let a = ask(&format!("bytes={tail}-{}", total - 1));
+    assert!(asked.elapsed() < Duration::from_secs(2), "the end was answered after {:?}", asked.elapsed());
+    assert_eq!(a.status, 206, "{}", String::from_utf8_lossy(&a.body));
+    assert_eq!(a.header("Content-Range"), Some(format!("bytes {tail}-{}/{total}", total - 1).as_str()));
+    assert_eq!(a.body.len() as u64, total - tail);
+    assert!(a.body.iter().all(|b| *b == 0));
+    let a = ask("bytes=-128");
+    assert_eq!((a.status, a.body.len()), (206, 128));
+    assert_eq!(a.header("Content-Range"), Some(format!("bytes {}-{}/{total}", total - 128, total - 1).as_str()));
+    let head = app.previews.answer(id, true, None, wait);
+    assert_eq!((head.status, head.header("Content-Length")), (200, Some(total.to_string().as_str())));
+
+    // It buffers 40 s, twice what the preview reads ahead here, before it
+    // plays, in ranges of 256 KB: each is answered, and whole.
+    let mut at = 0u64;
+    while at < 44 + 40 * 44_100 * 4 {
+        let a = ask(&format!("bytes={at}-{}", at + 256 * 1024 - 1));
+        assert_eq!(a.status, 206, "reading at {at}: {}", String::from_utf8_lossy(&a.body));
+        assert_eq!(a.header("Content-Range"), Some(format!("bytes {at}-{}/{total}", at + 256 * 1024 - 1).as_str()));
+        assert_eq!(a.body.len(), 256 * 1024);
+        at += a.body.len() as u64;
+    }
+    let c = app.previews.read(id, 44 + 30 * 44_100 * 4, 4, wait).unwrap();
+    let frame = 30 * 44_100;
+    assert_eq!((i16::from_le_bytes([c.bytes[0], c.bytes[1]]), i16::from_le_bytes([c.bytes[2], c.bytes[3]])), (sample(frame, 0), sample(frame, 1)));
+
+    // Reading stops (it plays now): the transfer stops 20 s beyond what was
+    // read, with the file far from complete.
+    wait_for("the transfer to pause", 20, || s(&status(app, id as i64), "transfer") == "paused");
+    let received = status(app, id as i64).get("received").and_then(Value::as_i64).unwrap();
+    assert!(received < size * 3 / 4, "read ahead only so far: {received} of {size}");
+
+    // A read beyond that brings the transfer back, playhead or not.
+    let far = 44 + 90 * 44_100 * 4;
+    let a = ask(&format!("bytes={far}-{}", far + 4095));
+    assert_eq!((a.status, a.body.len()), (206, 4096), "{}", String::from_utf8_lossy(&a.body));
+    let frame = 90 * 44_100;
+    assert_eq!(i16::from_le_bytes([a.body[0], a.body[1]]), sample(frame, 0));
+
+    call(app, "preview.stop", &obj! { "id" => id as i64 });
+    wait_for("the cleanup", 20, || !partial(&e, FILE).exists());
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
 fn stopping_part_way_cancels_the_transfer_and_removes_the_partial_file() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("stop");

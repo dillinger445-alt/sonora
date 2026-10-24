@@ -530,7 +530,9 @@ fn a_run_can_be_stopped() {
     assert!(matches!(s(&run, "state"), "running" | "cancelled"));
     let run = wait_state(&app, id, &["cancelled"], 30);
     assert_eq!(count(&run, "searching"), 0, "{:?}", run.get("counts"));
-    assert!(app.playlist.is_active().is_none() || app.playlist.is_active() != Some(id));
+    // The worker lets go of the run a moment after it says it stopped (a
+    // check made at once failed under load).
+    wait_for("the worker to let go of the run", 10, || app.playlist.is_active() != Some(id));
     // Stopped runs can be started again.
     let run = call(&app, "playlist.start", &obj! { "id" => id });
     assert_eq!(s(&run, "state"), "running");

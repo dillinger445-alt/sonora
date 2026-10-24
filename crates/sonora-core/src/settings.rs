@@ -47,7 +47,8 @@ pub struct Settings {
     /// The person stopped SONORA's slskd: it stays stopped (at login too)
     /// until they start it.
     pub slskd_stopped: bool,
-    /// How far a Soulseek preview reads ahead of what plays, in seconds.
+    /// How far a Soulseek preview reads ahead of what plays (or the player
+    /// has read, if that is further), in seconds.
     pub preview_ahead_s: i64,
     /// Most disk space previews may use at a time, in megabytes.
     pub preview_cache_mb: i64,

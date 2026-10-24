@@ -1354,7 +1354,8 @@ test('Soulseek previews play while the file arrives, are never downloads, queue 
     const t1 = slskd.transfers.find((t) => t.filename === first);
     expect(t1?.bytesTransferred ?? 0).toBeLessThan(t1?.size ?? 0);
     expect(t1?.destination).toMatch(/^\.sonora-preview\//);
-    await expect(folder.getByRole('row', { name: /01 First Light\.flac/ })).toContainText(/Playing|Arriving as it plays/);
+    // (The stand-in sends slower than it plays, so it may be buffering.)
+    await expect(folder.getByRole('row', { name: /01 First Light\.flac/ })).toContainText(/Playing|Arriving as it plays|Buffering…/);
 
     // A preview is not a download: slskd got no download request, and the Downloads list stays empty.
     expect(slskd.transfers.filter((t) => !t.batchId)).toHaveLength(0);

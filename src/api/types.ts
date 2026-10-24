@@ -351,7 +351,7 @@ export interface Settings {
   slskdBackground: boolean;
   /** SONORA's slskd was stopped by the person and stays stopped until started. */
   slskdStopped: boolean;
-  /** How far a Soulseek preview reads ahead of what plays, in seconds. */
+  /** How far a Soulseek preview reads ahead of what plays (or the player has buffered), in seconds. */
   previewAhead: number;
   /** Most disk space previews use at a time, in megabytes. */
   previewCacheMb: number;

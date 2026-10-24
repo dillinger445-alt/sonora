@@ -79,8 +79,12 @@ export function playableUpTo(p: PreviewSession | null): number {
   return Math.max(0, (p?.decodedSeconds ?? 0) - 0.3);
 }
 
-/** How a preview is going, for the player bar. */
-export function previewWords(p: PreviewSession | null, username: string): string {
+/**
+ * How a preview is going, for the player bar. `waiting`: the player is
+ * waiting for audio (it shows it is loading), which no "enough has arrived"
+ * may contradict (B105).
+ */
+export function previewWords(p: PreviewSession | null, username: string, waiting = false): string {
   if (!p) return `Asking ${username}…`;
   if (p.handedOver) return 'Downloading; it joins your library when it finishes';
   if (p.followsDownload) return 'Playing along with the download';
@@ -96,6 +100,7 @@ export function previewWords(p: PreviewSession | null, username: string): string
     case 'reconnecting':
       return 'The connection dropped; asking again…';
     case 'ready':
+      if (waiting) return 'Buffering…';
       return p.transfer === 'complete' ? 'All of it has arrived' : p.transfer === 'paused' ? 'Enough has arrived for now' : 'Arriving as it plays';
     case 'unavailable':
     case 'failed':
@@ -113,5 +118,5 @@ export function rowWords(
   if (player.status === 'error') return player.error ?? 'Playback failed';
   if (player.status === 'playing') return 'Playing';
   if (player.status === 'paused' && player.preview?.ready) return 'Paused';
-  return previewWords(player.preview, username);
+  return previewWords(player.preview, username, player.status === 'loading');
 }

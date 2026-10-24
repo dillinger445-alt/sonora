@@ -14,8 +14,11 @@
 //!    its own, served to the player as a plain PCM WAV. Playback starts as
 //!    soon as a couple of seconds are there.
 //! 3. It keeps no more than [`Settings::preview_ahead_s`] seconds ahead of
-//!    what plays: further ahead, it cancels the transfer; nearer, it asks
-//!    for the file again and slskd resumes where it stopped.
+//!    what the player has read and plays: further ahead, it cancels the
+//!    transfer; nearer, it asks for the file again and slskd resumes where
+//!    it stopped. A player waiting for audio is never left waiting on that
+//!    limit: what it asks for is fetched, however far ahead it is (macOS's
+//!    player buffers a while before it starts).
 //! 4. When the preview stops, SONORA cancels the transfer, takes it off
 //!    slskd's list and removes the partial file it made (never one that was
 //!    there before), the preview folder, and its own cache file.
@@ -27,6 +30,13 @@
 //!
 //! Seeking works within what has arrived. What the other client reports
 //! about a file is not checked: the preview plays whatever comes.
+//!
+//! The player reads the WAV in ranges ([`Previews::answer`], for the desktop
+//! app's audio protocol and the dev bridge alike). Players differ in what
+//! they ask for: Chromium reads from the start on; macOS's (AVFoundation)
+//! also asks for the last bytes of the file before it plays, which have not
+//! arrived. That read is answered at once, with silence: waiting for it
+//! would wait for the whole file (B105).
 
 use crate::app::App;
 use crate::logging;
@@ -58,6 +68,13 @@ const LOCKED_CHUNK: u64 = 6 * 1024 * 1024;
 const HEADER: u64 = 44;
 /// A file whose audio has not begun within this many bytes is not previewed.
 const NO_AUDIO_LIMIT: u64 = 32 * 1024 * 1024;
+/// Most bytes of the WAV sent for one request; the player asks for the rest.
+pub const CHUNK: u64 = 2 * 1024 * 1024;
+/// A read this near the end of the WAV, and [`FAR`] beyond what has been
+/// decoded, is a player looking at the end of the file before it plays
+/// (AVFoundation reads the last 64 KB): it gets silence at once.
+const TAIL: u64 = 1024 * 1024;
+const FAR: u64 = 8 * 1024 * 1024;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -244,6 +261,13 @@ struct St {
     limit_reached: bool,
     /// Frames the interface has played.
     play: u64,
+    /// Frames the player has read, from the start on (it may buffer well
+    /// ahead of what plays before it starts).
+    read_to: u64,
+    /// Reads waiting for audio that has not been decoded yet, and the
+    /// furthest frame they need: the transfer goes on until they have it.
+    waiting: u32,
+    wanted: u64,
     error: Option<String>,
     unavailable: bool,
     last_emit: Option<Instant>,
@@ -575,73 +599,201 @@ impl Previews {
     }
 
     /// Reads part of the WAV a preview is served as, waiting up to `wait`
-    /// for audio that has not arrived yet.
+    /// for audio that has not arrived yet. Gives what is there from `start`
+    /// on (at most `max` bytes) as soon as there is some.
     pub fn read(&self, id: u64, start: u64, max: u64, wait: Duration) -> Result<Chunk, ReadError> {
+        self.read_range(id, start, max, false, wait)
+    }
+
+    /// [`read`](Self::read), or with `whole`, all `max` bytes (those the
+    /// file has) once they are all there, as a finished file would give them.
+    ///
+    /// A read that waits is the player asking for more: the transfer goes on
+    /// (or resumes) until the read has its audio, however far ahead of what
+    /// plays that is. A read of the end of the file, far beyond what has
+    /// arrived, is a player looking there before it plays: it gets silence
+    /// at once (the file's end, if ever played, is read again by then).
+    pub fn read_range(&self, id: u64, start: u64, max: u64, whole: bool, wait: Duration) -> Result<Chunk, ReadError> {
         let s = self.get(id).ok_or(ReadError::NotFound)?;
         let deadline = Instant::now() + wait;
         let mut st = lock(&s.st);
-        loop {
+        // This read is counted among those waiting for audio.
+        let mut counted = false;
+        let found = loop {
             if s.stopped() {
-                return Err(ReadError::Failed("The preview stopped.".into()));
+                break Err(ReadError::Failed("The preview stopped.".into()));
             }
             if st.phase == Phase::Failed || st.unavailable {
-                return Err(ReadError::Failed(st.error.clone().unwrap_or_else(|| "The preview failed.".into())));
+                break Err(ReadError::Failed(st.error.clone().unwrap_or_else(|| "The preview failed.".into())));
             }
             if st.rate > 0 {
                 let block = Session::block(&st);
                 let total = HEADER + st.total_frames * block;
                 if start >= total {
-                    return Err(ReadError::Unsatisfiable(total));
+                    break Err(ReadError::Unsatisfiable(total));
                 }
+                let decoded_end = HEADER + st.decoded * block;
                 // Past the decoded audio there is silence once nothing more will come.
-                let avail = if st.decode_done { total } else { HEADER + st.decoded * block };
-                if start < avail {
-                    let end = (start + max.max(1)).min(avail);
-                    let header = wav_header(st.rate, st.channels, st.total_frames * block);
-                    let decoded_end = HEADER + st.decoded * block;
-                    drop(st);
-                    let mut bytes = Vec::with_capacity((end - start) as usize);
-                    let mut pos = start;
-                    if pos < HEADER {
-                        let upto = end.min(HEADER);
-                        bytes.extend_from_slice(&header[pos as usize..upto as usize]);
-                        pos = upto;
+                let avail = if st.decode_done { total } else { decoded_end };
+                let probe = start >= total.saturating_sub(TAIL) && start > avail.saturating_add(FAR);
+                // The bytes that must be there to answer.
+                let upto = if whole { (start + max.max(1)).min(total) } else { start + 1 };
+                if upto <= avail || probe {
+                    let end = (start + max.max(1)).min(if probe { total } else { avail });
+                    if !probe {
+                        st.read_to = st.read_to.max(end.saturating_sub(HEADER) / block);
                     }
-                    if pos < end {
-                        let pcm_end = end.min(decoded_end);
-                        if pos < pcm_end {
-                            let mut f = std::fs::File::open(&s.pcm).map_err(|e| ReadError::Failed(format!("the preview cache could not be read: {e}")))?;
-                            f.seek(SeekFrom::Start(pos - HEADER)).map_err(|e| ReadError::Failed(e.to_string()))?;
-                            let want = (pcm_end - pos) as usize;
-                            let at = bytes.len();
-                            bytes.resize(at + want, 0);
-                            let mut got = 0;
-                            while got < want {
-                                match f.read(&mut bytes[at + got..]) {
-                                    Ok(0) => break,
-                                    Ok(n) => got += n,
-                                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                                    Err(e) => return Err(ReadError::Failed(e.to_string())),
-                                }
-                            }
-                            bytes.truncate(at + got);
-                            pos += got as u64;
-                        }
-                        // Silence after the end of what could be decoded.
-                        if pos < end && pos >= decoded_end {
-                            bytes.resize(bytes.len() + (end - pos) as usize, 0);
-                        }
-                    }
-                    return Ok(Chunk { start, bytes, total });
+                    break Ok((end, total, decoded_end, wav_header(st.rate, st.channels, st.total_frames * block)));
+                }
+                // Not there yet: wanted, so fetched.
+                let need = (upto - HEADER).div_ceil(block);
+                if !counted {
+                    st.waiting += 1;
+                    counted = true;
+                }
+                if need > st.wanted {
+                    st.wanted = need;
+                    s.notify();
                 }
             }
             let now = Instant::now();
             if now >= deadline {
-                return Err(ReadError::Failed("The preview has not got that far yet.".into()));
+                break Err(ReadError::Failed("The preview has not got that far yet.".into()));
             }
             st = s.cv.wait_timeout(st, (deadline - now).min(Duration::from_millis(500))).map(|r| r.0).unwrap_or_else(|p| p.into_inner().0);
+        };
+        if counted {
+            st.waiting -= 1;
+            if st.waiting == 0 {
+                st.wanted = 0;
+            }
+        }
+        drop(st);
+        let (end, total, decoded_end, header) = found?;
+        let mut bytes = Vec::with_capacity((end - start) as usize);
+        let mut pos = start;
+        if pos < HEADER {
+            let upto = end.min(HEADER);
+            bytes.extend_from_slice(&header[pos as usize..upto as usize]);
+            pos = upto;
+        }
+        if pos < end {
+            let pcm_end = end.min(decoded_end);
+            if pos < pcm_end {
+                let mut f = std::fs::File::open(&s.pcm).map_err(|e| ReadError::Failed(format!("the preview cache could not be read: {e}")))?;
+                f.seek(SeekFrom::Start(pos - HEADER)).map_err(|e| ReadError::Failed(e.to_string()))?;
+                let want = (pcm_end - pos) as usize;
+                let at = bytes.len();
+                bytes.resize(at + want, 0);
+                let mut got = 0;
+                while got < want {
+                    match f.read(&mut bytes[at + got..]) {
+                        Ok(0) => break,
+                        Ok(n) => got += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) => return Err(ReadError::Failed(e.to_string())),
+                    }
+                }
+                bytes.truncate(at + got);
+                pos += got as u64;
+            }
+            // Silence after the end of what could be decoded (or, for a
+            // look at the end of the file, what has not been yet).
+            if pos < end && pos >= decoded_end {
+                bytes.resize(bytes.len() + (end - pos) as usize, 0);
+            }
+        }
+        Ok(Chunk { start, bytes, total })
+    }
+
+    /// Answers one request of the player for preview `id` (`Range`: the
+    /// request's header): the desktop app's audio protocol and the dev bridge
+    /// answer with this. A range with an end (as macOS's player asks for) is
+    /// answered whole, as a finished file would be: up to [`CHUNK`] bytes,
+    /// once they are there. An open range (`bytes=a-`, as Chromium asks for)
+    /// gets what is there, as soon as there is some. Either waits up to `wait`.
+    pub fn answer(&self, id: u64, head: bool, range: Option<&str>, wait: Duration) -> Answer {
+        let failed = |e: ReadError| match e {
+            ReadError::Unsatisfiable(total) => Answer { status: 416, headers: vec![("Content-Range", format!("bytes */{total}"))], body: Vec::new() },
+            ReadError::NotFound => Answer::text(404, "There is no such preview."),
+            ReadError::Failed(m) => Answer::text(503, &m),
+        };
+        let (start, want, whole) = match range.and_then(parse_range) {
+            Some(ByteRange::From { start, end: Some(end) }) => (start, (end - start + 1).min(CHUNK), true),
+            Some(ByteRange::From { start, end: None }) => (start, CHUNK, false),
+            Some(ByteRange::Suffix(n)) => match self.read(id, 0, 1, wait) {
+                Ok(c) => (c.total.saturating_sub(n), n.min(CHUNK), true),
+                Err(e) => return failed(e),
+            },
+            None => (0, if head { 1 } else { CHUNK }, false),
+        };
+        match self.read_range(id, start, want, whole, wait) {
+            Ok(c) if head => Answer {
+                status: 200,
+                headers: vec![("Content-Type", "audio/wav".into()), ("Accept-Ranges", "bytes".into()), ("Content-Length", c.total.to_string())],
+                body: Vec::new(),
+            },
+            Ok(c) => {
+                let end = c.start + c.bytes.len() as u64 - 1;
+                Answer {
+                    status: 206,
+                    headers: vec![
+                        ("Content-Type", "audio/wav".into()),
+                        ("Accept-Ranges", "bytes".into()),
+                        ("Cache-Control", "no-store".into()),
+                        ("Content-Length", c.bytes.len().to_string()),
+                        ("Content-Range", format!("bytes {}-{end}/{}", c.start, c.total)),
+                    ],
+                    body: c.bytes,
+                }
+            }
+            Err(e) => failed(e),
         }
     }
+}
+
+/// What a request for a preview is answered with: status, headers, body.
+#[derive(Debug)]
+pub struct Answer {
+    pub status: u16,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Answer {
+    fn text(status: u16, message: &str) -> Answer {
+        Answer { status, headers: vec![("Content-Type", "text/plain; charset=utf-8".into()), ("Content-Length", message.len().to_string())], body: message.as_bytes().to_vec() }
+    }
+
+    /// The header `name` (any case).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+}
+
+/// The first range of a `Range` header.
+#[derive(Debug, PartialEq)]
+pub enum ByteRange {
+    /// `bytes=a-b` (the last byte, b, included), or `bytes=a-` to the end
+    /// (`end`: `None`). Some WebKit versions write the open end as `bytes=a-*`.
+    From { start: u64, end: Option<u64> },
+    /// `bytes=-n`: the last n bytes.
+    Suffix(u64),
+}
+
+pub fn parse_range(value: &str) -> Option<ByteRange> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    let (a, b) = spec.split(',').next()?.trim().split_once('-')?;
+    let (a, b) = (a.trim(), b.trim());
+    if a.is_empty() {
+        return b.parse().ok().map(ByteRange::Suffix);
+    }
+    let start: u64 = a.parse().ok()?;
+    let end = match b {
+        "" | "*" => None,
+        b => Some(b.parse::<u64>().ok().filter(|e| *e >= start)?),
+    };
+    Some(ByteRange::From { start, end })
 }
 
 // -------------------------------------------------------- the transfer
@@ -686,7 +838,8 @@ fn fail(app: &App, s: &Session, message: impl Into<String>) {
     Previews::emit(app, s, true);
 }
 
-/// How far decoding is ahead of playback, and the limits (in frames).
+/// How far decoding is ahead of the player (of what it has read, or plays
+/// if that is further), and the limits (in frames).
 fn ahead(app: &App, st: &St) -> Option<(u64, u64, u64)> {
     if st.rate == 0 {
         return None;
@@ -694,7 +847,12 @@ fn ahead(app: &App, st: &St) -> Option<(u64, u64, u64)> {
     let ahead_s = app.settings().preview_ahead_s.max(10) as u64;
     let high = ahead_s * st.rate as u64;
     let low = (ahead_s / 3).max(8) * st.rate as u64;
-    Some((st.decoded.saturating_sub(st.play), high, low))
+    Some((st.decoded.saturating_sub(st.play.max(st.read_to)), high, low))
+}
+
+/// The player waits for audio that has not been decoded yet (B105).
+fn wanted(st: &St) -> bool {
+    st.waiting > 0 && st.wanted > st.decoded
 }
 
 /// Keeps the transfer going, pauses it when enough is read ahead, asks
@@ -819,7 +977,7 @@ fn pump(app: &Arc<App>, s: &Arc<Session>) {
                 if phase == Phase::Paused {
                     let resume = {
                         let st = lock(&s.st);
-                        let need_more = ahead(app, &st).is_some_and(|(a, _, low)| a < low);
+                        let need_more = ahead(app, &st).is_some_and(|(a, _, low)| a < low) || wanted(&st);
                         need_more && st.resumes && !st.source_dead && !st.source_complete && !st.limit_reached
                     };
                     if resume {
@@ -946,7 +1104,8 @@ fn control_read_ahead(app: &App, s: &Arc<Session>) {
         if !st.owned || st.handed_over || st.phase != Phase::Downloading {
             return;
         }
-        let full = ahead(app, &st).is_some_and(|(a, high, _)| a > high);
+        // Never while the player waits for what is on its way.
+        let full = ahead(app, &st).is_some_and(|(a, high, _)| a > high) && !wanted(&st);
         let chunk = if st.decoded == 0 { LOCKED_CHUNK_FIRST } else { LOCKED_CHUNK };
         let locked_piece = st.locked && st.received.saturating_sub(st.received_at_start) >= chunk;
         full || st.limit_reached || locked_piece
@@ -1475,6 +1634,21 @@ mod tests {
         assert!(previewable("FLAC") && previewable("wav") && previewable("aiff"));
         assert!(!previewable("mp3") && !previewable("m4a"));
         assert!(not_previewable("m4a").contains("end"));
+    }
+
+    #[test]
+    fn ranges_the_player_asks_for() {
+        assert_eq!(parse_range("bytes=0-"), Some(ByteRange::From { start: 0, end: None }));
+        assert_eq!(parse_range("bytes=0-1"), Some(ByteRange::From { start: 0, end: Some(1) }));
+        assert_eq!(parse_range("bytes=10-19"), Some(ByteRange::From { start: 10, end: Some(19) }));
+        assert_eq!(parse_range("bytes=10-10"), Some(ByteRange::From { start: 10, end: Some(10) }));
+        // Some WebKit versions (macOS 11.4 to 12.3) write an open end so.
+        assert_eq!(parse_range("bytes=500-*"), Some(ByteRange::From { start: 500, end: None }));
+        assert_eq!(parse_range("bytes=-128"), Some(ByteRange::Suffix(128)));
+        assert_eq!(parse_range(" bytes=7-8, 20-30"), Some(ByteRange::From { start: 7, end: Some(8) }));
+        assert_eq!(parse_range("bytes=5-1"), None);
+        assert_eq!(parse_range("items=0-"), None);
+        assert_eq!(parse_range("bytes=x-1"), None);
     }
 
     #[test]

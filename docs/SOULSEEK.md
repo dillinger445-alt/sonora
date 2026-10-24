@@ -417,11 +417,14 @@ header once it arrives.
 
 **It fetches only so far ahead.** A preview fetches at most **Read ahead**
 (30 seconds, 1 minute or 2 minutes; 1 minute unless you change it, under
-Previews on the Setup tab) beyond what is playing. Further ahead, SONORA
-stops the transfer; when playback gets closer, it asks slskd for the file
-again and slskd carries on from where it stopped. So a file you skip after
-a minute is not fetched whole. The other person sees each of these as a
-download request.
+Previews on the Setup tab) beyond what is playing, or beyond what the
+player has buffered if that is further. Further ahead, SONORA stops the
+transfer; when playback gets closer, it asks slskd for the file again and
+slskd carries on from where it stopped. So a file you skip after a minute
+is not fetched whole. The other person sees each of these as a download
+request. Whatever the player is waiting for is always fetched: the macOS
+player buffers a while before it starts, and looks at the end of the file
+first (SONORA answers that look at once, without fetching the rest).
 
 **It keeps nothing.** When a preview stops (you close the player, play
 something else, or quit SONORA), SONORA cancels the transfer, takes it off

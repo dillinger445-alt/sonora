@@ -49,6 +49,28 @@ say why, and how the fix was checked instead.
     them only when they are ASCII digits.
   - Test: `dates_that_do_not_start_with_a_year_are_left_out_not_cut` (crates/sonora-engine/src/export/id3.rs); `dj_export_writes_tagged_copies_and_a_rekordbox_playlist` exports a FLAC dated `二〇一九` (crates/sonora-core/tests/dj.rs).
 
+- [x] **B105. In the macOS app a Soulseek preview never plays: it says "Enough has arrived for now", and there is no sound.**
+  Reported by a listener after the review.
+  - Symptom: Preview shows the spinner, the status goes to "Enough has
+    arrived for now", and nothing is heard, for any file.
+  - Steps: in the macOS app, preview a FLAC from someone's share.
+  - Cause: macOS's player (AVFoundation, under WebKit) asks for the last
+    64 KB of a file before it starts, and buffers a while before it plays.
+    The preview's end had not arrived, so that read waited for it; and the
+    core fetched only 60 s ahead of the playhead, which never moved, so the
+    transfer paused there and the end never came. Each waited for the
+    other. Chromium (Windows, the browser build, the tests) reads from the
+    start on and never asked for the end, which is why no test saw it.
+  - Fix: a read of the end of the file, far beyond what has arrived, is
+    answered at once with silence; a read that waits keeps the transfer
+    going, playhead or not; and the core reads ahead of what the player has
+    read, not only of what it plays. A range with an end (AVFoundation asks
+    for those) is answered whole, as a finished file would be, never with
+    the part that happened to be there. The desktop app and the dev bridge
+    answer the player with the same code in the core (`Previews::answer`).
+    While the player waits for audio, the status says "Buffering…".
+  - Test: `the_macos_player_is_answered_though_it_reads_the_end_first_and_buffers_before_it_plays` (crates/sonora-core/tests/preview.rs) replays AVFoundation's reads; it hung on the end of the file before the fix, on the reads past 20 s with only that part fixed, and got short answers without the last part.
+
 ## High
 
 - [x] **B03. A second playlist started while another works is left "running" with nothing running it.**
