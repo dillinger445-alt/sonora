@@ -1,6 +1,6 @@
 [package]
 name = "sonora-devserver"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Development bridge: serves the SONORA interface and the core API over HTTP + SSE on localhost (browser development and end-to-end tests)."
 publish = false

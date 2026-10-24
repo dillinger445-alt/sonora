@@ -439,10 +439,13 @@ pub fn content_key(item: &PlanItem, o: &ExportOptions) -> String {
     let t = &item.track;
     let s = &item.source;
     let source = s.file_hash.clone().unwrap_or_else(|| format!("{}-{}-{}", s.path, s.size, s.mtime));
+    // MP3 is always 320 kbps at 44.1 kHz: the quality choice (hidden for it)
+    // makes no other file, so it must not make the file "changed" (B08).
+    let quality = if o.target == Target::Mp3 { Quality::Universal } else { o.quality };
     fnv(&format!(
         "1|{}|{:?}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         o.target.extension(),
-        o.quality,
+        quality,
         o.notation.id(),
         s.id,
         source,
@@ -942,11 +945,13 @@ struct XmlTrack {
 /// rekordbox.xml: every track once, and the playlists (names on the drive,
 /// outermost first; members as indexes into `tracks`) in a tree under a
 /// "SONORA" folder.
-fn rekordbox_tree(tracks: &[XmlTrack], playlists: &[(Vec<String>, Vec<usize>)], kind: Target, app_version: &str) -> String {
-    let kind = match kind {
-        Target::Aiff => "AIFF File",
-        Target::Wav => "WAV File",
-        Target::Mp3 => "MP3 File",
+fn rekordbox_tree(tracks: &[XmlTrack], playlists: &[(Vec<String>, Vec<usize>)], app_version: &str) -> String {
+    // Each file as it is: playlists sent earlier in another format stay
+    // listed with their own files (B49).
+    let kind_of = |p: &Path| match p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).as_deref() {
+        Some("mp3") => "MP3 File",
+        Some("wav") => "WAV File",
+        _ => "AIFF File",
     };
     let mut x = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<DJ_PLAYLISTS Version=\"1.0.0\">\n");
     x.push_str(&format!("  <PRODUCT Name=\"SONORA\" Version=\"{}\" Company=\"SONORA\"/>\n", xml_escape(app_version)));
@@ -958,7 +963,7 @@ fn rekordbox_tree(tracks: &[XmlTrack], playlists: &[(Vec<String>, Vec<usize>)], 
         s += &a("Artist", t.artist.as_deref().unwrap_or(""));
         s += &a("Album", t.album.as_deref().unwrap_or(""));
         s += &a("Genre", t.genre.as_deref().unwrap_or(""));
-        s += &a("Kind", kind);
+        s += &a("Kind", kind_of(&t.path));
         s += &a("Size", &t.bytes.to_string());
         s += &a("TotalTime", &t.secs.map(|d| (d.round() as i64).to_string()).unwrap_or_default());
         s += &a("AverageBpm", &t.bpm.map(|b| format!("{b:.2}")).unwrap_or_default());
@@ -1092,9 +1097,18 @@ fn write_owned(root: &Path, rel: &str, playlist: i64, data: &[u8], manifest: &mu
         match mine {
             Some(i) if intact(root, &manifest.entries[i]) => path.clone(),
             _ => {
-                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                warnings.push(format!("{rel} is not SONORA's; it was left as it is and the new one has another name."));
-                unique_path(path.parent().unwrap_or(root), &name)
+                // The name is taken by a file that is not SONORA's (any more):
+                // the variant SONORA wrote for it last time is used again,
+                // unchanged, rather than a new name at every send (B10).
+                let earlier = manifest.entries.iter().find(|e| e.track == 0 && e.playlist == playlist && is_variant(&e.path, rel) && intact(root, e)).map(|e| rel_to_path(root, &e.path));
+                match earlier {
+                    Some(p) => p,
+                    None => {
+                        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        warnings.push(format!("{rel} is not SONORA's; it was left as it is and the new one has another name."));
+                        unique_path(path.parent().unwrap_or(root), &name)
+                    }
+                }
             }
         }
     } else {
@@ -1291,8 +1305,17 @@ fn run(plan: &SyncPlan, events: &EventBus, tools: &ToolPaths, cancel: &AtomicBoo
             }
         }
         write_done += 1;
-        if write_done.is_multiple_of(10) {
-            save(&manifest, &mut warnings);
+        // After every file: a send cut short (the stick pulled, SONORA
+        // quit) must still know every file it wrote (B11).
+        save(&manifest, &mut warnings);
+    }
+    // B05: updates the send did not reach kept their older file, untouched;
+    // it still serves its place in the playlists.
+    for (i, f) in plan.files.iter().enumerate() {
+        if let (Action::Update(old), None) = (&f.action, &placed[i]) {
+            if rel_to_path(root, old).exists() {
+                placed[i] = Some(old.clone());
+            }
         }
     }
     save(&manifest, &mut warnings);
@@ -1373,7 +1396,7 @@ fn run(plan: &SyncPlan, events: &EventBus, tools: &ToolPaths, cancel: &AtomicBoo
         xml_lists.push((o.path_names.clone(), members));
     }
     if plan.options.export.rekordbox_xml && !xml_tracks.is_empty() {
-        let xml = rekordbox_tree(&xml_tracks, &xml_lists, plan.options.export.target, app_version);
+        let xml = rekordbox_tree(&xml_tracks, &xml_lists, app_version);
         xml_path = write_owned(root, &format!("{SYNC_DIR}/rekordbox.xml"), 0, xml.as_bytes(), &mut manifest, &mut warnings);
         if let Some(rel) = &xml_path {
             written_now.insert(rel.clone());
@@ -1468,6 +1491,22 @@ mod tests {
         assert_eq!(crate_name(&["01 Sets".into(), "02 Warm%%up".into()]), "SONORA%%01 Sets%%02 Warm%up.crate");
         let m = m3u8("Warm-up", &[("001 - A - B.aiff".into(), Some(301.6), "A - B".into())]);
         assert_eq!(m, "#EXTM3U\n#PLAYLIST:Warm-up\n#EXTINF:302,A - B\n001 - A - B.aiff\n");
+    }
+
+    #[test]
+    fn mp3_files_do_not_depend_on_the_hidden_quality_and_kinds_follow_each_file() {
+        use crate::djexport::{ExportOptions, PlanItem};
+        use sonora_engine::analysis::key::Notation;
+        // B08: MP3 is 320 kbps whatever quality was last chosen for AIFF/WAV.
+        let item = PlanItem { track: TrackRow { id: 1, ..TrackRow::default() }, source: TrackRow { id: 1, path: "/m/a.flac".into(), ..TrackRow::default() }, file_name: "a.mp3".into(), warnings: vec![], skip: None };
+        let opts = |target, quality| ExportOptions { target, quality, notation: Notation::Camelot, best_copy: true, rekordbox_xml: true };
+        assert_eq!(content_key(&item, &opts(Target::Mp3, Quality::Universal)), content_key(&item, &opts(Target::Mp3, Quality::High)));
+        assert_ne!(content_key(&item, &opts(Target::Aiff, Quality::Universal)), content_key(&item, &opts(Target::Aiff, Quality::High)));
+        // B49: rekordbox.xml says what each file is, not what this send writes.
+        let t = |p: &str| XmlTrack { path: PathBuf::from(p), title: "x".into(), artist: None, album: None, genre: None, bpm: None, key: None, bytes: 1, secs: None };
+        let x = rekordbox_tree(&[t("/USB/SONORA/01 A/001 - x.aiff"), t("/USB/SONORA/02 B/001 - x.mp3"), t("/USB/SONORA/03 C/001 - x.wav")], &[], "test");
+        let kinds: Vec<&str> = x.match_indices("Kind=\"").map(|(i, _)| x[i + 6..].split('"').next().unwrap()).collect();
+        assert_eq!(kinds, ["AIFF File", "MP3 File", "WAV File"]);
     }
 
     #[test]

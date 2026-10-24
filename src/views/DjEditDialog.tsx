@@ -89,11 +89,18 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
     key: row?.djKey ?? null,
     genre: row?.djGenre ?? '',
   };
+  // An emptied field only takes away an edit: with none to take away it
+  // changes nothing, so it is not a change (B43).
+  const edited = {
+    bpm: row?.djBpmSource === 'edit',
+    key: row?.djKeySource === 'edit',
+    genre: row?.djGenreSource === 'edit' || row?.djGenreSource === 'discogs',
+  };
   const edit: { bpm?: number | null; bpmFactor?: 0.5 | 2; key?: number | null; genre?: string | null } = {};
   if (factor) edit.bpmFactor = factor;
-  else if (bpm !== 'invalid' && (many ? bpm != null : bpmText.trim() !== initial.bpm)) edit.bpm = bpm;
-  if (!keyInvalid && (many ? key != null : key !== initial.key)) edit.key = key;
-  if (many ? genre.trim() !== '' : genre.trim() !== initial.genre) edit.genre = genre.trim() || null;
+  else if (bpm !== 'invalid' && (many ? bpm != null : bpmText.trim() !== initial.bpm && (bpm != null || edited.bpm))) edit.bpm = bpm;
+  if (!keyInvalid && (many ? key != null : key !== initial.key && (key != null || edited.key))) edit.key = key;
+  if (many ? genre.trim() !== '' : genre.trim() !== initial.genre && (genre.trim() !== '' || edited.genre)) edit.genre = genre.trim() || null;
   const changed = Object.keys(edit).length > 0;
   const invalid = bpm === 'invalid' || keyInvalid;
 
@@ -182,7 +189,7 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
                   id={`${listId}-bpm`}
                   className={`text-input num ${bpm === 'invalid' ? 'is-invalid' : ''}`}
                   inputMode="decimal"
-                  placeholder={many ? (factor ? (factor === 2 ? 'Doubling every tempo' : 'Halving every tempo') : 'Keep each track’s tempo') : 'Not known'}
+                  placeholder={many ? (factor ? (factor === 2 ? 'Doubling every tempo' : 'Halving every tempo') : 'Keep each track’s tempo') : edited.bpm ? 'Empty: back to the detected or tagged tempo' : initial.bpm ? `Keeps ${initial.bpm}` : 'Not known'}
                   value={bpmText}
                   aria-invalid={bpm === 'invalid'}
                   onChange={(e) => {
@@ -213,7 +220,7 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
               <input
                 id={`${listId}-key`}
                 className={`text-input ${keyInvalid ? 'is-invalid' : ''}`}
-                placeholder={many ? 'Keep each track’s key' : 'Not known'}
+                placeholder={many ? 'Keep each track’s key' : edited.key ? 'Empty: back to the detected or tagged key' : initial.key != null ? `Keeps ${formatKey(initial.key, notation)}` : 'Not known'}
                 value={keyText}
                 aria-invalid={keyInvalid}
                 aria-describedby={`${listId}-key-hint`}
@@ -234,7 +241,7 @@ export function DjEditDialog({ target, onClose }: { target: DjEditTarget | null;
               <input
                 id={`${listId}-genre`}
                 className="text-input dj-genre-input"
-                placeholder={many ? 'Keep each track’s genre' : 'None'}
+                placeholder={many ? 'Keep each track’s genre' : edited.genre ? 'Empty: back to the tagged or folder genre' : initial.genre ? `Keeps ${initial.genre}` : 'None'}
                 value={genre}
                 maxLength={80}
                 list={`${listId}-genres`}

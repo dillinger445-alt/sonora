@@ -1,6 +1,6 @@
 [package]
 name = "sonora-engine"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "SONORA audio analysis engine: decoding, DSP feature extraction, source-quality inference and scoring."
 publish = false

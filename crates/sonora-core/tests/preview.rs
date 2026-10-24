@@ -505,6 +505,26 @@ fn download_while_listening_resumes_from_what_the_preview_fetched() {
 }
 
 #[test]
+fn a_preview_of_a_download_that_is_cancelled_ends_where_the_audio_stops() {
+    // B21: the preview followed the download it handed over to; when that
+    // download is cancelled, nothing more comes, and the preview says so.
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("followcancel");
+    let app = &e.app;
+    e.fake.world.lock().unwrap().rate = 4 * 1024;
+    let size = share(&e, FILE, flac(30, true));
+    let id = call(app, "preview.start", &obj! { "username" => USER, "filename" => FILE, "size" => size }).get("id").and_then(Value::as_i64).unwrap();
+    wait_for("some audio", 20, || status(app, id).get("ready").and_then(Value::as_bool) == Some(true));
+    call(app, "slskd.download", &obj! { "username" => USER, "files" => Value::Array(vec![obj! { "filename" => FILE, "size" => size }]) });
+    let download = e.fake.world.lock().unwrap().transfers[1].id.clone();
+    std::thread::sleep(Duration::from_millis(400));
+    call(app, "slskd.cancel", &obj! { "username" => USER, "id" => download });
+    wait_for("the preview to end early", 15, || status(app, id).get("endsEarly").and_then(Value::as_bool) == Some(true));
+    call(app, "preview.stop", &obj! { "id" => id });
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
 fn what_cannot_be_previewed_says_why_and_a_lost_connection_is_resumed() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("problems");

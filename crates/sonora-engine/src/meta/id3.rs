@@ -57,6 +57,33 @@ fn map_id(id: &str) -> Option<&'static str> {
     })
 }
 
+/// A genre given as an ID3v1 number ("17", "(17)", "(17)Rock") by its name;
+/// any other text as it is (B80).
+fn genre_name(raw: &str) -> String {
+    let t = raw.trim();
+    let by_index = |n: &str| n.parse::<usize>().ok().and_then(|i| super::mp4::ID3V1_GENRES.get(i)).filter(|g| !g.is_empty()).map(|g| g.to_string());
+    if let Some(g) = by_index(t) {
+        return g;
+    }
+    if let Some((num, after)) = t.strip_prefix('(').and_then(|r| r.split_once(')')) {
+        let after = after.trim();
+        // "(17)Rock": the text is the refinement, and the name to show.
+        if !after.is_empty() && !after.starts_with('(') {
+            return after.to_string();
+        }
+        match num {
+            "RX" => return "Remix".into(),
+            "CR" => return "Cover".into(),
+            n => {
+                if let Some(g) = by_index(n) {
+                    return g;
+                }
+            }
+        }
+    }
+    t.to_string()
+}
+
 /// Parses an ID3v2 tag (starting with "ID3") and returns `(key, value)` pairs.
 pub fn parse_tag(tag: &[u8]) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -96,6 +123,11 @@ pub fn parse_tag(tag: &[u8]) -> Vec<(String, String)> {
             break;
         }
         let mut data: Vec<u8> = body[start..stop].to_vec();
+        // v2.4 "data length indicator": four bytes before the frame's data,
+        // not part of the text (B79).
+        if major == 4 && fflags & 0x0001 != 0 && data.len() >= 4 {
+            data.drain(..4);
+        }
         if major == 4 && fflags & 0x0002 != 0 {
             data = remove_unsync(&data);
         }
@@ -104,6 +136,7 @@ pub fn parse_tag(tag: &[u8]) -> Vec<(String, String)> {
         if !unsupported && !data.is_empty() {
             if let Some(key) = map_id(&id) {
                 let text = decode_text(data[0], &data[1..]);
+                let text = if key == "genre" { genre_name(&text) } else { text };
                 if !text.is_empty() && !out.iter().any(|(k, _)| k == key) {
                     out.push((key.to_string(), text));
                 }
@@ -117,8 +150,11 @@ pub fn parse_tag(tag: &[u8]) -> Vec<(String, String)> {
                     rest.iter().position(|&b| b == 0).map(|p| p + 1)
                 };
                 if let Some(s) = sep {
+                    // iTunes' own notes ("iTunNORM", "iTunSMPB"…) are numbers
+                    // for its player, not a comment (B39).
+                    let description = decode_text(enc, &rest[..s.saturating_sub(if enc == 1 || enc == 2 { 2 } else { 1 })]);
                     let text = decode_text(enc, &rest[s.min(rest.len())..]);
-                    if !text.is_empty() && !out.iter().any(|(k, _)| k == "comment") {
+                    if !description.starts_with("iTun") && !text.is_empty() && !out.iter().any(|(k, _)| k == "comment") {
                         out.push(("comment".into(), text));
                     }
                 }
@@ -139,6 +175,46 @@ mod tests {
         f.extend_from_slice(&[0, 0]);
         f.extend_from_slice(payload);
         f
+    }
+
+    /// A tag of `major` version around `frames`.
+    fn tag(major: u8, frames: &[u8]) -> Vec<u8> {
+        let size = frames.len() as u32;
+        let mut t = vec![b'I', b'D', b'3', major, 0, 0];
+        t.extend_from_slice(&[(size >> 21) as u8 & 0x7F, (size >> 14) as u8 & 0x7F, (size >> 7) as u8 & 0x7F, size as u8 & 0x7F]);
+        t.extend_from_slice(frames);
+        t
+    }
+
+    #[test]
+    fn itunes_numbers_dlis_and_genre_numbers() {
+        // B39: iTunes' loudness numbers are not the comment; the real one is.
+        let mut frames = Vec::new();
+        frames.extend(frame_v3("COMM", b"\x00engiTunNORM\x00 00000318 0000030A 00001A51"));
+        frames.extend(frame_v3("COMM", b"\x00eng\x00My real comment"));
+        // B80: an ID3v1 genre number.
+        frames.extend(frame_v3("TCON", b"\x00(17)"));
+        let pairs = parse_tag(&tag(3, &frames));
+        let get = |k: &str| pairs.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(get("comment").as_deref(), Some("My real comment"));
+        assert_eq!(get("genre").as_deref(), Some("Rock"));
+        assert_eq!(genre_name("17"), "Rock");
+        assert_eq!(genre_name("(17)Indie Rock"), "Indie Rock");
+        assert_eq!(genre_name("Deep House"), "Deep House");
+        assert_eq!(genre_name("(RX)"), "Remix");
+        // B79: a v2.4 frame with a data length indicator (flag 0x0001).
+        let text = b"\x03Night Drive";
+        let mut f = b"TIT2".to_vec();
+        let size = (text.len() + 4) as u32;
+        f.extend_from_slice(&[(size >> 21 & 0x7F) as u8, (size >> 14 & 0x7F) as u8, (size >> 7 & 0x7F) as u8, (size & 0x7F) as u8]);
+        f.extend_from_slice(&[0x00, 0x01]);
+        f.extend_from_slice(&[0, 0, 0, text.len() as u8]);
+        f.extend_from_slice(text);
+        let pairs = parse_tag(&tag(4, &f));
+        assert_eq!(pairs, vec![("title".to_string(), "Night Drive".to_string())]);
+        // B81: Latin-1 where UTF-8 was expected.
+        assert_eq!(crate::util::text_utf8_or_latin1(b"Caf\xe9"), "Café");
+        assert_eq!(crate::util::text_utf8_or_latin1("Café".as_bytes()), "Café");
     }
 
     #[test]

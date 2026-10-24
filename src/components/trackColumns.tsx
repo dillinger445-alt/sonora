@@ -62,6 +62,8 @@ function PlayButton({ t, ctx }: { t: TrackRow; ctx: ColumnContext }) {
       className={`row-play ${current ? 'is-current' : ''}`}
       aria-label={active ? `Pause ${t.displayTitle}` : `Play ${t.displayTitle}`}
       data-tip={active ? 'Pause (P)' : 'Play (P)'}
+      // A click does not take the keyboard from the table (B26).
+      onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => {
         e.stopPropagation();
         onPlay(t);

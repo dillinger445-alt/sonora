@@ -108,8 +108,8 @@ pub fn build(tags: &TagSet) -> Vec<u8> {
     if let Some(v) = &tags.genre {
         text_frame(&mut frames, b"TCON", v);
     }
-    if let Some(y) = tags.year.as_deref().map(str::trim).filter(|y| y.len() >= 4 && y[..4].chars().all(|c| c.is_ascii_digit())) {
-        text_frame(&mut frames, b"TYER", &y[..4]);
+    if let Some(y) = tags.year.as_deref().and_then(year_of) {
+        text_frame(&mut frames, b"TYER", y);
     }
     if let Some(b) = tags.bpm.filter(|b| *b > 0.0) {
         text_frame(&mut frames, b"TBPM", &bpm_text(b));
@@ -166,14 +166,39 @@ pub fn riff_info(tags: &TagSet) -> Vec<u8> {
     add(b"IPRD", tags.album.as_deref());
     add(b"IGNR", tags.genre.as_deref());
     add(b"ICMT", tags.comment.as_deref());
-    add(b"ICRD", tags.year.as_deref().filter(|y| y.len() >= 4).map(|y| &y[..4]));
+    add(b"ICRD", tags.year.as_deref().and_then(year_of));
     body
+}
+
+/// The year at the start of a free-text date tag ("2024", "2024-05-01"),
+/// when it starts with four ASCII digits. Characters, not bytes: a tag such
+/// as "二〇一九" or "２０２４" has no year SONORA can write, and must not
+/// be cut inside a character.
+pub fn year_of(date: &str) -> Option<&str> {
+    let y = date.trim();
+    let four = y.get(..4)?;
+    four.bytes().all(|b| b.is_ascii_digit()).then_some(four)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::meta::id3::parse_tag;
+
+    #[test]
+    fn dates_that_do_not_start_with_a_year_are_left_out_not_cut() {
+        // B02: these used to panic ("byte index 4 is not a char boundary").
+        for date in ["二〇一九年", "２０２４", "平成11年", "℗℗ 2001", "Late 1990s", "199"] {
+            assert_eq!(year_of(date), None, "{date}");
+            let tags = TagSet { title: Some("x".into()), year: Some(date.into()), ..TagSet::default() };
+            let tag = build(&tags);
+            assert!(!parse_tag(&tag).iter().any(|(k, _)| k == "date"), "{date}");
+            let info = riff_info(&tags);
+            assert!(!info.windows(4).any(|w| w == b"ICRD"), "{date}");
+        }
+        assert_eq!(year_of(" 2024-05-01"), Some("2024"));
+        assert_eq!(year_of("1987"), Some("1987"));
+    }
 
     #[test]
     fn tags_round_trip_through_the_reader() {

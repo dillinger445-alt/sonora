@@ -245,7 +245,9 @@ export function PlaylistsProvider({ children }: { children: ReactNode }) {
         const r = await client.addToPlaylist(id, trackIds, index);
         const name = n ? `“${n.name}”` : 'the playlist';
         const now = parseRoute(window.location.hash);
-        if (r.added === 0) toast({ tone: 'info', title: r.already === 1 ? `Already in ${name}` : `All already in ${name}` });
+        // Nothing added and nothing there already: the tracks are gone (B93).
+        if (r.added === 0 && r.already === 0) toast({ tone: 'warning', title: `Nothing added to ${name}`, body: 'Those tracks are no longer in the library.' });
+        else if (r.added === 0) toast({ tone: 'info', title: r.already === 1 ? `Already in ${name}` : `All already in ${name}` });
         else
           toast({
             tone: 'success',

@@ -13,7 +13,7 @@ use sqlite::{Connection, DbError};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -217,6 +217,62 @@ CREATE INDEX source_files_size ON source_files(size);
 CREATE INDEX idx_tracks_size ON tracks(size);
 "#;
 
+/// YouTube playlists downloaded from Soulseek (see `jobs.rs`): one run per
+/// playlist, one item per video, with what was searched, what was found and
+/// what became of the download. Candidates name other Soulseek users; they
+/// are kept only while the run is, and go with it.
+const MIGRATION_6: &str = r#"
+CREATE TABLE playlist_runs (
+    id INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    source TEXT NOT NULL,
+    playlist_id TEXT,
+    title TEXT,
+    rules TEXT,
+    confirmed INTEGER NOT NULL DEFAULT 0,
+    passes INTEGER NOT NULL DEFAULT 0,
+    retry_at INTEGER,
+    error TEXT,
+    finished_at INTEGER
+);
+
+CREATE TABLE playlist_items (
+    id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL REFERENCES playlist_runs(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    video_id TEXT NOT NULL,
+    yt_title TEXT NOT NULL,
+    channel TEXT,
+    seconds INTEGER,
+    artist TEXT,
+    title TEXT NOT NULL,
+    mix TEXT,
+    catalogue TEXT,
+    included INTEGER NOT NULL DEFAULT 1,
+    left_out TEXT,
+    status TEXT NOT NULL,
+    variation INTEGER,
+    responses INTEGER,
+    candidates TEXT,
+    chosen INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    transfer_id TEXT,
+    transfer_user TEXT,
+    transfer_file TEXT,
+    transfer_size INTEGER,
+    bytes_seen INTEGER,
+    progress_at INTEGER,
+    note TEXT,
+    error TEXT,
+    track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_playlist_items_run ON playlist_items(run_id, seq);
+CREATE INDEX idx_playlist_items_status ON playlist_items(run_id, status);
+"#;
+
 #[derive(Debug)]
 pub enum StoreError {
     Db(DbError),
@@ -382,6 +438,13 @@ fn migrate(c: &Connection) -> Result<(), DbError> {
         c.transaction(|tx| {
             tx.execute_batch(MIGRATION_5)?;
             tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["5"])?;
+            Ok::<(), DbError>(())
+        })?;
+    }
+    if version < 6 {
+        c.transaction(|tx| {
+            tx.execute_batch(MIGRATION_6)?;
+            tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", params!["6"])?;
             Ok::<(), DbError>(())
         })?;
     }

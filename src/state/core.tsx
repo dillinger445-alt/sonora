@@ -6,7 +6,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Bridge } from '../api/bridge.ts';
+import { EVENTS_RECONNECTED, type Bridge } from '../api/bridge.ts';
 import { Client } from '../api/client.ts';
 import type { AppInfo, ImportReport, Overview, ScanStatus, Settings } from '../api/types.ts';
 import { Emitter, throttle } from './emitter.ts';
@@ -163,6 +163,12 @@ export function CoreProvider({ bridge, children }: { bridge: Bridge; children: R
             break;
           case 'duplicates.updated':
             loadDuplicates();
+            break;
+          case EVENTS_RECONNECTED:
+            // Events may have been missed: read the shared state again (B96).
+            client.scanStatus().then(setScan, () => undefined);
+            overviewThrottle.run();
+            duplicatesThrottle.run();
             break;
           default:
             break;

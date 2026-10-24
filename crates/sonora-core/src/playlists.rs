@@ -669,11 +669,13 @@ pub struct Organized {
     pub without: usize,
     /// Groups left out past the most one folder holds.
     pub left_out: usize,
+    /// Tracks left out because their file is missing (B45).
+    pub missing: usize,
 }
 
 impl ToJson for Organized {
     fn to_json(&self) -> Value {
-        obj! { "folderId" => self.folder_id, "playlists" => self.playlists, "tracks" => self.tracks, "without" => self.without, "leftOut" => self.left_out }
+        obj! { "folderId" => self.folder_id, "playlists" => self.playlists, "tracks" => self.tracks, "without" => self.without, "leftOut" => self.left_out, "missing" => self.missing }
     }
 }
 
@@ -716,6 +718,19 @@ pub fn organize(c: &Connection, by: OrganizeBy, ids: Option<&[i64]>, smart: bool
             params![],
             |r| (r.i64(0), r.opt_text(1), r.opt_i64(2), r.opt_f64(3)),
         )?,
+    };
+    // Tracks whose file is missing stay out; the result says how many.
+    let missing = match ids {
+        Some(ids) => {
+            let mut n = 0;
+            for chunk in ids.chunks(500) {
+                let marks = vec!["?"; chunk.len()].join(",");
+                let p: Vec<SqlValue> = chunk.iter().map(|&i| SqlValue::Int(i)).collect();
+                n += c.query_row(&format!("SELECT COUNT(*) FROM tracks WHERE id IN ({marks}) AND missing_since IS NOT NULL"), &as_params(&p), |r| r.i64(0))?.unwrap_or(0);
+            }
+            n as usize
+        }
+        None => c.query_row("SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL", params![], |r| r.i64(0))?.unwrap_or(0) as usize,
     };
     // Group key → (sort key, name, rules filter, members).
     let mut groups: HashMap<String, (String, String, Value, Vec<i64>)> = HashMap::new();
@@ -774,7 +789,7 @@ pub fn organize(c: &Connection, by: OrganizeBy, ids: Option<&[i64]>, smart: bool
             }
             tracks += members.len();
         }
-        Ok(Organized { folder_id: folder, playlists: list.len(), tracks, without, left_out })
+        Ok(Organized { folder_id: folder, playlists: list.len(), tracks, without, left_out, missing })
     })
 }
 

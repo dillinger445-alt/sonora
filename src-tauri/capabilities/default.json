@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the SONORA main window: core defaults, window dragging for the overlay title bar, native open/save dialogs, Reveal in Finder/Explorer, opening Discogs pages, SONORA's release notes and guides, slskd's project page and its web page on this computer in the browser, macOS's Privacy & Security settings (when macOS blocked slskd), and checking for, installing and restarting into updates.",
+  "description": "Permissions for the SONORA main window: core defaults, window dragging for the overlay title bar, native open/save dialogs, Reveal in Finder/Explorer, opening Discogs pages, SONORA's release notes and guides, slskd's project page, YouTube playlists and videos, and slskd's web page on this computer in the browser, macOS's Privacy & Security settings (when macOS blocked slskd), and checking for, installing and restarting into updates.",
   "windows": [
     "main"
   ],
@@ -25,6 +25,12 @@
         },
         {
           "url": "https://github.com/slskd/slskd*"
+        },
+        {
+          "url": "https://www.youtube.com/playlist*"
+        },
+        {
+          "url": "https://www.youtube.com/watch*"
         },
         {
           "url": "http://127.0.0.1:5030*"

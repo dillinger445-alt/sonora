@@ -21,8 +21,8 @@ export type Route =
 export type View = Route['view'];
 
 /** The parts of the Soulseek page. */
-export type SoulseekTab = 'search' | 'downloads' | 'setup';
-const SOULSEEK_TABS: SoulseekTab[] = ['search', 'downloads', 'setup'];
+export type SoulseekTab = 'search' | 'playlist' | 'downloads' | 'setup';
+const SOULSEEK_TABS: SoulseekTab[] = ['search', 'playlist', 'downloads', 'setup'];
 
 const SIMPLE: View[] = ['overview', 'queue', 'folders', 'duplicates', 'settings'];
 

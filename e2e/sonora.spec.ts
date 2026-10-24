@@ -9,7 +9,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { incompletePath, startFakeSlskd } from './fakeSlskd.ts';
-import { DATA, LIBRARY, MANAGED_SLSKD_PORT, MUSIC } from './paths.ts';
+import { E2E_PLAYLIST, startFakeYoutube } from './fakeYoutube.ts';
+import { DATA, LIBRARY, MANAGED_SLSKD_PORT, MUSIC, YOUTUBE_PORT } from './paths.ts';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -139,6 +140,8 @@ test('library: search, sort, filter and keyboard navigation', async ({ page }) =
   await page.getByRole('menuitemcheckbox', { name: /Clipping/ }).click();
   await page.keyboard.press('Escape');
   await expect(rows(page)).not.toHaveCount(total);
+  // Not empty either: the loop below checks nothing over no rows (B99).
+  await expect(rows(page).first().locator('.chip-red', { hasText: 'Clipping' })).toBeVisible();
   for (const r of await rows(page).all()) await expect(r.locator('.chip-red', { hasText: 'Clipping' })).toBeVisible();
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await expect(rows(page)).toHaveCount(total);
@@ -450,6 +453,7 @@ test('menus work from the keyboard and return focus', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
   await expect(trigger).toBeFocused();
+  await expect(rows(page).first().locator('.fmt-name')).toHaveText(/MP3|AAC|Vorbis|Opus/);
   for (const r of await rows(page).all()) await expect(r.locator('.fmt-name')).toHaveText(/MP3|AAC|Vorbis|Opus/);
 
   // Tab leaves an open menu for the control after its trigger.
@@ -580,8 +584,7 @@ test('editing tempo, key and genre changes the library, never the file', async (
   await expect(panel).toContainText('Techno');
   await expect(panel).toContainText('Edited');
 
-  // The genre is now a filter. (Wait for the cleared search to apply first:
-  // a filter change resets the selection.)
+  // The genre is now a filter. (Wait for the cleared search to apply first.)
   await page.getByRole('button', { name: 'Clear search' }).click();
   await expect.poll(() => rows(page).count()).toBeGreaterThan(1);
   await page.getByRole('toolbar', { name: 'Filters' }).getByRole('button', { name: /^Genre/ }).click();
@@ -636,6 +639,32 @@ test('DJ export writes tagged files and a rekordbox playlist, and never overwrit
   await done.getByRole('button', { name: 'Done' }).click();
   expect(existsSync(join(out, 'other_track (2).aiff'))).toBe(true);
   rmSync(out, { recursive: true, force: true });
+});
+
+test('the export plan follows the format: MP3 never warns about a resolution choice it does not show', async ({ page }) => {
+  await page.goto('/#/library');
+  await page.getByRole('searchbox', { name: 'Search tracks' }).fill('clean_master_24bit');
+  await expect(rows(page)).toHaveCount(1);
+  await row(page, 'clean_master_24bit').click();
+  await page.getByRole('complementary', { name: 'Track details' }).getByRole('button', { name: 'Export…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Export for DJ software' });
+  // AIFF at 16-bit / 44.1 kHz: a 24-bit source is downsampled, and the plan says so.
+  await dialog.getByRole('radio', { name: 'AIFF' }).click();
+  await dialog.getByRole('radio', { name: '16-bit / 44.1 kHz' }).click();
+  await expect(dialog).toContainText('1 file with notes');
+  await dialog.getByRole('button', { name: 'Show details' }).click();
+  await expect(dialog).toContainText('Reduced to 16-bit/44.1 kHz');
+  // MP3 has no quality choice, so the hidden one must not shape its plan.
+  await dialog.getByRole('radio', { name: 'MP3 320' }).click();
+  await expect(dialog.getByRole('radio', { name: '16-bit / 44.1 kHz' })).toHaveCount(0);
+  await expect(dialog).toContainText('1 file will be written');
+  await expect(dialog).not.toContainText('with notes');
+  // Back to AIFF, the note returns: the choice was kept, not reset.
+  await dialog.getByRole('radio', { name: 'AIFF' }).click();
+  await expect(dialog.getByRole('radio', { name: '16-bit / 44.1 kHz' })).toHaveAttribute('aria-checked', 'true');
+  await expect(dialog).toContainText('1 file with notes');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test('tracks play inside the app; formats the window cannot read play from a decoded copy', async ({ page }) => {
@@ -716,6 +745,78 @@ test('updates: found on request, explained, installed with a restart; the browse
   await expect(auto).not.toBeChecked();
   await auto.click();
   await expect(auto).toBeChecked();
+});
+
+test('updates: a failed automatic check keeps the offer, and FFmpeg\'s Check again answers without an extra update check', async ({ page }) => {
+  // The simulated updater asks the core for app.info on each check; nothing
+  // else calls it after the first load except "Check again".
+  let infoCalls = 0;
+  let offline = false;
+  await page.route('**/api/call', async (route) => {
+    const body = route.request().postDataJSON() as { method?: string };
+    if (body.method === 'app.info') {
+      infoCalls += 1;
+      if (offline) return route.fulfill({ status: 503, body: 'offline' });
+    }
+    return route.continue();
+  });
+  await page.clock.install();
+  await page.goto('/?simulate-update=9.9.9#/settings');
+  const updates = page.getByRole('region', { name: 'Updates' });
+  await expect(updates.getByText('Not checked yet.')).toBeVisible();
+  // The first automatic check, ten seconds after launch, finds the release.
+  await page.clock.fastForward(10_500);
+  await page.clock.fastForward(1_000);
+  await expect(updates.getByText('Version 9.9.9 is available.')).toBeVisible();
+
+  // B83: six hours on, the check fails (offline); the release is still on offer.
+  offline = true;
+  await page.clock.fastForward(6 * 60 * 60 * 1000);
+  await page.clock.fastForward(1_000);
+  await expect.poll(() => infoCalls).toBeGreaterThanOrEqual(3);
+  await expect(updates.getByText('Version 9.9.9 is available.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Update to 9.9.9' })).toBeVisible();
+  offline = false;
+
+  // B85: "Check again" says what it found. B84: and does not restart the
+  // update timers (a new check ten seconds later).
+  await page.getByRole('button', { name: 'Check again' }).click();
+  await expect(page.getByRole('status').filter({ hasText: /FFmpeg (found|is still not found)/ })).toBeVisible();
+  const after = infoCalls;
+  await page.clock.fastForward(10_500);
+  await page.clock.fastForward(1_000);
+  await page.waitForTimeout(500);
+  expect(infoCalls).toBe(after);
+});
+
+test('the browser build reads the jobs again when its event stream reconnects (B96)', async ({ page }) => {
+  // Keep a handle on the page's event stream, to play a lost event and a reconnection.
+  await page.addInitScript(() => {
+    const Original = window.EventSource;
+    const streams: EventSource[] = [];
+    (window as unknown as { streams: EventSource[] }).streams = streams;
+    window.EventSource = class extends Original {
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super(url, init);
+        streams.push(this);
+      }
+    };
+  });
+  await page.goto('/#/library');
+  await page.waitForFunction(() => (window as unknown as { streams: EventSource[] }).streams.some((s) => s.readyState === 1));
+  // An export seen starting, whose "finished" never arrives.
+  await page.evaluate(() => {
+    for (const s of (window as unknown as { streams: EventSource[] }).streams) {
+      s.dispatchEvent(new MessageEvent('djexport.progress', { data: JSON.stringify({ done: 0, total: 3, fraction: 0.1, current: 'a.flac' }) }));
+    }
+  });
+  const exporting = page.getByRole('status').filter({ hasText: 'Exporting' });
+  await expect(exporting).toBeVisible();
+  // The stream comes back: the core says no export runs.
+  await page.evaluate(() => {
+    for (const s of (window as unknown as { streams: EventSource[] }).streams) s.dispatchEvent(new Event('open'));
+  });
+  await expect(exporting).toHaveCount(0);
 });
 
 
@@ -943,6 +1044,15 @@ test('Send to USB writes numbered folders of DJ-ready files and playlists, and c
   const done = page.getByRole('dialog', { name: 'Sent to the drive' });
   await expect(done).toContainText('Sent 2 playlists to the drive', { timeout: 60_000 });
   await expect(done).toContainText('SONORA/rekordbox.xml');
+  // B50: when the folder cannot be shown, the dialog says why.
+  await page.route('**/api/call', async (route) => {
+    const b = route.request().postDataJSON() as { method?: string };
+    if (b.method === 'system.reveal') return route.fulfill({ json: { ok: false, error: { code: 'not_found', message: 'The drive is not connected.' } } });
+    return route.continue();
+  });
+  await done.getByRole('button', { name: 'Show in folder' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'The drive is not connected.' })).toBeVisible();
+  await page.unroute('**/api/call');
   await done.getByRole('button', { name: 'Done' }).click();
 
   const warm = join(usb, 'SONORA', '01 Friday', '01 Warm-up');
@@ -1015,11 +1125,23 @@ test('Soulseek: search through slskd, download, and the files join the library w
     await expect(page.getByText(downloads, { exact: true })).toBeVisible();
 
     // Search: lossless files only, grouped by folder, best-connected first.
+    // B19: the first look at the results fails (slskd busy); the search goes on.
+    let failed = 0;
+    await page.route('**/api/call', async (route) => {
+      const b = route.request().postDataJSON() as { method?: string };
+      if (b.method === 'slskd.results' && failed === 0) {
+        failed += 1;
+        return route.fulfill({ status: 503, body: 'busy' });
+      }
+      return route.continue();
+    });
     await page.getByRole('tab', { name: 'Search' }).click();
     await page.getByRole('searchbox', { name: 'Search Soulseek' }).fill('night drive lights');
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     const folder = page.getByRole('region', { name: 'Night Drive - Lights from crate-digger' });
     await expect(folder.getByRole('cell', { name: '01 Lights.flac', exact: true })).toBeVisible();
+    expect(failed).toBe(1);
+    await page.unroute('**/api/call');
     await expect(page.locator('.sk-summary')).toContainText('1 lossy file hidden', { timeout: 15_000 });
     expect(slskd.searches).toEqual(['night drive lights']);
     await expect(page.getByRole('region', { name: /from mp3-only/ })).toHaveCount(0);
@@ -1059,6 +1181,8 @@ test('Soulseek: search through slskd, download, and the files join the library w
     await page.getByRole('tab', { name: 'Search' }).click();
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Night Drive - Lights from crate-digger' }).getByText('Downloaded')).toHaveCount(2, { timeout: 15_000 });
+    // B58: not "All asked for".
+    await expect(page.getByRole('region', { name: 'Night Drive - Lights from crate-digger' }).getByRole('button', { name: 'All in your library' })).toBeVisible();
 
     // The analysis page says where the track came from.
     await page.getByRole('tab', { name: /^Downloads/ }).click();
@@ -1087,9 +1211,37 @@ test('Soulseek: one button sets slskd up, a failed step can be tried again, and 
   await page.reload();
   await page.getByRole('tab', { name: 'Setup' }).click();
 
-  // One permission screen that says exactly what will happen.
+  // B04: an earlier slskd that shared a folder, and another slskd running.
+  // The share is offered once; turned off, it stays off after "Stop it".
+  let other = true;
+  const shared = join(DATA, 'review-share');
+  await page.route('**/api/call', async (route) => {
+    const b = route.request().postDataJSON() as { method?: string };
+    if (b.method === 'slskd.stopOther') {
+      other = false;
+      return route.fulfill({ json: { ok: true, result: null } });
+    }
+    if (b.method !== 'slskd.setupPlan') return route.continue();
+    const res = await route.fetch();
+    const j = (await res.json()) as { ok: boolean; result?: { share: string | null; others: { pid: number; path: string }[] } };
+    if (j.ok && j.result) {
+      j.result.share = shared;
+      j.result.others = other ? [{ pid: 424242, path: '/usr/local/bin/slskd' }] : [];
+    }
+    return route.fulfill({ response: res, json: j });
+  });
   await page.getByRole('button', { name: 'Set up Soulseek…' }).click();
   const dialog = page.getByRole('dialog', { name: 'Set up Soulseek' });
+  const sharing = dialog.getByRole('switch', { name: 'Share a folder with other Soulseek users' });
+  await expect(sharing).toBeChecked();
+  await sharing.click();
+  await expect(sharing).not.toBeChecked();
+  await dialog.getByRole('button', { name: 'Stop it' }).click();
+  await expect(dialog.getByRole('button', { name: 'Stop it' })).toHaveCount(0);
+  await expect(sharing).not.toBeChecked();
+  await page.unroute('**/api/call');
+
+  // One permission screen that says exactly what will happen.
   await expect(dialog.getByText('Check it against the checksum built into SONORA, and stop if it differs.')).toBeVisible();
   await expect(dialog.getByText(/It shares nothing\./)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Allow and set up' })).toBeDisabled();
@@ -1215,5 +1367,434 @@ test('Soulseek previews play while the file arrives, are never downloads, queue 
     expect((await api<{ total: number }>(page, 'library.query', { limit: 1 })).total).toBe(tracksBefore);
   } finally {
     await slskd.close();
+  }
+});
+
+test('a YouTube playlist is read, searched, downloaded by the rules and checked on arrival', async ({ page }) => {
+  // Searching, waiting for arrivals and a fallback take a while, all against stand-ins.
+  test.setTimeout(240_000);
+  // A stand-in YouTube serves the saved playlist page; a stand-in slskd
+  // answers every search with the same shared files (SONORA's rules pick
+  // among them) and "receives" downloads into its folder. Nothing reaches
+  // YouTube or Soulseek.
+  const root = join(DATA, 'playlist-slskd');
+  rmSync(root, { recursive: true, force: true });
+  const downloads = join(root, 'downloads');
+  const incomplete = join(root, 'incomplete');
+  mkdirSync(downloads, { recursive: true });
+  mkdirSync(incomplete, { recursive: true });
+  const ep = '@@shared\\Music\\Kerri Chandler - Rain EP';
+  const nd = '@@shared\\Music\\Night Drive - Afterglow';
+  const clean = join(MUSIC, 'clean_master.flac');
+  const fakeMp3 = join(MUSIC, 'transcode_mp3_128.flac');
+  const other = join(MUSIC, 'clean_master_16bit.wav');
+  const tube = await startFakeYoutube(YOUTUBE_PORT);
+  const slskd = await startFakeSlskd(
+    [
+      { username: 'crate-digger', filename: `${ep}\\01 Rain (Original Mix).flac`, size: statSync(clean).size, bitDepth: 16, sampleRate: 44100, length: 20, source: clean },
+      // A "FLAC" made from an MP3: the first pick for Afterglow, which the arrival check throws out.
+      { username: 'crate-digger', filename: `${nd}\\02 Afterglow.flac`, size: statSync(fakeMp3).size, bitDepth: 16, sampleRate: 44100, length: 20, source: fakeMp3 },
+      { username: 'backup', filename: `${nd}\\Night Drive - Afterglow.wav`, size: statSync(other).size, bitDepth: 16, sampleRate: 44100, length: 20, source: other },
+      { username: 'mp3-only', filename: 'mp3s\\Rain (Original Mix).mp3', size: 480_000, bitRate: 320, length: 20 },
+    ],
+    { downloads, incomplete, rate: 256 * 1024 },
+  );
+  try {
+    // slskd as set up by the earlier tests (or here, so this test runs on
+    // its own), with this stand-in's address and key.
+    await page.goto('/#/soulseek');
+    await api(page, 'sources.accept');
+    slskd.key = 'e2e-playlist-key-0123456789';
+    await api(page, 'slskd.configure', { url: slskd.url, apiKey: slskd.key });
+    await api(page, 'sources.configure', { folder: downloads });
+    await api(page, 'settings.update', { values: { playlistRules: { searchSeconds: 15, retryNotFound: false, maxDownloads: 2, maxQueue: 20, mode: 'automatic', lossy: false } } });
+
+    await page.goto('/#/soulseek?tab=playlist');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Download a YouTube playlist from Soulseek' })).toBeVisible();
+    const link = page.getByRole('textbox', { name: 'YouTube playlist link' });
+
+    // A private list is refused with the reason; so is a link without a playlist.
+    await link.fill('https://www.youtube.com/watch?v=e2eRain0001');
+    await page.getByRole('button', { name: 'Read the playlist' }).click();
+    await expect(page.getByText('That link has no playlist in it', { exact: false })).toBeVisible();
+    await link.fill('https://www.youtube.com/playlist?list=PLsomebodyElsesPrivateList');
+    await page.getByRole('button', { name: 'Read the playlist' }).click();
+    await expect(page.getByText('This playlist is private', { exact: false })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Try another link' }).click();
+
+    // The list, read as tracks; what is not a track is left out, and can be put back.
+    await link.fill(`https://www.youtube.com/playlist?list=${E2E_PLAYLIST}`);
+    await page.getByRole('button', { name: 'Read the playlist' }).click();
+    await expect(page.getByRole('heading', { name: 'Late Night E2E' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('3 tracks to look for, 1 left out')).toBeVisible();
+    expect(tube.requests).toEqual(['PLsomebodyElsesPrivateList', E2E_PLAYLIST]);
+    const draft = page.locator('.pl-table.is-draft').first();
+    await expect(draft.getByRole('row')).toHaveCount(4);
+    await expect(draft.getByText('Kerri Chandler – Rain')).toBeVisible();
+    await expect(draft.getByText('Original Mix', { exact: true })).toBeVisible();
+    await expect(draft.getByText('NDR001')).toBeVisible();
+    await page.getByText('Left out: 1 video').click();
+    const short = page.getByRole('checkbox', { name: 'Look for Night Drive – Lights' });
+    await short.check();
+    await expect(page.getByText('4 tracks to look for')).toBeVisible();
+    await short.uncheck();
+    await expect(page.getByText('3 tracks to look for, 1 left out')).toBeVisible();
+    // The quick rules are the settings themselves.
+    await page.getByRole('radio', { name: 'Review first' }).click();
+    await expect.poll(async () => ((await api<{ playlistRules: { mode: string } }>(page, 'settings.get')).playlistRules.mode)).toBe('review');
+    await page.getByRole('radio', { name: 'Automatic' }).click();
+
+    // Start: one search at a time, fewest words first; the pick is downloaded as soon as a track is found.
+    await page.getByRole('button', { name: 'Start' }).click();
+    await expect(page.locator('.pl-state')).toContainText('Searching for', { timeout: 15_000 });
+    await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toBeVisible();
+    await expect(page.locator('.pl-state')).toContainText('Done: 2 tracks downloaded and checked, 1 not found.', { timeout: 200_000 });
+    expect(slskd.searches[0]).toBe('Rain Original Mix');
+    expect(slskd.searches).toContain('Someone Nowhere To Be Found');
+    await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toHaveCount(0);
+
+    // Rain: found with the first search, downloaded, checked; the MP3 was out by the rules.
+    const rain = page.getByRole('row', { name: /Kerri Chandler – Rain/ }).first();
+    await expect(rain).toContainText('Done');
+    await expect(rain).toContainText('01 Rain (Original Mix).flac');
+    await rain.getByRole('button', { name: 'Details of Kerri Chandler – Rain' }).click();
+    const rainDetail = page.locator('.pl-detail').first();
+    await expect(rainDetail).toContainText('Found with search 1 of 5');
+    await expect(rainDetail).toContainText('MP3: lossy formats are off');
+    await expect(rainDetail.getByText('Downloaded')).toBeVisible();
+
+    // Afterglow: the first pick turned out to be made from an MP3, so the next file was taken.
+    const after = page.getByRole('row', { name: /Night Drive – Afterglow/ }).first();
+    await expect(after).toContainText('Done');
+    await expect(after).toContainText('Night Drive - Afterglow.wav');
+    await after.getByRole('button', { name: 'Details of Night Drive – Afterglow' }).click();
+    const afterDetail = page.locator('.pl-detail').nth(1);
+    await expect(afterDetail).toContainText('02 Afterglow.flac from crate-digger did not work out (SONORA found signs it was made from a lossy source');
+    await expect(afterDetail).toContainText('2 download tries');
+
+    // Nowhere To Be Found: everyone answered with other files, all rejected with a reason.
+    await page.getByRole('button', { name: 'Not found' }).click();
+    const none = page.getByRole('row', { name: /Someone – Nowhere To Be Found/ }).first();
+    await expect(none).toContainText('Every file found failed the rules.');
+    await none.getByRole('button', { name: 'Details of Someone – Nowhere To Be Found' }).click();
+    await expect(page.locator('.pl-detail').first()).toContainText('shares only 0% of the title’s words');
+    await page.getByRole('button', { name: /^All \d/ }).click();
+
+    // The library has the two files, checked: the arrival check is the usual one.
+    await waitIdle(page);
+    const tracks = await api<{ total: number; rows: { fileName: string; flags: string[] }[] }>(page, 'library.query', { filter: {}, limit: 500 });
+    const names = tracks.rows.map((r) => r.fileName);
+    expect(names).toContain('01 Rain (Original Mix).flac');
+    expect(names).toContain('Night Drive - Afterglow.wav');
+    expect(names).toContain('02 Afterglow.flac');
+    expect(tracks.rows.find((r) => r.fileName === '02 Afterglow.flac')?.flags).toContain('source_concern');
+
+    // Settings holds every rule.
+    await page.goto('/#/settings');
+    const rules = page.getByRole('region', { name: 'Playlist download rules' });
+    await expect(rules.getByRole('checkbox', { name: /^FLAC/ })).toBeChecked();
+    await expect(rules.getByRole('checkbox', { name: /^WavPack/ })).not.toBeChecked();
+    const bitrate = rules.getByRole('textbox', { name: 'Lowest bit rate', exact: true });
+    await expect(bitrate).toHaveCount(0);
+    await rules.getByRole('switch', { name: 'Lossy files too' }).click();
+    await expect(bitrate).toHaveValue('320');
+    await rules.getByRole('switch', { name: 'Lossy files too' }).click();
+    await expect(bitrate).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('region', { name: 'Playlist download rules' }).getByRole('switch', { name: 'Lossy files too' })).not.toBeChecked();
+  } finally {
+    await slskd.close();
+    await tube.close();
+  }
+});
+
+// ------------------------------------------------------------------
+// Regression tests for the 0.3.2 review (docs/BUGS.md). Each makes what
+// it needs and takes it away again.
+
+test('review: the library keeps the selection through a search, Clear beats a search being typed, and the keyboard stays put (B24–B26, B43, B62–B64, B67)', async ({ page }) => {
+  await page.goto('/#/library');
+  await expect(rows(page).first()).toBeVisible();
+  const total = await rows(page).count();
+  const search = page.getByRole('searchbox', { name: 'Search tracks' });
+  const panel = page.getByRole('complementary', { name: 'Track details' });
+
+  // B24: a search keeps a selected track that is still in the results.
+  const first = rows(page).first();
+  const title = (await first.locator('.cell-title').innerText()).trim();
+  await first.click();
+  await expect(first).toHaveAttribute('aria-selected', 'true');
+  await search.fill(title);
+  await expect(rows(page)).not.toHaveCount(total);
+  await expect(row(page, title)).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByRole('heading', { level: 2 })).toHaveText(title);
+
+  // B25: Clear right after typing: what was being typed does not apply later.
+  // B62: and the keyboard goes to the search field.
+  await search.fill('zzzz nothing here');
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(search).toBeFocused();
+  await page.waitForTimeout(800);
+  await expect(search).toHaveValue('');
+  await expect(rows(page)).toHaveCount(total);
+
+  // B26: ▶ on a row leaves the keyboard with the table.
+  await rows(page).nth(1).click();
+  await rows(page).nth(3).locator('.row-play').click();
+  expect(await page.evaluate(() => !!document.activeElement?.closest('[role="grid"]') && !document.activeElement?.classList.contains('row-play'))).toBe(true);
+  await page.getByRole('button', { name: 'Close the player' }).click();
+
+  // B63: a row menu closed by scrolling gives the keyboard back to the table.
+  await rows(page).nth(1).click();
+  await page.keyboard.press('Shift+F10');
+  const rowMenu = page.getByRole('menu');
+  await expect(rowMenu).toBeVisible();
+  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="menu"]'))).toBe(true);
+  await rows(page).nth(5).hover();
+  await page.mouse.wheel(0, 400);
+  await expect(rowMenu).toBeHidden();
+  expect(await page.evaluate(() => !!document.activeElement?.closest('[role="grid"]'))).toBe(true);
+
+  // B64: ↑ in a menu opened with the mouse goes to the last item.
+  await page.getByRole('toolbar', { name: 'Filters' }).getByRole('button', { name: /^Issues/ }).click();
+  const issues = page.getByRole('menu', { name: 'Issue filter' });
+  await expect(issues).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(issues.getByRole('menuitemcheckbox').last()).toBeFocused();
+  await page.keyboard.press('Escape');
+
+  // B43: emptying a field that holds no edit changes nothing, and says what stays.
+  await search.fill('other_track');
+  await expect(rows(page)).toHaveCount(1);
+  await row(page, 'other_track').click();
+  await panel.getByRole('button', { name: 'Edit…' }).click();
+  const dj = page.getByRole('dialog', { name: 'Edit BPM, key and genre' });
+  const tempo = dj.getByRole('textbox', { name: /^Tempo/ });
+  await tempo.fill('');
+  await expect(tempo).toHaveAttribute('placeholder', 'Keeps 128');
+  await expect(dj.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await dj.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dj).toBeHidden();
+
+  // B67: a track that was never analysed has no cut-off "detected".
+  await page.goto('/#/attention');
+  await page.getByRole('tab', { name: /^Failed/ }).click();
+  await rows(page).first().click();
+  await expect(panel.locator('dt', { hasText: /^Cutoff$/ }).locator('xpath=following-sibling::dd[1]')).toHaveText('—');
+});
+
+test('review: a failed re-analysis says so above the earlier results (B27)', async ({ page }) => {
+  const dir = join(DATA, 'review-b27');
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'b27_track.flac');
+  copyFileSync(join(MUSIC, 'clean_master.flac'), file);
+  await page.goto('/#/library');
+  await api(page, 'library.import', { paths: [dir] });
+  await waitIdle(page);
+  const found = await api<{ rows: { id: number; status: string }[] }>(page, 'library.query', { filter: { search: 'b27_track' }, sort: { key: 'title', desc: false }, offset: 0, limit: 5 });
+  const id = found.rows[0]?.id ?? 0;
+  expect(found.rows[0]?.status).toBe('done');
+  try {
+    // The file is replaced by something that is not audio, then analysed again.
+    writeFileSync(file, Buffer.alloc(4096, 7));
+    await api(page, 'tracks.rescan', { ids: [id] });
+    await waitIdle(page);
+    await page.goto(`/#/track/${id}`);
+    const notice = page.locator('.earlier-results');
+    await expect(notice).toContainText('The latest analysis failed');
+    await expect(notice).toContainText('The results below are from an earlier analysis.');
+    await expect(notice.getByRole('button', { name: 'Try again' })).toBeVisible();
+  } finally {
+    const folders = await api<{ id: number; path: string }[] | { folders: { id: number; path: string }[] }>(page, 'folders.list');
+    const list = Array.isArray(folders) ? folders : folders.folders;
+    const mine = list.find((f) => f.path === dir);
+    if (mine) await api(page, 'folders.remove', { id: mine.id, removeTracks: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('review: smart playlists keep their rules as saved, and their selection and rows follow the tracks (B40–B42, B94, B95)', async ({ page }) => {
+  await page.goto('/#/library');
+  await expect(rows(page).first()).toBeVisible();
+  const made: number[] = [];
+  const create = async (kind: 'smart' | 'playlist', name: string, extra: Record<string, unknown>) => {
+    const n = await api<{ id: number }>(page, 'playlists.create', { kind, name, ...extra });
+    made.push(n.id);
+    return n.id;
+  };
+  const filterOf = async (id: number) =>
+    (await api<{ nodes: { id: number; rules: { filter: Record<string, unknown> } | null }[] }>(page, 'playlists.list')).nodes.find((n) => n.id === id)?.rules?.filter;
+  const sort = { key: 'bpm', desc: false };
+  let slowCounts = false;
+  let slowTracks = false;
+  await page.route('**/api/call', async (route) => {
+    const b = route.request().postDataJSON() as { method?: string; params?: { limit?: number } };
+    if ((slowCounts && b.method === 'library.query' && b.params?.limit === 1) || (slowTracks && b.method === 'playlists.tracks')) await new Promise((r) => setTimeout(r, 2500));
+    return route.continue();
+  });
+  try {
+    const wide = await create('smart', 'Review wide', { rules: { filter: { bpmMin: 60, bpmMax: 200 }, sort } });
+    const genre = await create('smart', 'Review genre', { rules: { filter: { genres: ['Zydeco Polka'] }, sort } });
+    const tree = page.getByRole('tree', { name: 'Playlists' });
+    const edit = page.getByRole('dialog', { name: 'Edit smart playlist' });
+
+    // B42: a tempo range saved from the library is kept as it is when the rules are saved unchanged.
+    await tree.getByRole('treeitem', { name: /Review wide/ }).click();
+    await expect(rows(page).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Edit rules…' }).click();
+    await expect(edit.getByRole('textbox', { name: 'Highest BPM' })).toHaveValue('200');
+    const counted = edit.getByText(/^\d+ tracks? match(es)? now$/);
+    await expect(counted).toBeVisible();
+    const wideCount = await counted.innerText();
+    expect(wideCount).not.toBe('0 tracks match now');
+    await edit.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(edit).toBeHidden();
+    expect((await filterOf(wide))?.bpmMax).toBe(200);
+
+    // B94: the next playlist's rules do not open with this one's count.
+    await tree.getByRole('treeitem', { name: /Review genre/ }).click();
+    slowCounts = true;
+    await page.getByRole('button', { name: 'Edit rules…' }).click();
+    await expect(edit).toBeVisible();
+    expect(await edit.innerText()).not.toContain(wideCount);
+    slowCounts = false;
+    // B41: a genre the library does not list among its most common still shows, and can be turned off.
+    const chip = edit.getByRole('group', { name: 'Genres' }).getByRole('button', { name: /Zydeco Polka/ });
+    await expect(chip).toHaveAttribute('aria-pressed', 'true');
+    await expect(edit).toContainText('Genres (Zydeco Polka)');
+    await chip.click();
+    await expect(chip).toHaveCount(0);
+    await edit.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(edit).toBeHidden();
+    const saved = await filterOf(genre);
+    expect(saved).toBeTruthy();
+    expect(saved?.genres).toBeUndefined();
+
+    // B40: tracks that leave a smart playlist leave its selection.
+    await tree.getByRole('treeitem', { name: /Review wide/ }).click();
+    await rows(page).nth(0).click();
+    await rows(page).nth(1).click({ modifiers: ['Shift'] });
+    const selected = page.getByText('2 tracks selected');
+    await expect(selected).toBeVisible();
+    await api(page, 'playlists.update', { id: wide, rules: { filter: { bpmMin: 390, bpmMax: 400 }, sort } });
+    await expect(rows(page)).toHaveCount(0);
+    await expect(selected).toBeHidden();
+
+    // B95: tracks taken out of a playlist go from the screen at once.
+    const ids = (await api<{ ids: number[] }>(page, 'library.ids', { filter: {} })).ids.slice(0, 3);
+    const plain = await create('playlist', 'Review plain', { trackIds: ids });
+    await tree.getByRole('treeitem', { name: /Review plain/ }).click();
+    await expect(rows(page)).toHaveCount(3);
+    slowTracks = true;
+    await rows(page).first().click();
+    await page.keyboard.press('Delete');
+    await expect(rows(page)).toHaveCount(2, { timeout: 1500 });
+    slowTracks = false;
+    await expect.poll(async () => (await api<{ total: number }>(page, 'playlists.tracks', { id: plain })).total).toBe(2);
+  } finally {
+    slowCounts = false;
+    slowTracks = false;
+    await page.unroute('**/api/call');
+    for (const id of made.reverse()) await api(page, 'playlists.delete', { id }).catch(() => undefined);
+  }
+});
+
+test('review: the USB dialog plans again when another job ends and says plainly when a send fails; settings steppers and rules read right (B09, B46, B51, B57, B86)', async ({ page }) => {
+  await page.addInitScript(() => {
+    const Original = window.EventSource;
+    const streams: EventSource[] = [];
+    (window as unknown as { streams: EventSource[] }).streams = streams;
+    window.EventSource = class extends Original {
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super(url, init);
+        streams.push(this);
+      }
+    };
+  });
+  await page.goto('/#/library');
+  await expect(rows(page).first()).toBeVisible();
+  const ids = (await api<{ ids: number[] }>(page, 'library.ids', { filter: {} })).ids.slice(0, 2);
+  const list = await api<{ id: number }>(page, 'playlists.create', { kind: 'playlist', name: 'Review USB', trackIds: ids });
+  const usb = join(DATA, 'review-usb');
+  rmSync(usb, { recursive: true, force: true });
+  mkdirSync(usb, { recursive: true });
+  // The core says an export runs until the test says otherwise.
+  let busy = true;
+  await page.route('**/api/call', async (route) => {
+    const b = route.request().postDataJSON() as { method?: string };
+    if (b.method !== 'usb.plan' || !busy) return route.continue();
+    const res = await route.fetch();
+    const j = (await res.json()) as { ok: boolean; result?: { running?: boolean } };
+    if (j.ok && j.result) j.result.running = true;
+    return route.fulfill({ response: res, json: j });
+  });
+  try {
+    await page.getByRole('tree', { name: 'Playlists' }).getByRole('treeitem', { name: /Review USB/ }).click();
+    await page.getByRole('button', { name: 'Send to USB…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Send playlists to a USB drive' });
+    await dialog.getByRole('textbox', { name: 'Drive or folder (full path)' }).fill(usb);
+    const waiting = dialog.getByText('An export or another send is running');
+    await expect(waiting).toBeVisible();
+    // B09: the export ends: the dialog asks again and Send can be used.
+    busy = false;
+    await page.waitForFunction(() => (window as unknown as { streams: EventSource[] }).streams.some((s) => s.readyState === 1));
+    await page.evaluate(() => {
+      for (const s of (window as unknown as { streams: EventSource[] }).streams) {
+        s.dispatchEvent(new MessageEvent('djexport.finished', { data: JSON.stringify({ folder: '/nowhere', written: [], failed: [], cancelled: true }) }));
+      }
+    });
+    await expect(waiting).toBeHidden();
+    await expect(dialog.getByRole('button', { name: 'Send to review-usb' })).toBeEnabled();
+
+    // B51: a send that fails says so in one sentence, and does not explain
+    // how to use a drive that holds nothing. (The send is played: the core
+    // is asked to start nothing.)
+    await page.route('**/api/call', async (route) => {
+      const b = route.request().postDataJSON() as { method?: string };
+      if (b.method === 'usb.start') return route.fulfill({ json: { ok: true, result: { accepted: true } } });
+      return route.fallback();
+    });
+    await dialog.getByRole('button', { name: 'Send to review-usb' }).click();
+    await page.evaluate((folder) => {
+      const report = { root: folder, folder, playlists: 0, written: 0, renamed: 0, kept: 0, removed: 0, bytes: 0, failed: [], m3u: 0, crates: 0, rekordboxXml: null, warnings: [], cancelled: false, elapsedMs: 10, error: 'The drive went away. The details are in the log.' };
+      for (const s of (window as unknown as { streams: EventSource[] }).streams) s.dispatchEvent(new MessageEvent('usb.finished', { data: JSON.stringify(report) }));
+    }, usb);
+    const failed = page.getByRole('dialog').filter({ hasText: 'Sending stopped' });
+    await expect(failed).toContainText('The drive went away. The details are in the log.');
+    expect(await failed.innerText()).not.toContain('log..');
+    await expect(failed.getByRole('heading', { name: 'Using the drive' })).toHaveCount(0);
+    await failed.getByRole('button', { name: 'Done' }).click();
+  } finally {
+    busy = false;
+    await page.unroute('**/api/call');
+    await api(page, 'playlists.delete', { id: list.id });
+    rmSync(usb, { recursive: true, force: true });
+  }
+
+  const before = await api<{ workers: number; maxDurationMin: number; playlistRules: Record<string, unknown> }>(page, 'settings.get');
+  try {
+    await api(page, 'settings.update', { values: { playlistRules: { ...before.playlistRules, maxBitDepth: 24, maxSampleRate: 96000 } } });
+    // Read again by the page (a change of address alone keeps what it read).
+    await page.goto('/#/settings');
+    await page.reload();
+    // B57: with units.
+    await expect(page.getByText('Files above this are left out: 24-bit, 96 kHz.')).toBeVisible();
+    // B86: + steps from what was typed, not from the value saved before.
+    const workers = page.getByRole('textbox', { name: 'Parallel analyses' });
+    const typed = before.workers === 3 ? 5 : 3;
+    await workers.fill(String(typed));
+    await page.getByRole('button', { name: 'Increase Parallel analyses' }).click();
+    await expect(workers).toHaveValue(String(typed + 1));
+    await expect.poll(async () => (await api<{ workers: number }>(page, 'settings.get')).workers).toBe(typed + 1);
+    // B46: an emptied field goes back to the saved value, not to its minimum.
+    const longest = page.getByRole('textbox', { name: 'Longest file in minutes' });
+    await longest.fill('');
+    await longest.press('Tab');
+    await expect(longest).toHaveValue(String(before.maxDurationMin));
+    expect((await api<{ maxDurationMin: number }>(page, 'settings.get')).maxDurationMin).toBe(before.maxDurationMin);
+  } finally {
+    await api(page, 'settings.update', { values: { workers: before.workers, playlistRules: before.playlistRules } });
   }
 });

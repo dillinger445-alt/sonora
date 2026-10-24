@@ -1,6 +1,6 @@
 # How SONORA scores audio
 
-This document describes the scoring model `sonora-dsp-1.0`: what is
+This document describes the scoring model `sonora-dsp-1.1`: what is
 measured, how measurements become findings, how findings become the three
 scores, how confidence is estimated, and what the analysis can and cannot
 detect. The code lives in `crates/sonora-engine/src/assess/` (model and
@@ -64,7 +64,7 @@ stored analysis re-scores to exactly the same result.
 | Clipping | Lossless and float files: flat runs of at least 3 identical samples at the channel's own ceiling (within 0.03 dB), which also catches clipping that was later normalised below 0 dBFS. Events per minute, clipped samples, longest run. Not measured for lossy files, where decoding smooths flat runs away; their overs show up as decoded overs and true-peak overs instead. |
 | Dynamics | RMS, crest factor, PLR (true peak − integrated loudness), DC offset per channel. |
 | Spectrum | Long-term average spectrum of the channel average, (\|L\|² + \|R\|²) / 2, which unlike the mid signal cannot cancel out when one channel is inverted, and of the side signal (L − R). Energy share in nine bands from sub-bass to above 20 kHz. |
-| Bandwidth | Upper limit (−50 dB below the 1–8 kHz level). Strongest spectral edge between 4 kHz and Nyquist, counted as a steep cutoff only when it drops ≥ 30 dB within ≤ 2 kHz (gentler edges are ordinary roll-off). Ceiling consistency over time, p99 breakthrough above the edge, side-channel edge, and for files above 48 kHz the ultrasonic level: the average level between 26 and 40 kHz relative to 2–20 kHz. |
+| Bandwidth | Upper limit (−50 dB below the 1–8 kHz level). Strongest spectral edge between 4 kHz and Nyquist, counted as a steep cutoff only when it drops ≥ 30 dB within ≤ 2 kHz (gentler edges are ordinary roll-off) and sits more than 1.5 kHz below Nyquist: an edge closer to it is the anti-alias filter every converter and resampler has (at 32 kHz just below 16 kHz), not an encoder's. Ceiling consistency over time, p99 breakthrough above the edge, side-channel edge, and for files above 48 kHz the ultrasonic level: the average level between 26 and 40 kHz relative to 2–20 kHz. |
 | Compression artifacts | Share of "spectral holes" (bins far below their neighbourhood median) in short frames below the cutoff; spectral flatness. |
 | Bandwidth over time | The cutoff in each 10 s segment, which reveals spliced sources. |
 | Resolution | Effective bit depth from the OR of all integer samples, which catches 16-bit audio padded to 24 bits. Upsampling is detected from empty ultrasonic bands. |
@@ -128,7 +128,7 @@ symptoms are; only the headline scores de-duplicate by root cause.
 
 `ScoringConfig` exposes the weight for correlated findings, which applies to
 the headline scores, and a scale for each profile. The defaults reproduce
-`sonora-dsp-1.0`. Changing them is meant for future user settings; any
+`sonora-dsp-1.1`. Changing them is meant for future user settings; any
 change must bump the model version.
 
 ## Rules
@@ -350,3 +350,11 @@ with a note when FFmpeg is not installed.
   return ordinary findings with honest evidence levels. A model's output
   would be reported as *strong* or *weak* evidence with its calibrated
   confidence, never as a confirmed fact.
+
+## Changes
+
+- **1.1**: an edge within 1.5 kHz of Nyquist is no longer a lossy cutoff
+  (a lossless 32 kHz file was called a transcode); a sound too short for a
+  spectrum frame gets no bandwidth finding; the "fake 320" detail names the
+  bit rate and codec ("This 320 kbps MP3 file…"). Existing results are
+  scored again from their stored measurements when SONORA starts.

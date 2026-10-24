@@ -53,7 +53,7 @@ pub struct SlskdError {
 }
 
 impl SlskdError {
-    fn new(code: &'static str, message: impl Into<String>) -> SlskdError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> SlskdError {
         SlskdError { code, message: message.into() }
     }
 }
@@ -215,6 +215,11 @@ fn stem(name: &str) -> &str {
         Some(i) if i > 0 => &name[..i],
         _ => name,
     }
+}
+
+/// A file name without its extension.
+pub fn stem_of(name: &str) -> &str {
+    stem(name)
 }
 
 /// One file in search results.
@@ -511,8 +516,8 @@ impl Slskd {
         Ok(obj! { "id" => id, "text" => text })
     }
 
-    /// Where a search stands, and its results grouped into folders.
-    pub fn results(&self, app: &App, id: &str, lossless_only: bool) -> Result<Value, SlskdError> {
+    /// Where a search stands, with every folder of its results (best first).
+    pub fn search_state(&self, app: &App, id: &str, lossless_only: bool) -> Result<SearchState, SlskdError> {
         if !is_guid(id) {
             return Err(SlskdError::new("invalid_params", "id must be a slskd search id"));
         }
@@ -540,8 +545,15 @@ impl Slskd {
             responses = r.as_array().cloned().unwrap_or_default();
         }
         let folders = group(&responses, lossless_only);
-        let total_folders = folders.len();
         let hidden: usize = folders.iter().map(|f| f.hidden).sum::<usize>() + hidden_in_dropped(&responses, lossless_only, &folders);
+        Ok(SearchState { state, text: v.get("searchText").and_then(Value::as_str).unwrap_or("").to_string(), responses: response_count, folders, hidden })
+    }
+
+    /// Where a search stands, and its results grouped into folders, as the
+    /// interface shows them (the best `MAX_FOLDERS`).
+    pub fn results(&self, app: &App, id: &str, lossless_only: bool) -> Result<Value, SlskdError> {
+        let SearchState { state, text, responses: response_count, folders, hidden } = self.search_state(app, id, lossless_only)?;
+        let total_folders = folders.len();
         let mut shown = Vec::new();
         let mut files = 0usize;
         for f in folders {
@@ -581,7 +593,7 @@ impl Slskd {
             .collect();
         Ok(obj! {
             "id" => id,
-            "text" => v.get("searchText").and_then(Value::as_str).unwrap_or(""),
+            "text" => text,
             "state" => state,
             "responses" => response_count,
             "folders" => Value::Array(list),
@@ -700,6 +712,19 @@ impl Slskd {
     pub fn clear_finished(&self, app: &App) -> Result<(), SlskdError> {
         self.call(app, "DELETE", "transfers/downloads/all/completed", None).map(|_| ())
     }
+}
+
+/// Where a search stands: searching, done, stopped or failed, and its
+/// results so far (slskd hands them over once the search has ended).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchState {
+    pub state: &'static str,
+    pub text: String,
+    /// People who answered.
+    pub responses: i64,
+    pub folders: Vec<FoundFolder>,
+    /// Files the format filter left out.
+    pub hidden: usize,
 }
 
 /// The files slskd did not queue: a list of names, or of objects with a
@@ -964,11 +989,20 @@ impl Transfer {
 
 /// A finished download as SONORA found it in the download folder.
 #[derive(Clone, Debug)]
-struct LocalFile {
-    path: String,
-    state: String,
-    track_id: Option<i64>,
-    error: Option<String>,
+pub struct LocalFile {
+    pub path: String,
+    /// `review`, `importing`, `imported`, `failed` or `declined`.
+    pub state: String,
+    pub track_id: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// The file a finished transfer became in the download folder, if the
+/// watcher has found it: the same size, and the same name as letters and
+/// digits (or that name with a suffix).
+pub fn local_file(c: &Connection, filename: &str, size: i64) -> Result<Option<LocalFile>, StoreError> {
+    let t = Transfer { id: String::new(), username: String::new(), filename: filename.to_string(), size, state: "done", detail: None, bytes: size, speed: 0.0, position: None, requested_at: None, ended_at: None };
+    Ok(local_files(c, std::slice::from_ref(&t))?.into_values().next())
 }
 
 /// Matches finished downloads to the files the folder watcher found: the
@@ -983,7 +1017,9 @@ fn local_files(c: &Connection, items: &[Transfer]) -> Result<HashMap<String, Loc
         let mut p: Vec<SqlValue> = vec![SqlValue::Text(crate::sources::SOULSEEK.to_string())];
         p.extend(chunk.iter().map(|&s| SqlValue::Int(s)));
         let rows = c.query(
-            &format!("SELECT path, size, state, track_id, error FROM source_files WHERE source = ? AND size IN ({marks}) ORDER BY found_at DESC"),
+            // Files noted as already in the folder when it was chosen are not
+            // downloads SONORA saw arrive (B20).
+            &format!("SELECT path, size, state, track_id, error FROM source_files WHERE source = ? AND state != 'existing' AND size IN ({marks}) ORDER BY found_at DESC"),
             &as_params(&p),
             |r| (r.i64(1), LocalFile { path: r.text(0), state: r.text(2), track_id: r.opt_i64(3), error: r.opt_text(4) }),
         )?;
@@ -1013,6 +1049,33 @@ fn local_files(c: &Connection, items: &[Transfer]) -> Result<HashMap<String, Loc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_download_is_not_matched_to_a_file_that_was_there_before() {
+        use crate::db::now_ms;
+        use crate::params;
+        // B20: a folder chosen with slskd's earlier downloads in it notes
+        // them as 'existing'; a download with the same name and size is
+        // still a new file, not "added, then removed".
+        let dir = std::env::temp_dir().join(format!("sonora-slskd-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = crate::db::Db::open(&dir.join("t.db")).unwrap();
+        let c = db.write();
+        let add = |path: &str, state: &str| {
+            c.execute(
+                "INSERT INTO source_files (path, source, size, mtime, state, track_id, found_at, decided_at, error) VALUES (?, 'soulseek', 1000, 0, ?, NULL, ?, NULL, NULL)",
+                params![path, state, now_ms()],
+            )
+            .unwrap();
+        };
+        add("/dl/Album/01 One.flac", "existing");
+        assert!(local_file(&c, "@@x\\Music\\Album\\01 One.flac", 1000).unwrap().is_none(), "a file noted before the folder was chosen is not this download");
+        add("/dl/Album/01 One_639xxxxxxxx.flac", "importing");
+        let l = local_file(&c, "@@x\\Music\\Album\\01 One.flac", 1000).unwrap().expect("the new file");
+        assert_eq!((l.path.as_str(), l.state.as_str()), ("/dl/Album/01 One_639xxxxxxxx.flac", "importing"));
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn file(name: &str, size: i64) -> Value {
         obj! { "filename" => name, "size" => size, "bitDepth" => 16, "sampleRate" => 44100, "length" => 300 }

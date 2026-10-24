@@ -24,8 +24,10 @@ import type {
   OrganizeBy,
   OrganizeResult,
   Overview,
+  PlaylistItem,
   PlaylistKind,
   PlaylistNode,
+  PlaylistRun,
   PreparedPlayback,
   PreviewSession,
   QueryResult,
@@ -182,6 +184,20 @@ export class Client {
   slskdCancel = (username: string, id: string) => this.call<{ ok: boolean }>('slskd.cancel', { username, id });
   slskdClearFinished = () => this.call<{ ok: boolean }>('slskd.clearFinished');
   slskdReconnect = () => this.call<{ ok: boolean }>('slskd.reconnect');
+
+  // YouTube playlists downloaded from Soulseek, track by track.
+  playlistFetch = (source: string) => this.call<{ id: number }>('playlist.fetch', { source });
+  playlistList = () => this.call<{ runs: PlaylistRun[] }>('playlist.list');
+  playlistGet = (id: number) => this.call<PlaylistRun & { items: PlaylistItem[] }>('playlist.get', { id });
+  playlistDelete = (id: number) => this.call<{ ok: boolean }>('playlist.delete', { id });
+  playlistInclude = (id: number, itemIds: number[], included: boolean) => this.call<PlaylistRun>('playlist.include', { id, itemIds, included });
+  playlistStart = (id: number) => this.call<PlaylistRun>('playlist.start', { id });
+  playlistPause = (id: number) => this.call<PlaylistRun>('playlist.pause', { id });
+  playlistResume = (id: number) => this.call<PlaylistRun>('playlist.resume', { id });
+  playlistCancel = (id: number) => this.call<PlaylistRun>('playlist.cancel', { id });
+  playlistConfirm = (id: number) => this.call<PlaylistRun>('playlist.confirm', { id });
+  playlistChoose = (id: number, itemId: number, candidate: number) => this.call<PlaylistRun>('playlist.choose', { id, itemId, candidate });
+  playlistRetry = (id: number, itemIds?: number[]) => this.call<PlaylistRun>('playlist.retry', itemIds ? { id, itemIds } : { id });
 
   // slskd set up and run by SONORA (macOS).
   /** With `ensure`, SONORA's slskd is started first when it is not running. */

@@ -12,6 +12,7 @@ import { Dialog } from '../components/Dialog.tsx';
 import { plural } from '../lib/format.ts';
 import { formatKey } from '../lib/keys.ts';
 import { navigate } from '../lib/router.ts';
+import { organizeLeftOut } from '../lib/rules.ts';
 import { useCore } from '../state/core.tsx';
 import { useToast } from '../state/toasts.tsx';
 
@@ -51,7 +52,7 @@ export function OrganizeDialog({ target, onClose }: { target: OrganizeTarget | n
     setBusy(true);
     try {
       const r = await client.organize(by, { smart: whole && smart, trackIds: target?.ids ?? undefined, keyNotation: notation });
-      const left = r.without > 0 ? `${plural(r.without, 'track')} without a ${by === 'tempo' ? 'tempo' : by} stayed out.` : undefined;
+      const left = organizeLeftOut(r, by);
       toast({ tone: 'success', title: `Made ${plural(r.playlists, 'playlist')} of ${plural(r.tracks, 'track')}`, body: left });
       onClose();
       navigate({ view: 'playlist', id: r.folderId });

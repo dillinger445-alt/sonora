@@ -317,6 +317,8 @@ export interface Folder {
   analyzed: number;
   missing: number;
   failed: number;
+  /** Tracks that failed or whose file is missing, each counted once. */
+  problems: number;
   avgOverall: number | null;
   bytes: number;
   /** Files in it removed from the library, which rescans leave out. */
@@ -353,6 +355,147 @@ export interface Settings {
   previewAhead: number;
   /** Most disk space previews use at a time, in megabytes. */
   previewCacheMb: number;
+  /** How a YouTube playlist's tracks are picked from Soulseek results. */
+  playlistRules: PlaylistRules;
+}
+
+// ------------------------------------------------- YouTube playlists
+
+/** Lossless formats a playlist download may accept, by extension. */
+export type LosslessFormat = 'flac' | 'aiff' | 'wav' | 'alac' | 'wv' | 'ape';
+export type PlaylistQuality = 'cd' | 'highest' | 'any';
+export type PlaylistMode = 'automatic' | 'review';
+
+/** The rules a YouTube playlist download picks files by (Settings → Playlist download rules). */
+export interface PlaylistRules {
+  /** Accepted lossless formats, best first. */
+  formats: LosslessFormat[];
+  /** Lossy files too, after every lossless format, from `minBitrate` kbps up. */
+  lossy: boolean;
+  minBitrate: number;
+  /** Prefer 16-bit/44.1 kHz, prefer the highest resolution, or any. */
+  quality: PlaylistQuality;
+  maxBitDepth: number | null;
+  maxSampleRate: number | null;
+  /** Reject files far smaller than a lossless file of that length should be. */
+  sizeCheck: boolean;
+  maxSizeMb: number | null;
+  /** Only people with a free upload slot. */
+  freeSlot: boolean;
+  /** Otherwise, a queue of at most this many downloads. */
+  maxQueue: number;
+  /** Reported upload speed, in kB/s (0: any). */
+  minSpeedKbps: number;
+  /** Share of the title's words that must be in the file's name (0–1). */
+  minOverlap: number;
+  requireArtist: boolean;
+  /** Reject names that say remix, edit, live, radio or instrumental when the title does not. */
+  rejectVariants: boolean;
+  mode: PlaylistMode;
+  maxDownloads: number;
+  retryNotFound: boolean;
+  /** How long each search may run, 15–25 s. */
+  searchSeconds: number;
+}
+
+export type PlaylistRunState = 'fetching' | 'draft' | 'running' | 'paused' | 'review' | 'waiting' | 'finished' | 'cancelled' | 'failed';
+export type PlaylistItemStatus = 'pending' | 'searching' | 'found' | 'not_found' | 'downloading' | 'verifying' | 'done' | 'failed';
+
+export interface PlaylistCounts {
+  total: number;
+  included: number;
+  leftOut: number;
+  pending: number;
+  searching: number;
+  found: number;
+  notFound: number;
+  downloading: number;
+  verifying: number;
+  done: number;
+  failed: number;
+}
+
+/** One playlist being downloaded (`playlist.get`, `playlist.list`). */
+export interface PlaylistRun {
+  id: number;
+  createdAt: number;
+  updatedAt: number;
+  state: PlaylistRunState;
+  /** The link or id as pasted. */
+  source: string;
+  playlistId: string | null;
+  title: string | null;
+  /** The rules the run was started with. */
+  rules: PlaylistRules | null;
+  /** Review mode: the picks were confirmed. */
+  confirmed: boolean;
+  passes: number;
+  /** When tracks not found are looked for again. */
+  retryAt: number | null;
+  error: string | null;
+  finishedAt: number | null;
+  counts: PlaylistCounts;
+  /** The track being searched for. */
+  current: { itemId: number; title: string; variation: number | null } | null;
+  /** Only from `playlist.get`. */
+  items?: PlaylistItem[];
+}
+
+/** A file from the results, judged by the rules. */
+export interface PlaylistCandidate {
+  username: string;
+  filename: string;
+  name: string;
+  ext: string;
+  size: number;
+  bitDepth: number | null;
+  sampleRate: number | null;
+  bitRate: number | null;
+  length: number | null;
+  lossless: boolean;
+  freeSlot: boolean;
+  queue: number;
+  speed: number;
+  /** Share of the title's words in the file's name. */
+  overlap: number;
+  /** Why it is out, or null when it passed. */
+  rejected: string | null;
+}
+
+/** One video of the playlist and what became of it. */
+export interface PlaylistItem {
+  id: number;
+  runId: number;
+  seq: number;
+  videoId: string;
+  url: string;
+  ytTitle: string;
+  channel: string | null;
+  seconds: number | null;
+  artist: string | null;
+  title: string;
+  mix: string | null;
+  catalogue: string | null;
+  included: boolean;
+  /** Why it was left out at first (it can be put back). */
+  leftOut: string | null;
+  status: PlaylistItemStatus;
+  /** The search variation (1–5) that found it, or the last one tried. */
+  variation: number | null;
+  responses: number | null;
+  /** Ranked: the ones that passed first. */
+  candidates: PlaylistCandidate[];
+  /** Index of the pick in `candidates`. */
+  chosen: number | null;
+  attempts: number;
+  transfer: { id: string; username: string | null; filename: string | null; size: number | null; bytes: number } | null;
+  /** Fallbacks and other remarks. */
+  note: string | null;
+  error: string | null;
+  trackId: number | null;
+  /** The library track once it arrived. */
+  track: TrackRow | null;
+  updatedAt: number;
 }
 
 export interface CacheStats {
@@ -1011,7 +1154,10 @@ export interface OrganizeResult {
   playlists: number;
   tracks: number;
   without: number;
+  /** Groups (genres) past the most one folder holds, left out. */
   leftOut: number;
+  /** Tracks left out because their file is missing. */
+  missing: number;
 }
 
 // ---------------------------------------------------------------- USB
@@ -1133,6 +1279,11 @@ export interface CoreEvents {
   'slskd.setup': SetupRun | null;
   /** A preview's transfer or decoding moved on. */
   'preview.changed': PreviewSession;
+  /** A playlist run moved on (while a list is read: only `id`, `state` and `videos`). */
+  'playlist.changed': PlaylistRun | { id: number; state: 'fetching'; videos: number };
+  /** One track of a playlist run changed. */
+  'playlist.item': PlaylistItem;
+  'playlist.finished': PlaylistRun;
 }
 
 export type CoreEventName = keyof CoreEvents;

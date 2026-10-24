@@ -1,6 +1,6 @@
 [package]
 name = "sonora-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "SONORA core: SQLite library, indexing, background analysis jobs, duplicates, export and the JSON API."
 publish = false

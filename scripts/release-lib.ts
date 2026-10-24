@@ -13,10 +13,13 @@ export function declaredVersions(root: string): Record<string, string | null> {
   const conf = JSON.parse(readFileSync(join(root, 'src-tauri', 'tauri.conf.json'), 'utf8')) as { version?: string };
   const cargo = readFileSync(join(root, 'src-tauri', 'Cargo.toml'), 'utf8');
   const pkgSection = /\[package\][^[]*?\nversion\s*=\s*"([^"]+)"/.exec(cargo);
+  const workspace = readFileSync(join(root, 'Cargo.toml'), 'utf8');
+  const wsSection = /\[workspace\.package\][^[]*?\nversion\s*=\s*"([^"]+)"/.exec(workspace);
   return {
     'package.json': pkg.version ?? null,
     'src-tauri/Cargo.toml': pkgSection?.[1] ?? null,
     'src-tauri/tauri.conf.json': conf.version ?? null,
+    'Cargo.toml': wsSection?.[1] ?? null,
   };
 }
 

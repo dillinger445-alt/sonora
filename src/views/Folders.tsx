@@ -135,9 +135,9 @@ export function FoldersView() {
                 <td className="is-end num">{formatCount(f.tracks)}</td>
                 <td className="is-end num muted">{formatCount(f.analyzed)}</td>
                 <td className="is-end num">
-                  {f.failed + f.missing > 0 ? (
+                  {f.problems > 0 ? (
                     <span className="t-amber" data-tip={`${formatCount(f.failed)} failed, ${formatCount(f.missing)} missing`}>
-                      {formatCount(f.failed + f.missing)}
+                      {formatCount(f.problems)}
                     </span>
                   ) : (
                     <span className="faint">0</span>
@@ -150,7 +150,7 @@ export function FoldersView() {
                 <td className="faint">{f.lastScanAt ? formatRelative(f.lastScanAt) : 'Never'}</td>
                 <td className="cell-actions">
                   <IconButton size="sm" label="Rescan this folder" icon={LuRefreshCw} disabled={!f.available} onClick={() => imports.rescanFolders([f.id])} />
-                  <IconButton size="sm" label={revealLabel(bridge.platform)} icon={LuFolderSearch} disabled={!f.available} onClick={() => void bridge.reveal(f.path).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: String(e) }))} />
+                  <IconButton size="sm" label={revealLabel(bridge.platform)} icon={LuFolderSearch} disabled={!f.available} onClick={() => void bridge.reveal(f.path).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: e instanceof Error ? e.message : String(e) }))} />
                   <IconButton size="sm" label="Remove folder from library" icon={LuTrash2} tone="danger" onClick={() => void remove(f)} />
                 </td>
               </tr>

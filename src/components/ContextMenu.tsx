@@ -65,11 +65,14 @@ export function ContextMenu({ request, onClose }: { request: ContextMenuRequest 
     const onDown = (e: PointerEvent) => {
       if (!ref.current?.contains(e.target as Node)) close(false);
     };
-    const away = () => close(false);
+    // Closed without a click elsewhere (a resize, another window, a
+    // scroll): focus goes back where it was when the menu had it (B63).
+    const holdsFocus = () => !!ref.current?.contains(document.activeElement);
+    const away = () => close(holdsFocus());
     // Scrolling what is under it would leave it pointing at another row
     // (the menu's own scrolling is fine).
     const onScroll = (e: Event) => {
-      if (!ref.current?.contains(e.target as Node)) close(false);
+      if (!ref.current?.contains(e.target as Node)) close(holdsFocus());
     };
     document.addEventListener('pointerdown', onDown, true);
     window.addEventListener('resize', away);

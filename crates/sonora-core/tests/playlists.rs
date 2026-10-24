@@ -239,15 +239,19 @@ fn smart_playlists_sorting_into_playlists_and_arranging() {
     assert!(list.iter().any(|n| text(n, "name") == "10A (B minor)"));
 
     let r = call(&app, "playlists.organize", obj! { "by" => "tempo", "smart" => false, "trackIds" => vec![t[0], t[2], t[3], t[4]] });
-    assert_eq!((int(&r, "playlists"), int(&r, "tracks")), (3, 4));
+    assert_eq!((int(&r, "playlists"), int(&r, "tracks"), int(&r, "missing")), (3, 4, 0));
     let list = nodes(&app);
     let band = node(&list, "120–124 BPM");
     assert_eq!(text(band, "kind"), "playlist");
     assert_eq!(order(&app, int(band, "id")), vec![t[0]]);
     assert_eq!(order(&app, int(node(&list, "125–129 BPM"), "id")), vec![t[3], t[2]], "slowest first");
     assert_eq!(order(&app, int(node(&list, "100–104 BPM"), "id")), vec![t[4]]);
+    // B45: a track whose file is missing stays out, and the result says so.
+    app.db.write().execute("UPDATE tracks SET missing_since = 1 WHERE id = ?", sonora_core::params![t[4]]).unwrap();
     let again = call(&app, "playlists.organize", obj! { "by" => "tempo" });
     assert_eq!(text(node(&nodes(&app), "By tempo 2"), "kind"), "folder", "{}", again.to_string_compact());
+    assert_eq!(int(&again, "missing"), 1);
+    app.db.write().execute("UPDATE tracks SET missing_since = NULL WHERE id = ?", sonora_core::params![t[4]]).unwrap();
 
     // Arranging for mixing: better transitions, nothing saved until asked.
     let set = create(&app, "playlist", "Set", None);

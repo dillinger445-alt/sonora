@@ -31,10 +31,12 @@ so; nothing is published.
 
 ## Each release
 
-1. Set the new version in all three places (they must agree):
+1. Set the new version in all four places (they must agree):
    - `package.json` → `version`
    - `src-tauri/Cargo.toml` → `[package] version`
    - `src-tauri/tauri.conf.json` → `version`
+   - `Cargo.toml` → `[workspace.package] version` (the core, engine, CLI
+     and browser bridge)
 2. Add a section `## <version>` to [CHANGELOG.md](../CHANGELOG.md). It
    becomes the release notes on GitHub and in the app's update dialog, so
    write it for the people using SONORA.
@@ -55,7 +57,7 @@ so; nothing is published.
 
 The workflow then:
 
-1. checks that the tag matches the three versions and that CHANGELOG.md has
+1. checks that the tag matches the four versions and that CHANGELOG.md has
    a section for it, and opens a draft release;
 2. builds the three installers with FFmpeg, signs the update packages
    (`.app.tar.gz` for macOS, the NSIS `.exe` and the `.msi` for Windows) and

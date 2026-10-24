@@ -22,6 +22,8 @@ import {
 test('durations and spans', () => {
   assert.equal(formatDuration(0), '0:00');
   assert.equal(formatDuration(372.4), '6:12');
+  // B74: lengths round, as the lists show them (the player's clock floors).
+  assert.equal(formatDuration(359.6), '6:00');
   assert.equal(formatDuration(3723), '1:02:03');
   assert.equal(formatDuration(null), DASH);
   assert.equal(formatDuration(-1), DASH);
@@ -51,6 +53,12 @@ test('frequencies, rates and sizes', () => {
   assert.equal(formatBytes(999), '999 B');
   assert.equal(formatBytes(38_200_000), '38.2 MB');
   assert.equal(formatBytes(1_500_000_000), '1.5 GB');
+  // B56: rounded before the unit is chosen; fractions of a byte (speeds).
+  assert.equal(formatBytes(999_600), '1.0 MB');
+  assert.equal(formatBytes(999_700_000), '1.0 GB');
+  assert.equal(formatBytes(99_960), '100 kB');
+  assert.equal(formatBytes(523.4567891), '523 B');
+  assert.equal(formatBytes(999.6), '1.0 kB');
   assert.equal(formatCount(1204), '1,204');
 });
 
@@ -71,6 +79,13 @@ test('relative times, clocks and remaining time', () => {
   assert.equal(formatEta(4 * 60_000), 'about 4 min');
   assert.equal(formatEtaShort(30_000), '<1 min');
   assert.equal(formatEtaShort(65 * 60_000), '1 h 5 min');
+  // B75: never "60 min", "1 h 60 min" or "24 h ago".
+  assert.equal(formatEta(7_170_000), 'about 2 h');
+  assert.equal(formatEtaShort(7_170_000), '2 h');
+  assert.equal(formatEta(3_590_000), 'about 1 h');
+  assert.equal(formatEtaShort(3_590_000), '1 h');
+  assert.equal(formatRelative(now - 3_590_000, now), '1 h ago');
+  assert.equal(formatRelative(now - 85_000_000, now), 'yesterday');
   assert.equal(plural(1, 'track'), '1 track');
   assert.equal(plural(1204, 'track'), '1,204 tracks');
   assert.equal(plural(2, 'copy', 'copies'), '2 copies');

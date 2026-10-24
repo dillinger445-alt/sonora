@@ -211,6 +211,10 @@ fn like_prefix(root: &str, sep: char) -> String {
 pub fn import_paths(db: &Db, paths: &[PathBuf], opts: &ImportOptions, cancel: &AtomicBool) -> Result<ImportReport, StoreError> {
     let mut report = ImportReport::default();
     for root in paths {
+        // Cancelled: the folders not read yet are not added either (B71).
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
         if root.is_dir() {
             let folder_id = {
                 let c = db.write();
@@ -558,12 +562,21 @@ impl Filter {
         let mut p: Vec<SqlValue> = Vec::new();
         if let Some(s) = &self.search {
             for tok in s.split_whitespace().take(8) {
-                let like = format!("%{}%", escape_like(tok));
-                w.push(
-                    "(title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\' OR genre LIKE ? ESCAPE '\\' \
-                     OR dj_genre LIKE ? ESCAPE '\\')"
-                        .into(),
-                );
+                // LIKE ignores case for ASCII letters only; other words are
+                // compared in lower case on both sides ("ночь" finds "Ночь", B73).
+                let ascii = tok.is_ascii();
+                let like = format!("%{}%", escape_like(&if ascii { tok.to_string() } else { tok.to_lowercase() }));
+                let col = |c: &str| if ascii { c.to_string() } else { format!("sonora_fold({c})") };
+                w.push(format!(
+                    "({} LIKE ? ESCAPE '\\' OR {} LIKE ? ESCAPE '\\' OR {} LIKE ? ESCAPE '\\' OR {} LIKE ? ESCAPE '\\' OR {} LIKE ? ESCAPE '\\' \
+                     OR {} LIKE ? ESCAPE '\\')",
+                    col("title"),
+                    col("artist"),
+                    col("album"),
+                    col("file_name"),
+                    col("genre"),
+                    col("dj_genre")
+                ));
                 for _ in 0..6 {
                     p.push(SqlValue::Text(like.clone()));
                 }
@@ -905,7 +918,7 @@ pub fn scan_row_json(r: &crate::db::sqlite::Row) -> Value {
 pub fn folders(c: &Connection) -> Result<Value, StoreError> {
     let rows = c.query(
         "SELECT f.id, f.path, f.added_at, f.last_scan_at, f.available, COUNT(t.id), SUM(t.status = 'done'), SUM(t.missing_since IS NOT NULL), \
-         SUM(t.status = 'failed'), AVG(t.overall), SUM(t.size) \
+         SUM(t.status = 'failed'), AVG(t.overall), SUM(t.size), SUM(t.status = 'failed' OR t.missing_since IS NOT NULL) \
          FROM folders f LEFT JOIN tracks t ON t.folder_id = f.id GROUP BY f.id ORDER BY f.path",
         params![],
         |r| {
@@ -916,6 +929,8 @@ pub fn folders(c: &Connection) -> Result<Value, StoreError> {
                 "tracks" => r.i64(5), "analyzed" => r.opt_i64(6).unwrap_or(0), "missing" => r.opt_i64(7).unwrap_or(0),
                 "failed" => r.opt_i64(8).unwrap_or(0), "avgOverall" => r.opt_f64(9).map(|v| num(v, 1)).unwrap_or(Value::Null),
                 "bytes" => r.opt_i64(10).unwrap_or(0),
+                // A failed track whose file is gone too counts once (B66).
+                "problems" => r.opt_i64(11).unwrap_or(0),
             }
         },
     )?;
@@ -1024,5 +1039,27 @@ mod tests {
         assert!(p.contains(&SqlValue::Text("%100\\%%".into())));
         assert!(w.contains("missing_since IS NOT NULL"));
         assert!(sort_expr("overall; DROP TABLE tracks").is_none());
+    }
+
+    #[test]
+    fn search_ignores_case_in_every_script() {
+        // B73: SQLite's LIKE folds ASCII letters only, so "ночь" missed "Ночь".
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE tracks (title TEXT, artist TEXT, album TEXT, file_name TEXT, genre TEXT, dj_genre TEXT);
+             INSERT INTO tracks VALUES ('Électro Ночь', 'ΣΩΣ', NULL, 'a.wav', NULL, NULL), ('Night Drive', NULL, NULL, 'b.wav', 'House', NULL);",
+        )
+        .unwrap();
+        let count = |q: &str| {
+            let (w, p) = Filter { search: Some(q.into()), ..Default::default() }.sql();
+            c.query_row(&format!("SELECT COUNT(*) FROM tracks WHERE {w}"), &as_params(&p), |r| r.i64(0)).unwrap().unwrap()
+        };
+        assert_eq!(count("ночь"), 1);
+        assert_eq!(count("НОЧЬ"), 1);
+        assert_eq!(count("électro"), 1);
+        assert_eq!(count("σως"), 1, "final sigma, as written");
+        assert_eq!(count("night"), 1, "ASCII words as before");
+        assert_eq!(count("HOUSE"), 1);
+        assert_eq!(count("день"), 0);
     }
 }

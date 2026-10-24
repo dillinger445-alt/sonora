@@ -176,7 +176,8 @@ pub fn analyze_source(
         frames += n as u64;
         let secs = frames as f64 / fs as f64;
         if secs > ctl.max_duration_secs {
-            return Err(AnalysisError::TooLong { seconds: secs, limit: ctl.max_duration_secs });
+            let known = declared_duration.filter(|d| *d > secs);
+            return Err(AnalysisError::TooLong { seconds: known.unwrap_or(secs), limit: ctl.max_duration_secs, known: known.is_some() });
         }
         bytes.clear();
         for &x in &buf {

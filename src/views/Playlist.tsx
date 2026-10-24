@@ -34,9 +34,10 @@ import { Menu, type MenuAction, type MenuItem, type MenuSeparator } from '../com
 import { SetTimeline } from '../components/SetTimeline.tsx';
 import { focusIsLost } from '../lib/focus.ts';
 import { formatCount, formatDuration, formatSpan, plural } from '../lib/format.ts';
-import { formatBpm, formatKey } from '../lib/keys.ts';
+import { formatBpm } from '../lib/keys.ts';
 import { formatChange, MATCH_LABEL, mixStats, transition } from '../lib/mixing.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
+import { describeRules } from '../lib/rules.ts';
 import { useCore } from '../state/core.tsx';
 import { useDragStart, useDragState, useDropTarget, type DragPayload, type DropHint } from '../state/dnd.tsx';
 import { usePlayer } from '../state/player.tsx';
@@ -52,24 +53,6 @@ const ROW = 32;
 const OVERSCAN = 10;
 /** As `MAX_ARRANGE` in crates/sonora-core/src/playlists.rs. */
 const MAX_ARRANGE = 1000;
-
-/** "BPM 120–125, keys 8A 9A, House; by tempo". */
-function describeRules(n: PlaylistNode, notation: KeyNotation): string {
-  const r = n.rules;
-  if (!r) return '';
-  const f = r.filter;
-  const parts: string[] = [];
-  if (f.bpmMin != null || f.bpmMax != null) parts.push(`${f.bpmMin != null ? formatBpm(f.bpmMin) : '…'}–${f.bpmMax != null ? formatBpm(Math.floor(f.bpmMax)) : '…'} BPM${f.bpmHalfDouble ? ' (also half and double)' : ''}`);
-  if (f.keys?.length) parts.push(f.keys.length <= 4 ? f.keys.map((k) => formatKey(k, notation)).join(' ') : `${f.keys.length} keys`);
-  if (f.genres?.length) parts.push(f.genres.join(', '));
-  if (f.search) parts.push(`“${f.search}”`);
-  if (f.minScore != null) parts.push(`${f.scoreKind === 'dj' ? 'DJ score' : 'score'} ${f.minScore}+`);
-  if (f.formats?.length) parts.push(f.formats.join(', '));
-  const sort: Record<string, string> = { bpm: 'tempo', key: 'key', title: 'title', artist: 'artist', dj: 'DJ score', added: 'date added' };
-  const order = `by ${sort[r.sort.key] ?? r.sort.key}${r.sort.desc ? ', falling' : ''}`;
-  const limit = r.limit ? `, at most ${formatCount(r.limit)}` : '';
-  return `${parts.length ? parts.join('; ') : 'All tracks'}; ${order}${limit}`;
-}
 
 interface Col {
   id: string;
@@ -602,12 +585,24 @@ function TracksView({ node }: { node: PlaylistNode }) {
 
   const fetched = data.data?.rows;
   useEffect(() => setPending(null), [fetched]);
+  // Tracks that left the playlist (an edit moved them out of a smart one,
+  // say) leave the selection too (B40).
+  useEffect(() => {
+    if (!fetched) return;
+    const ids = new Set(fetched.map((r) => r.id));
+    setSelection((s) => {
+      const kept = [...s].filter((id) => ids.has(id));
+      return kept.length === s.size ? s : new Set(kept);
+    });
+  }, [fetched]);
   const rows = useMemo(() => {
     const base = fetched ?? [];
     if (!pending) return base;
     const by = new Map(base.map((r) => [r.id, r]));
     const out = pending.map((x) => by.get(x)).filter((r): r is TrackRow => r != null);
-    return out.length === base.length ? out : base;
+    // A new order (as many tracks) or tracks taken out (fewer, B95): shown
+    // at once. A pending order that no longer fits the tracks is dropped.
+    return out.length === pending.length && out.length <= base.length ? out : base;
   }, [fetched, pending]);
 
   // The cursor's track as loaded now (after an edit or a new analysis), or none once it leaves the playlist.
@@ -770,7 +765,7 @@ function TracksView({ node }: { node: PlaylistNode }) {
         subtitle={
           <span className="pl-view-meta">
             {where ? <span className="faint">{where} / </span> : null}
-            {node.kind === 'smart' ? <span>{describeRules(node, notation)}. </span> : null}
+            {node.kind === 'smart' ? <span>{describeRules(node.rules, notation)}. </span> : null}
             {meta.join(', ')}
           </span>
         }
