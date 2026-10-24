@@ -4,7 +4,7 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
-## Unreleased
+## 0.4.0
 
 ### New
 
@@ -41,6 +41,14 @@ written for the people using SONORA.
   changes that need the audio apply when a track is analysed again.
 
 ### Fixed
+
+- **Listening before you download works on a Mac.** A Soulseek preview
+  said "Enough has arrived for now" and stayed silent. The Mac's player
+  looks at the end of a file before it starts playing, and buffers a
+  while; SONORA kept it waiting for the end of the file, which had not
+  arrived, and stopped fetching because nothing played yet. Previews play
+  now, and say "Buffering…" while the player waits for audio. Windows was
+  not affected.
 
 SONORA was reviewed function by function before this version; every
 finding is listed, with how to reproduce it and the test that now guards

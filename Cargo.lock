@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "sonora-cli"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "sonora-engine",
  "sonora-json",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "sonora-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "sonora-engine",
  "sonora-json",
@@ -20,7 +20,7 @@ dependencies = [
 
 [[package]]
 name = "sonora-devserver"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "sonora-core",
  "sonora-json",
@@ -28,11 +28,11 @@ dependencies = [
 
 [[package]]
 name = "sonora-engine"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "sonora-json",
 ]
 
 [[package]]
 name = "sonora-json"
-version = "0.3.2"
+version = "0.4.0"
