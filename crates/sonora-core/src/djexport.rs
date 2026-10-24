@@ -143,22 +143,29 @@ fn rank(t: &TrackRow) -> (i64, i64, i64, i64) {
     )
 }
 
-/// Other copies of the same recording: identical files, identical audio, or
-/// a fingerprint match along the whole track. Alternate edits do not count.
-fn copies(c: &Connection, t: &TrackRow) -> Result<Vec<i64>, StoreError> {
-    let mut ids = c.query(
-        "SELECT id FROM tracks WHERE id != ? AND ((file_hash IS NOT NULL AND file_hash = ?) OR (audio_hash IS NOT NULL AND audio_hash = ?))",
-        params![t.id, t.file_hash.clone(), t.audio_hash.clone()],
-        |r| r.i64(0),
-    )?;
-    ids.extend(c.query(
-        "SELECT CASE WHEN a = ? THEN b ELSE a END FROM fp_matches WHERE kind = 'same_recording' AND (a = ? OR b = ?)",
-        params![t.id, t.id, t.id],
-        |r| r.i64(0),
-    )?);
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
+/// Finds other copies of the same recording: identical files, identical
+/// audio, or a fingerprint match along the whole track. Alternate edits do
+/// not count. Prepared once for a whole plan (thousands of tracks).
+struct Copies<'c> {
+    same: crate::db::sqlite::Statement<'c>,
+    matched: crate::db::sqlite::Statement<'c>,
+}
+
+impl<'c> Copies<'c> {
+    fn new(c: &'c Connection) -> Result<Self, StoreError> {
+        Ok(Copies {
+            same: c.prepare("SELECT id FROM tracks WHERE id != ? AND ((file_hash IS NOT NULL AND file_hash = ?) OR (audio_hash IS NOT NULL AND audio_hash = ?))")?,
+            matched: c.prepare("SELECT CASE WHEN a = ? THEN b ELSE a END FROM fp_matches WHERE kind = 'same_recording' AND (a = ? OR b = ?)")?,
+        })
+    }
+
+    fn of(&mut self, t: &TrackRow) -> Result<Vec<i64>, StoreError> {
+        let mut ids = self.same.query(params![t.id, t.file_hash.clone(), t.audio_hash.clone()], |r| r.i64(0))?;
+        ids.extend(self.matched.query(params![t.id, t.id, t.id], |r| r.i64(0))?);
+        ids.sort_unstable();
+        ids.dedup();
+        Ok(ids)
+    }
 }
 
 fn warnings_for(t: &TrackRow, source: &TrackRow, opts: &ExportOptions) -> Vec<Warning> {
@@ -216,12 +223,13 @@ pub fn plan(c: &Connection, ids: &[i64], opts: &ExportOptions) -> Result<Vec<Pla
     let mut items = Vec::new();
     let mut used_sources: HashSet<i64> = HashSet::new();
     let mut names: HashSet<String> = HashSet::new();
+    let mut copies = Copies::new(c)?;
     for id in ids {
         let Some(t) = by_id.get(id) else { continue };
         let mut source = t.clone();
-        if opts.best_copy {
-            let others = get_tracks(c, &copies(c, t)?)?;
-            for o in others {
+        let mine = if opts.best_copy { copies.of(t)? } else { Vec::new() };
+        if !mine.is_empty() {
+            for o in get_tracks(c, &mine)? {
                 if o.missing_since.is_none() && Path::new(&o.path).exists() && rank(&o) > rank(&source) {
                     source = o;
                 }
@@ -230,7 +238,14 @@ pub fn plan(c: &Connection, ids: &[i64], opts: &ExportOptions) -> Result<Vec<Pla
         let missing = source.missing_since.is_some() || !Path::new(&source.path).exists();
         let mut skip = if missing { Some("missing") } else { None };
         // Two selected copies of one recording are exported once.
-        let group: Vec<i64> = std::iter::once(source.id).chain(if opts.best_copy { copies(c, &source)? } else { Vec::new() }).collect();
+        let others = if !opts.best_copy {
+            Vec::new()
+        } else if source.id == t.id {
+            mine
+        } else {
+            copies.of(&source)?
+        };
+        let group: Vec<i64> = std::iter::once(source.id).chain(others).collect();
         if skip.is_none() && group.iter().any(|g| used_sources.contains(g)) {
             skip = Some("duplicate");
         }

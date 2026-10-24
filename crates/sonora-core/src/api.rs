@@ -385,7 +385,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                     v
                 },
             )?;
-            Ok(obj! { "total" => total, "rows" => Value::Array(rows) })
+            // Moved in, not copied: a scan's results run to thousands of rows.
+            Ok(sonora_json::obj_move! { "total" => total, "rows" => rows })
         }
 
         // ---------------------------------------------------- duplicates
@@ -458,7 +459,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let id = id_param(p, "id")?;
             let c = app.db.read();
             let rows = playlists::tracks(&c, id)?;
-            Ok(obj! { "id" => id, "rows" => Value::Array(rows.iter().map(ToJson::to_json).collect()), "total" => rows.len() })
+            // Built straight from the rows (a playlist can hold thousands).
+            Ok(obj! { "id" => id, "total" => rows.len(), "rows" => rows })
         }
         "playlists.addTracks" => {
             let id = id_param(p, "id")?;
@@ -552,7 +554,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let problem = crate::djexport::check_tools(&opts, &items, &tools).err();
             let exported = items.iter().filter(|i| i.skip.is_none()).count();
             Ok(obj! {
-                "items" => Value::Array(items.iter().map(ToJson::to_json).collect()),
+                "items" => items,
                 "exported" => exported,
                 "skipped" => items.len() - exported,
                 "betterCopies" => items.iter().filter(|i| i.skip.is_none() && i.source.id != i.track.id).count(),

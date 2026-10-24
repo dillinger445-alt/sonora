@@ -48,6 +48,7 @@ extern "C" {
     fn sqlite3_prepare_v2(db: *mut sqlite3, sql: *const c_char, n: c_int, stmt: *mut *mut sqlite3_stmt, tail: *mut *const c_char) -> c_int;
     fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> c_int;
     fn sqlite3_step(stmt: *mut sqlite3_stmt) -> c_int;
+    fn sqlite3_reset(stmt: *mut sqlite3_stmt) -> c_int;
     fn sqlite3_bind_int64(stmt: *mut sqlite3_stmt, idx: c_int, v: i64) -> c_int;
     fn sqlite3_bind_double(stmt: *mut sqlite3_stmt, idx: c_int, v: f64) -> c_int;
     fn sqlite3_bind_text(stmt: *mut sqlite3_stmt, idx: c_int, text: *const c_char, n: c_int, destructor: isize) -> c_int;
@@ -340,6 +341,10 @@ impl Drop for Statement<'_> {
 
 impl<'c> Statement<'c> {
     fn bind(&mut self, params: &[&dyn ToSql]) -> Result<()> {
+        // Ready to run again (a statement prepared once and used in a loop).
+        unsafe {
+            sqlite3_reset(self.stmt);
+        }
         let expected = unsafe { sqlite3_bind_parameter_count(self.stmt) } as usize;
         if expected != params.len() {
             return Err(DbError { code: 25, message: format!("statement expects {expected} parameters, got {}", params.len()) });
@@ -517,6 +522,22 @@ impl Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_statement_prepared_once_runs_again_with_new_values() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER); INSERT INTO t (n) VALUES (1), (2), (2), (3);").unwrap();
+        let mut s = c.prepare("SELECT COUNT(*) FROM t WHERE n = ?").unwrap();
+        let count = |s: &mut Statement, n: i64| s.query(params![n], |r| r.i64(0)).unwrap()[0];
+        assert_eq!(count(&mut s, 2), 2);
+        // Bound again after it ran to the end (it used to fail: not reset).
+        assert_eq!(count(&mut s, 3), 1);
+        assert_eq!(count(&mut s, 9), 0);
+        // And after stopping halfway through its rows.
+        let mut all = c.prepare("SELECT n FROM t WHERE n >= ? ORDER BY n").unwrap();
+        assert_eq!(all.query(params![2i64], |r| r.i64(0)).unwrap(), vec![2, 2, 3]);
+        assert_eq!(all.query(params![3i64], |r| r.i64(0)).unwrap(), vec![3]);
+    }
 
     #[test]
     fn roundtrip_types_and_transactions() {

@@ -1,7 +1,7 @@
 //! Data shapes exchanged with the interface.
 
 use crate::db::sqlite::Row;
-use sonora_json::{num, obj, opt_num, ToJson, Value};
+use sonora_json::{num, opt_num, ToJson, Value};
 
 /// Analysis state of a track. Presence on disk is tracked separately
 /// (`missing_since`), so a moved-away file keeps its results.
@@ -174,7 +174,9 @@ impl TrackRow {
 
 impl ToJson for TrackRow {
     fn to_json(&self) -> Value {
-        obj! {
+        // Sent by the thousand (library pages, playlists): built without
+        // looking for repeated keys.
+        sonora_json::obj_unique! {
             "id" => self.id,
             "path" => self.path,
             "folderId" => self.folder_id,

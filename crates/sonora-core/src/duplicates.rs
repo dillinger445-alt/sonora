@@ -301,9 +301,9 @@ pub fn list(c: &Connection) -> Result<Value, StoreError> {
         Some(t) => c.query_row("SELECT COUNT(*) FROM tracks WHERE status = 'done' AND analyzed_at > ?", params![t], |r| r.i64(0))?.unwrap_or(0),
         None => c.query_row("SELECT COUNT(*) FROM tracks WHERE status = 'done'", params![], |r| r.i64(0))?.unwrap_or(0),
     };
-    Ok(obj! {
-        "groups" => Value::Array(groups),
-        "fingerprintScannedAt" => scanned_at,
+    Ok(sonora_json::obj_move! {
+        "groups" => groups,
+        "fingerprintScannedAt" => scanned_at.to_json(),
         "analyzedSinceScan" => analyzed_since,
     })
 }

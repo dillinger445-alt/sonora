@@ -749,7 +749,8 @@ pub fn track_detail(c: &Connection, id: i64, with_visuals: bool) -> Result<Optio
     let analysis = c.query_row(sql, params![id], |r| (r.text(0), r.text(1), r.text(2), r.opt_text(3), r.i64(4)))?;
     let parse = |s: &str| sonora_json::parse(s).unwrap_or(Value::Null);
     let analysis_json = match analysis {
-        Some((facts, meas, assess, vis, created)) => obj! {
+        // Moved in, not copied (the visuals are most of a track's data).
+        Some((facts, meas, assess, vis, created)) => sonora_json::obj_move! {
             "facts" => parse(&facts),
             "measurements" => parse(&meas),
             "assessment" => parse(&assess),
@@ -765,7 +766,7 @@ pub fn track_detail(c: &Connection, id: i64, with_visuals: bool) -> Result<Optio
     )?;
     let exists = Path::new(&row.path).exists();
     let origin = crate::sources::origin_json(c, id)?;
-    Ok(Some(obj! { "track" => row, "analysis" => analysis_json, "history" => Value::Array(history), "fileExists" => exists, "origin" => origin }))
+    Ok(Some(sonora_json::obj_move! { "track" => row.to_json(), "analysis" => analysis_json, "history" => history, "fileExists" => exists, "origin" => origin }))
 }
 
 pub fn facets(c: &Connection) -> Result<Value, StoreError> {

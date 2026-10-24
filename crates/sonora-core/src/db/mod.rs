@@ -448,6 +448,10 @@ fn migrate(c: &Connection) -> Result<(), DbError> {
             Ok::<(), DbError>(())
         })?;
     }
+    // Indexes that only make lookups faster, added to any database without a
+    // new schema version (an earlier SONORA can still open it): matches are
+    // looked up from either side, for every track of an export plan.
+    c.execute_batch("CREATE INDEX IF NOT EXISTS idx_fp_matches_b ON fp_matches(b);")?;
     Ok(())
 }
 
@@ -491,5 +495,22 @@ mod tests {
         // No temporary files are left next to the backup.
         let names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(names.iter().all(|n| !n.ends_with(".sonora-partial")), "{names:?}");
+    }
+
+    #[test]
+    fn matches_are_found_from_either_side_by_index_without_a_new_schema() {
+        let dir = std::env::temp_dir().join(format!("sonora-db-idx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = Db::open(&dir.join("sonora.db")).unwrap();
+        let c = db.read();
+        let plan: Vec<String> = c
+            .query("EXPLAIN QUERY PLAN SELECT a FROM fp_matches WHERE kind = 'same_recording' AND (a = ? OR b = ?)", params![1i64, 1i64], |r| r.text(3))
+            .unwrap();
+        assert!(plan.iter().any(|p| p.contains("idx_fp_matches_b")), "{plan:?}");
+        let v = c.query_row("SELECT value FROM meta WHERE key = 'schema_version'", params![], |r| r.text(0)).unwrap();
+        assert_eq!(v.as_deref(), Some(SCHEMA_VERSION.to_string().as_str()));
+        drop(c);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

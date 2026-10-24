@@ -60,6 +60,12 @@ impl Map {
         self.entries.push((key.into(), value.into()));
     }
 
+    /// Whether no key appears twice (checked by [`obj_unique!`] in debug builds).
+    #[doc(hidden)]
+    pub fn keys_unique(&self) -> bool {
+        self.entries.iter().enumerate().all(|(i, (k, _))| self.entries[..i].iter().all(|(o, _)| o != k))
+    }
+
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
@@ -624,6 +630,37 @@ macro_rules! obj {
     }};
 }
 
+/// Like [`obj!`], for objects whose keys are distinct literals and that are
+/// built by the thousand (track rows): no search for a key already there,
+/// and one allocation for the entries.
+#[macro_export]
+macro_rules! obj_unique {
+    ($($k:expr => $v:expr),+ $(,)?) => {{
+        let mut m = $crate::Map::with_capacity($crate::count_keys!($($k),+));
+        $( m.push_unchecked($k, $crate::ToJson::to_json(&$v)); )+
+        debug_assert!(m.keys_unique(), "obj_unique! with a repeated key");
+        $crate::Value::Object(m)
+    }};
+}
+
+/// Like [`obj!`], but takes each value by move ([`Value::from`]) instead of
+/// converting a reference: a large array or object is moved in, not copied.
+#[macro_export]
+macro_rules! obj_move {
+    ($($k:expr => $v:expr),+ $(,)?) => {{
+        let mut m = $crate::Map::with_capacity($crate::count_keys!($($k),+));
+        $( m.insert($k, $crate::Value::from($v)); )+
+        $crate::Value::Object(m)
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! count_keys {
+    () => { 0usize };
+    ($h:expr $(, $t:expr)*) => { 1usize + $crate::count_keys!($($t),*) };
+}
+
 /// Builds a JSON array from expressions that implement [`ToJson`].
 #[macro_export]
 macro_rules! arr {
@@ -652,6 +689,15 @@ pub fn camel(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn obj_unique_builds_the_same_object_as_obj() {
+        let a = crate::obj_unique! { "id" => 7i64, "title" => "Night Drive", "bpm" => crate::num(124.004, 2), "flags" => vec!["clipping".to_string()] };
+        let b = crate::obj! { "id" => 7i64, "title" => "Night Drive", "bpm" => crate::num(124.004, 2), "flags" => vec!["clipping".to_string()] };
+        assert_eq!(a.to_string_compact(), b.to_string_compact());
+        assert_eq!(a.to_string_compact(), r#"{"id":7,"title":"Night Drive","bpm":124,"flags":["clipping"]}"#);
+    }
+
     use super::*;
 
     #[test]
