@@ -71,6 +71,26 @@ say why, and how the fix was checked instead.
     While the player waits for audio, the status says "Buffering…".
   - Test: `the_macos_player_is_answered_though_it_reads_the_end_first_and_buffers_before_it_plays` (crates/sonora-core/tests/preview.rs) replays AVFoundation's reads; it hung on the end of the file before the fix, on the reads past 20 s with only that part fixed, and got short answers without the last part.
 
+- [x] **B106. A YouTube playlist is read as empty: "0 tracks to look for", or "YouTube says: Unavailable videos are hidden".**
+  Reported by a listener after 0.4.0.
+  - Symptom: pasting the link of a playlist that plays on YouTube shows
+    "0 tracks to look for" with nothing left out; for a playlist with
+    deleted videos, the reading stops with "YouTube says: Unavailable
+    videos are hidden".
+  - Steps: fetch any playlist YouTube serves in its 2026 layout.
+  - Cause: in October 2026 YouTube began listing a playlist's videos as
+    `lockupViewModel` and its "load more" as `continuationItemViewModel`.
+    SONORA knew only `playlistVideoRenderer` and `continuationItemRenderer`,
+    so it found no videos and no way to load more. With a notice on the
+    page it reported the notice as the reason; without one it saved an
+    empty list as if it had been read.
+  - Fix: both layouts are read (id, title, channel, and the length from the
+    thumbnail's badge), notices are only information, and a page that
+    yields no videos says so instead of showing an empty list. Titles with
+    a box-drawing line between artist and title, or invisible direction
+    marks, are read too (both in the same playlist).
+  - Test: `the_2026_layout_is_read_and_its_notice_is_only_information` (crates/sonora-core/src/youtube.rs), on a page trimmed from a saved copy of the reported playlist.
+
 ## High
 
 - [x] **B03. A second playlist started while another works is left "running" with nothing running it.**

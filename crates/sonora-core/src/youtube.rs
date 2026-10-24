@@ -1,6 +1,11 @@
 //! The track list of a YouTube playlist, read the way a browser reads the
 //! playlist page: the `ytInitialData` JSON in its HTML, then the
 //! continuation requests the page itself makes until the list is complete.
+//! YouTube lists the videos in one of two layouts: `playlistVideoRenderer`
+//! with `continuationItemRenderer` (until 2026), or `lockupViewModel` with
+//! `continuationItemViewModel` (from October 2026; B106). Both are read.
+//! Its notices ("Unavailable videos are hidden") are information, not a
+//! reason to stop.
 //! No API key of the person's and no yt-dlp. Only public and unlisted
 //! playlists can be read; private lists (Liked videos, Watch Later, a
 //! playlist set to private) are told apart and said so.
@@ -198,6 +203,7 @@ fn text(v: Option<&Value>) -> String {
 
 enum Item<'a> {
     Video(&'a Value),
+    Lockup(&'a Value),
     Continuation(String),
 }
 
@@ -210,10 +216,17 @@ fn collect<'a>(v: &'a Value, out: &mut Vec<Item<'a>>) {
                 out.push(Item::Video(r));
                 return;
             }
-            if let Some(r) = map.get("continuationItemRenderer") {
-                let token = r.get("continuationEndpoint").and_then(|e| e.get("continuationCommand")).and_then(|c| c.get("token")).and_then(Value::as_str);
-                if let Some(t) = token.filter(|t| !t.is_empty()) {
-                    out.push(Item::Continuation(t.to_string()));
+            if let Some(r) = map.get("lockupViewModel") {
+                // Videos only: a playlist's own list holds nothing else.
+                let kind = r.get("contentType").and_then(Value::as_str).unwrap_or("LOCKUP_CONTENT_TYPE_VIDEO");
+                if kind == "LOCKUP_CONTENT_TYPE_VIDEO" {
+                    out.push(Item::Lockup(r));
+                }
+                return;
+            }
+            if let Some(r) = map.get("continuationItemRenderer").or_else(|| map.get("continuationItemViewModel")) {
+                if let Some(t) = continuation_token(r) {
+                    out.push(Item::Continuation(t));
                 }
                 return;
             }
@@ -228,6 +241,58 @@ fn collect<'a>(v: &'a Value, out: &mut Vec<Item<'a>>) {
         }
         _ => {}
     }
+}
+
+/// The token of a "load more" item, wherever its layout puts it
+/// (`continuationEndpoint.continuationCommand.token`, or
+/// `continuationCommand.innertubeCommand.continuationCommand.token`).
+fn continuation_token(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(map) => {
+            if let Some(t) = map.get("continuationCommand").and_then(|c| c.get("token")).and_then(Value::as_str).filter(|t| !t.is_empty()) {
+                return Some(t.to_string());
+            }
+            map.iter().find_map(|(_, child)| continuation_token(child))
+        }
+        Value::Array(a) => a.iter().find_map(continuation_token),
+        _ => None,
+    }
+}
+
+/// The first thumbnail badge that reads as a clock ("5:59"): a lockup's length.
+fn badge_clock(v: &Value) -> Option<i64> {
+    match v {
+        Value::Object(map) => {
+            if let Some(b) = map.get("thumbnailBadgeViewModel") {
+                if let Some(s) = parse_clock(&text(b.get("text"))) {
+                    return Some(s);
+                }
+            }
+            map.iter().find_map(|(_, child)| badge_clock(child))
+        }
+        Value::Array(a) => a.iter().find_map(badge_clock),
+        _ => None,
+    }
+}
+
+/// A video in the 2026 layout: id, title, the channel (the first metadata
+/// row), and the length from the thumbnail's badge.
+fn lockup(r: &Value) -> Option<Video> {
+    let id = r.get("contentId").and_then(Value::as_str).filter(|s| !s.is_empty())?.to_string();
+    let meta = r.get("metadata").and_then(|m| m.get("lockupMetadataViewModel"));
+    let title = text(meta.and_then(|m| m.get("title")));
+    let rows = meta.and_then(|m| m.get("metadata")).and_then(|m| m.get("contentMetadataViewModel")).and_then(|m| m.get("metadataRows")).and_then(Value::as_array);
+    let channel = rows
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("metadataParts"))
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.first())
+        .map(|part| text(part.get("text")))
+        .unwrap_or_default();
+    let seconds = r.get("contentImage").and_then(badge_clock);
+    let lower = title.trim().to_lowercase();
+    let playable = lower != "[deleted video]" && lower != "[private video]";
+    Some(Video { id, title, channel, seconds, playable })
 }
 
 fn video(r: &Value) -> Option<Video> {
@@ -263,6 +328,11 @@ pub fn parse_page(data: &Value) -> Page {
         match item {
             Item::Video(r) => {
                 if let Some(v) = video(r) {
+                    page.videos.push(v);
+                }
+            }
+            Item::Lockup(r) => {
+                if let Some(v) = lockup(r) {
                     page.videos.push(v);
                 }
             }
@@ -349,7 +419,9 @@ pub fn fetch(http: &dyn Http, base: &str, id: &str, cancel: &AtomicBool, progres
     }
     let page = parse_html(&r.body)?;
     if page.videos.is_empty() && page.continuation.is_none() {
-        if let Some(alert) = page.alert {
+        // A notice that the list cannot be shown says why; any other
+        // ("Unavailable videos are hidden") is only information.
+        if let Some(alert) = &page.alert {
             let lower = alert.to_lowercase();
             if lower.contains("does not exist") || lower.contains("not exist") {
                 return Err(YoutubeError::NotFound);
@@ -357,7 +429,6 @@ pub fn fetch(http: &dyn Http, base: &str, id: &str, cancel: &AtomicBool, progres
             if lower.contains("private") {
                 return Err(YoutubeError::NotPublic("This playlist is private. On YouTube, set it to public or unlisted (Edit → Visibility), then try again.".into()));
             }
-            return Err(YoutubeError::NotPublic(format!("YouTube says: {alert}")));
         }
     }
     let title = page.title.clone().unwrap_or_else(|| "YouTube playlist".into());
@@ -398,6 +469,13 @@ pub fn fetch(http: &dyn Http, base: &str, id: &str, cancel: &AtomicBool, progres
         videos.extend(more.videos);
         token = more.continuation;
         progress(videos.len());
+    }
+    if videos.is_empty() {
+        // Never an empty list that looks read: say so (B106).
+        let notice = page.alert.map(|a| format!(" YouTube's notice on it: \"{a}\".")).unwrap_or_default();
+        return Err(YoutubeError::Unreadable(format!(
+            "no videos were found in it. If the playlist has videos on YouTube, YouTube may have changed its page in a way this version of SONORA cannot read yet.{notice}"
+        )));
     }
     if videos.len() > MAX_VIDEOS {
         videos.truncate(MAX_VIDEOS);
@@ -518,7 +596,8 @@ fn classify(inner: &str, square: bool) -> Group {
     Group::Keep
 }
 
-/// Splits on " - ", " – ", " — " and on a dash without spaces.
+/// Splits on " - ", " – ", " — " and on a dash without spaces; other dashes
+/// and lines ("─", "−", "―") only with a space on each side.
 fn segments(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -526,7 +605,7 @@ fn segments(s: &str) -> Vec<String> {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        let spaced_hyphen = c == '-' && i > 0 && chars[i - 1] == ' ' && i + 1 < chars.len() && chars[i + 1] == ' ';
+        let spaced_hyphen = matches!(c, '-' | '─' | '━' | '−' | '‒' | '―' | '‐') && i > 0 && chars[i - 1] == ' ' && i + 1 < chars.len() && chars[i + 1] == ' ';
         if c == '–' || c == '—' || spaced_hyphen {
             out.push(std::mem::take(&mut cur));
         } else {
@@ -582,7 +661,9 @@ fn tidy(s: &str) -> String {
 /// for "Artist - Topic" channels when the title has none.
 pub fn parse_title(raw: &str, channel: &str) -> Parsed {
     let mut p = Parsed::default();
-    let mut t = raw.trim().to_string();
+    // Invisible direction marks and zero-width characters ("Funk Function! \u{200e}").
+    let mut t: String = raw.chars().filter(|c| !matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{feff}')).collect();
+    t = t.trim().to_string();
     let lower = t.to_lowercase();
     p.shorts = lower.contains("#shorts") || lower.contains("#short ");
     // "PREMIERE: …", "Premiere | …"
@@ -775,6 +856,9 @@ mod tests {
     const PLAYLIST: &str = include_str!("../tests/fixtures/youtube/playlist.html");
     const CONTINUATION: &str = include_str!("../tests/fixtures/youtube/continuation.json");
     const PRIVATE: &str = include_str!("../tests/fixtures/youtube/private.html");
+    /// The same kind of page in YouTube's 2026 layout (B106).
+    const LOCKUPS: &str = include_str!("../tests/fixtures/youtube/playlist-lockups.html");
+    const LOCKUPS_MORE: &str = include_str!("../tests/fixtures/youtube/continuation-lockups.json");
 
     #[test]
     fn playlist_ids_come_from_links_and_private_lists_are_refused() {
@@ -817,12 +901,46 @@ mod tests {
         assert_eq!(parse_clock("7:12"), Some(432));
     }
 
+    #[test]
+    fn the_2026_layout_is_read_and_its_notice_is_only_information() {
+        // B106: YouTube now lists a playlist's videos as lockupViewModel and
+        // its "load more" as continuationItemViewModel. SONORA found no
+        // videos in such a page: with a notice it reported the notice
+        // ("Unavailable videos are hidden") as the error, without one it
+        // showed "0 tracks to look for".
+        let page = parse_html(LOCKUPS).unwrap();
+        assert_eq!(page.title.as_deref(), Some("ableton"));
+        assert_eq!(page.alert.as_deref(), Some("Unavailable videos are hidden"));
+        assert_eq!(page.videos.len(), 5);
+        let v = &page.videos[0];
+        assert_eq!((v.id.as_str(), v.title.as_str(), v.channel.as_str(), v.seconds, v.playable), ("oUpmoLOKO88", "Premiere: Alarico - Iruka [PI06]", "Soul Of Techno", Some(359), true));
+        assert!(page.videos.iter().all(|v| v.seconds.is_some_and(|s| s > 0) && !v.channel.is_empty()), "{:?}", page.videos);
+        assert_eq!(page.continuation.as_deref(), Some("4qmFsgKBARIk...fixture-lockup-continuation-1"));
+        let more = parse_continuation(LOCKUPS_MORE).unwrap();
+        assert_eq!((more.videos.len(), more.continuation), (3, None));
+
+        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: LOCKUPS, more: LOCKUPS_MORE, token: "fixture-lockup-continuation-1" };
+        let list = fetch(&tube, "https://tube.test", "PLoRT7YHMn6lwFYmqGuJzMrPXYg9od-om3", &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert_eq!(list.videos.len(), 8, "the page and its continuation");
+        assert_eq!(list.videos[5].title, "Zisko - Ritmo Dub [MR010D]");
+
+        // A page with no videos at all is said so, never shown as an empty list.
+        let empty = r#"<html><script>var ytInitialData = {"alerts":[{"alertWithButtonRenderer":{"type":"INFO","text":{"simpleText":"Unavailable videos are hidden"}}}],"metadata":{"playlistMetadataRenderer":{"title":"x"}}};</script></html>"#;
+        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: empty, more: LOCKUPS_MORE, token: "-" };
+        let e = fetch(&tube, "https://tube.test", "PLx", &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+        assert_eq!(e.code(), "playlist_unreadable");
+        assert!(e.to_string().contains("no videos were found") && e.to_string().contains("Unavailable videos are hidden"), "{e}");
+    }
+
     /// A stand-in YouTube that serves the fixtures and records what was asked.
     struct FakeTube {
         requests: Mutex<Vec<Request>>,
         /// The status the playlist page answers with.
         status: u16,
         html: &'static str,
+        /// The continuation's answer, and the token it must be asked with.
+        more: &'static str,
+        token: &'static str,
     }
 
     impl Http for FakeTube {
@@ -833,8 +951,8 @@ mod tests {
             }
             if req.url.contains("/youtubei/v1/browse") {
                 let body = req.body.as_deref().unwrap_or("");
-                assert!(body.contains("fixture-continuation-token-1"), "{body}");
-                return Ok(Response { status: 200, body: CONTINUATION.to_string() });
+                assert!(body.contains(self.token), "{body}");
+                return Ok(Response { status: 200, body: self.more.to_string() });
             }
             Ok(Response { status: 404, body: String::new() })
         }
@@ -842,7 +960,7 @@ mod tests {
 
     #[test]
     fn the_whole_list_is_fetched_through_continuations() {
-        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: PLAYLIST };
+        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: PLAYLIST, more: CONTINUATION, token: "fixture-continuation-token-1" };
         let cancel = AtomicBool::new(false);
         let mut seen = Vec::new();
         let list = fetch(&tube, "https://tube.test", "PLfixtureLateNight", &cancel, &mut |n| seen.push(n)).unwrap();
@@ -870,15 +988,15 @@ mod tests {
 
     #[test]
     fn private_and_missing_playlists_are_told_apart() {
-        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: PRIVATE };
+        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: PRIVATE, more: CONTINUATION, token: "fixture-continuation-token-1" };
         let cancel = AtomicBool::new(false);
         let e = fetch(&tube, "https://tube.test", "PLprivate0000", &cancel, &mut |_| {}).unwrap_err();
         assert!(matches!(&e, YoutubeError::NotPublic(m) if m.contains("private") && m.contains("unlisted")), "{e:?}");
         assert_eq!(e.code(), "playlist_private");
-        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 404, html: "" };
+        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 404, html: "", more: CONTINUATION, token: "-" };
         assert_eq!(fetch(&tube, "https://tube.test", "PLgone00000000", &cancel, &mut |_| {}).unwrap_err(), YoutubeError::NotFound);
         let stopped = AtomicBool::new(true);
-        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: PLAYLIST };
+        let tube = FakeTube { requests: Mutex::new(Vec::new()), status: 200, html: PLAYLIST, more: CONTINUATION, token: "fixture-continuation-token-1" };
         assert_eq!(fetch(&tube, "https://tube.test", "PLfixtureLateNight", &stopped, &mut |_| {}).unwrap_err(), YoutubeError::Cancelled);
     }
 
@@ -892,6 +1010,9 @@ mod tests {
         let s = |x: &str| Some(x.to_string());
         assert_eq!(parsed("Kerri Chandler - Rain (Original Mix)", "Kerri Chandler - Topic"), (s("Kerri Chandler"), "Rain".into(), s("Original Mix")));
         assert_eq!(parsed("PREMIERE: Octave One – Blackwater [430 West] (Official Video)", "Some Channel"), (s("Octave One"), "Blackwater".into(), None));
+        // From a 2026 playlist: a box-drawing line between artist and title, an invisible mark.
+        assert_eq!(parsed("Attaboy ─ In Too Deep", "x"), (s("Attaboy"), "In Too Deep".into(), None));
+        assert_eq!(parsed("Funk Function! \u{200e} - Empress Zero", "x"), (s("Funk Function!"), "Empress Zero".into(), None));
         let p = parse_title("Moodymann — Shades Of Jae (1998)", "deephousevault");
         assert_eq!((p.artist.as_deref(), p.title.as_str(), p.year), (Some("Moodymann"), "Shades Of Jae", Some(1998)));
         let p = parse_title("A1. Theo Parrish - Falling Up (Carl Craig Remix) [SOUND SIGNATURE] #deephouse #detroit", "RecordDigger");
