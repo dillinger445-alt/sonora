@@ -1032,6 +1032,29 @@
   background: var(--c-red-dim);
 }
 
+/* Results kept from an earlier analysis: why the latest one is not shown. */
+.earlier-results {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 10px 14px;
+  border: 1px dashed var(--c-line-strong);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.earlier-results p {
+  flex: 1;
+  margin: 0;
+}
+
+.earlier-results.is-failed {
+  border-color: var(--c-red-line);
+  background: var(--c-red-dim);
+}
+
 .track-history li {
   display: grid;
   grid-template-columns: 170px 200px minmax(0, 1fr);

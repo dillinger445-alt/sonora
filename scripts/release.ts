@@ -4,7 +4,7 @@
  *
  *   node scripts/release.ts check <tag>
  *       Fails unless <tag> is v<version> for the version in package.json,
- *       src-tauri/Cargo.toml and src-tauri/tauri.conf.json.
+ *       src-tauri/Cargo.toml, src-tauri/tauri.conf.json and Cargo.toml.
  *   node scripts/release.ts notes <version>
  *       Prints that version's section of CHANGELOG.md.
  *   node scripts/release.ts manifest <dir> <tag> <owner/repo> <notes-file> [<asset-list>]

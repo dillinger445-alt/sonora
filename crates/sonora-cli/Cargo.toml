@@ -1,6 +1,6 @@
 [package]
 name = "sonora-cli"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Command-line front end for the SONORA analysis engine (analysis, measurement tables, fixture generation)."
 publish = false

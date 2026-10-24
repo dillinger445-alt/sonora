@@ -1017,7 +1017,9 @@ fn local_files(c: &Connection, items: &[Transfer]) -> Result<HashMap<String, Loc
         let mut p: Vec<SqlValue> = vec![SqlValue::Text(crate::sources::SOULSEEK.to_string())];
         p.extend(chunk.iter().map(|&s| SqlValue::Int(s)));
         let rows = c.query(
-            &format!("SELECT path, size, state, track_id, error FROM source_files WHERE source = ? AND size IN ({marks}) ORDER BY found_at DESC"),
+            // Files noted as already in the folder when it was chosen are not
+            // downloads SONORA saw arrive (B20).
+            &format!("SELECT path, size, state, track_id, error FROM source_files WHERE source = ? AND state != 'existing' AND size IN ({marks}) ORDER BY found_at DESC"),
             &as_params(&p),
             |r| (r.i64(1), LocalFile { path: r.text(0), state: r.text(2), track_id: r.opt_i64(3), error: r.opt_text(4) }),
         )?;
@@ -1047,6 +1049,33 @@ fn local_files(c: &Connection, items: &[Transfer]) -> Result<HashMap<String, Loc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_download_is_not_matched_to_a_file_that_was_there_before() {
+        use crate::db::now_ms;
+        use crate::params;
+        // B20: a folder chosen with slskd's earlier downloads in it notes
+        // them as 'existing'; a download with the same name and size is
+        // still a new file, not "added, then removed".
+        let dir = std::env::temp_dir().join(format!("sonora-slskd-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = crate::db::Db::open(&dir.join("t.db")).unwrap();
+        let c = db.write();
+        let add = |path: &str, state: &str| {
+            c.execute(
+                "INSERT INTO source_files (path, source, size, mtime, state, track_id, found_at, decided_at, error) VALUES (?, 'soulseek', 1000, 0, ?, NULL, ?, NULL, NULL)",
+                params![path, state, now_ms()],
+            )
+            .unwrap();
+        };
+        add("/dl/Album/01 One.flac", "existing");
+        assert!(local_file(&c, "@@x\\Music\\Album\\01 One.flac", 1000).unwrap().is_none(), "a file noted before the folder was chosen is not this download");
+        add("/dl/Album/01 One_639xxxxxxxx.flac", "importing");
+        let l = local_file(&c, "@@x\\Music\\Album\\01 One.flac", 1000).unwrap().expect("the new file");
+        assert_eq!((l.path.as_str(), l.state.as_str()), ("/dl/Album/01 One_639xxxxxxxx.flac", "importing"));
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn file(name: &str, size: i64) -> Value {
         obj! { "filename" => name, "size" => size, "bitDepth" => 16, "sampleRate" => 44100, "length" => 300 }

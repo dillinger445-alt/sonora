@@ -124,6 +124,8 @@ export function Menu({ trigger, items, align = 'start', label, footer }: MenuPro
     let next: number;
     if (dir === 'first') next = 0;
     else if (dir === 'last') next = focusable.length - 1;
+    // Nothing highlighted yet (opened with the mouse): ↓ goes to the first, ↑ to the last (B64).
+    else if (idx < 0) next = dir === 1 ? 0 : focusable.length - 1;
     else next = (idx + dir + focusable.length) % focusable.length;
     setActive(focusable[next]?.i ?? -1);
   };

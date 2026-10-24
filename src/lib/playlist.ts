@@ -45,7 +45,17 @@ export function quality(c: PlaylistCandidate): string {
 
 export function pickOf(i: PlaylistItem): PlaylistCandidate | null {
   const n = i.chosen ?? 0;
-  return i.candidates[n] ?? null;
+  const c = i.candidates[n] ?? null;
+  // A file the rules turned down is no pick (B53).
+  return c && c.rejected == null ? c : null;
+}
+
+/** Whether a video can be put in or left out now: in a draft, and in a run
+ *  that will still search it (B17); tracks not found or failed can be
+ *  looked for again. */
+export function canInclude(i: PlaylistItem, runState: PlaylistRun['state']): boolean {
+  if (runState === 'draft' || i.status === 'not_found' || i.status === 'failed') return true;
+  return i.status === 'pending' && (runState === 'running' || runState === 'paused' || runState === 'waiting');
 }
 
 /** How a track is going, in words. */

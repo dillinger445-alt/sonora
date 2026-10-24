@@ -13,7 +13,9 @@ export default defineConfig({
   expect: { timeout: 20_000 },
   fullyParallel: false,
   workers: 1,
-  retries: process.env.CI ? 1 : 0,
+  // The suite is serial and shares one library: a retry would rerun it from
+  // the first test, which needs an empty library, and so always fail (B98).
+  retries: 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list']],
   use: {
     baseURL: `http://127.0.0.1:${BRIDGE_PORT}`,

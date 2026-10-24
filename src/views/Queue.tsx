@@ -157,15 +157,35 @@ function Summary({ summary, record }: { summary: ScanSummary | null | undefined;
   );
 }
 
+/** Results shown at a time. */
+const RESULTS_PAGE = 500;
+
 export function ScanResults({ scanId, live }: { scanId: number; live: boolean }) {
   const { client } = useCore();
   const idBase = useId();
   const [filter, setFilter] = useState<ScanItemFilter>('all');
-  const items = useResource(() => client.scanItems(scanId, filter, 0, 500), [scanId, filter], {
-    // A removed track leaves the results in either case.
-    events: live ? ['scan.item', 'scan.finished', 'library.changed'] : ['library.changed'],
-    throttleMs: 900,
-  });
+  // How many results to show; Analysis history can show them all (B28).
+  const [shown, setShown] = useState({ key: '', limit: RESULTS_PAGE });
+  const viewKey = `${scanId}:${filter}`;
+  const limit = shown.key === viewKey ? shown.limit : RESULTS_PAGE;
+  const items = useResource(
+    async () => {
+      const first = await client.scanItems(scanId, filter, 0, Math.min(limit, 2000));
+      let rows = first.rows;
+      while (rows.length < Math.min(limit, first.total)) {
+        const next = await client.scanItems(scanId, filter, rows.length, Math.min(2000, limit - rows.length));
+        if (next.rows.length === 0) break;
+        rows = rows.concat(next.rows);
+      }
+      return { ...first, rows };
+    },
+    [scanId, filter, limit],
+    {
+      // A removed track leaves the results in either case.
+      events: live ? ['scan.item', 'scan.finished', 'library.changed'] : ['library.changed'],
+      throttleMs: 900,
+    },
+  );
   const rows = items.data?.rows ?? [];
   return (
     <Section
@@ -240,13 +260,22 @@ export function ScanResults({ scanId, live }: { scanId: number; live: boolean })
             </tbody>
           </table>
           {items.data && items.data.total > rows.length ? (
-            <p className="faint results-more">
-              Showing the latest {formatCount(rows.length)} of {formatCount(items.data.total)}. The full list is in{' '}
-              <a className="link" href={formatRoute({ view: 'history', scanId })}>
-                Analysis history
-              </a>
-              .
-            </p>
+            live ? (
+              <p className="faint results-more">
+                Showing the latest {formatCount(rows.length)} of {formatCount(items.data.total)}. The full list is in{' '}
+                <a className="link" href={formatRoute({ view: 'history', scanId })}>
+                  Analysis history
+                </a>
+                .
+              </p>
+            ) : (
+              <p className="faint results-more">
+                Showing the latest {formatCount(rows.length)} of {formatCount(items.data.total)}.{' '}
+                <button type="button" className="link" disabled={items.loading} onClick={() => setShown({ key: viewKey, limit: limit + RESULTS_PAGE })}>
+                  Show {formatCount(Math.min(RESULTS_PAGE, items.data.total - rows.length))} more
+                </button>
+              </p>
+            )
           ) : null}
         </div>
       )}

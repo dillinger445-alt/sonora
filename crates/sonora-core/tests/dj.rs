@@ -94,6 +94,29 @@ fn write(p: &Path, opts: SynthOptions, tags: Option<TagSet>) {
     w.finish().unwrap();
 }
 
+/// An ID3v2.3 tag with a title and a free-text date, written as given
+/// (SONORA's own writer leaves out a date that is not a year).
+fn id3_raw(title: &str, date: &str) -> Vec<u8> {
+    let frame = |id: &[u8; 4], text: &str| {
+        let mut data = vec![1u8, 0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            data.extend_from_slice(&u.to_le_bytes());
+        }
+        let mut f = id.to_vec();
+        f.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        f.extend_from_slice(&[0, 0]);
+        f.extend(data);
+        f
+    };
+    let mut body = frame(b"TIT2", title);
+    body.extend(frame(b"TYER", date));
+    let n = body.len() as u32;
+    let mut tag = b"ID3\x03\x00\x00".to_vec();
+    tag.extend_from_slice(&[(n >> 21 & 0x7F) as u8, (n >> 14 & 0x7F) as u8, (n >> 7 & 0x7F) as u8, (n & 0x7F) as u8]);
+    tag.extend(body);
+    tag
+}
+
 fn synth(bpm: f64, transpose: f64, major: bool) -> SynthOptions {
     SynthOptions { seconds: 30.0, bpm, transpose, major, variant: if major { 1 } else { 0 }, ..Default::default() }
 }
@@ -236,7 +259,14 @@ fn hash(p: &Path) -> String {
 fn dj_export_writes_tagged_copies_and_a_rekordbox_playlist() {
     let e = env("export");
     write(&e.music.join("Groove.wav"), synth(124.0, 0.0, false), Some(TagSet { title: Some("Groove".into()), artist: Some("Ana Ruiz".into()), year: Some("2023".into()), ..Default::default() }));
-    write(&e.music.join("Sunrise.wav"), synth(122.0, 3.0, true), Some(TagSet { title: Some("Sunrise".into()), artist: Some("Ana Ruiz".into()), ..Default::default() }));
+    // A date that does not start with a year (B02: it crashed the export).
+    {
+        let opts = synth(122.0, 3.0, true);
+        let audio = quantize16(&render(&opts));
+        let mut w = PcmWriter::create(&e.music.join("Sunrise.wav"), PcmContainer::Wav, opts.sample_rate, 2, 16, Some(id3_raw("Sunrise", "二〇一九年")), None).unwrap();
+        w.write(&audio).unwrap();
+        w.finish().unwrap();
+    }
     let originals: Vec<(PathBuf, String)> = ["Groove.wav", "Sunrise.wav"].iter().map(|n| (e.music.join(n), hash(&e.music.join(n)))).collect();
     let app = open(&e);
     import(&app, &e.music);
@@ -273,6 +303,8 @@ fn dj_export_writes_tagged_copies_and_a_rekordbox_playlist() {
     assert_eq!(facts.tags.bpm, Some(124.0));
     assert_eq!(facts.tags.artist.as_deref(), Some("Ana Ruiz"));
     assert_eq!(facts.tags.date.as_deref(), Some("2023"));
+    let sunrise = sonora_engine::meta::probe_file(&e.out.join("Sunrise.aiff"), &sonora_engine::decode::ToolPaths::none()).unwrap();
+    assert_eq!((sunrise.tags.title.as_deref(), sunrise.tags.date.as_deref()), (Some("Sunrise"), None), "no year to write, and nothing cut");
     let xml_path = PathBuf::from(s(&report, "rekordboxXml").unwrap());
     let xml = std::fs::read_to_string(&xml_path).unwrap();
     assert!(xml.contains("<NODE Name=\"Friday set\""), "{xml}");
@@ -347,6 +379,25 @@ fn dj_export_prefers_the_best_copy_and_encodes_mp3() {
     assert_eq!(written.len(), 2, "{}", report.to_string_compact());
     let methods: Vec<&str> = written.iter().map(|w| s(w, "method").unwrap()).collect();
     assert!(methods.contains(&"copied") && methods.contains(&"encoded"), "{methods:?}");
+    // rekordbox.xml says how long each one is and its bit rate: the copied
+    // MP3 has no header to say so, and used to get TotalTime="0".
+    let xml = std::fs::read_to_string(s(&report, "rekordboxXml").unwrap()).unwrap();
+    let tracks: Vec<&str> = xml.lines().filter(|l| l.contains("<TRACK TrackID")).collect();
+    assert_eq!(tracks.len(), 2);
+    let attr = |line: &str, k: &str| line.split(&format!(" {k}=\"")).nth(1).and_then(|r| r.split('"').next()).map(str::to_string).unwrap();
+    for t in &tracks {
+        assert_eq!(attr(t, "TotalTime"), "40", "{t}");
+        assert_eq!(attr(t, "SampleRate"), "44100");
+        let rate = attr(t, "BitRate");
+        assert!(rate == "128" || rate == "320", "{t}");
+    }
+    assert!(tracks.iter().any(|t| attr(t, "BitRate") == "128") && tracks.iter().any(|t| attr(t, "BitRate") == "320"), "{tracks:?}");
+    // The MP3 plan does not depend on the (hidden) AIFF/WAV quality choice.
+    for quality in ["universal", "high"] {
+        let plan = call(&app, "djexport.plan", &format!(r#"{{"ids": [{}], "format": "mp3", "quality": "{quality}", "bestCopy": false}}"#, id(wav_row)));
+        let item = &plan.get("items").and_then(Value::as_array).unwrap()[0];
+        assert!(item.get("warnings").and_then(Value::as_array).unwrap().is_empty(), "{quality}: {}", plan.to_string_compact());
+    }
 }
 
 /// Answers Discogs requests from canned data and records what was asked.
@@ -443,6 +494,14 @@ fn playback_uses_the_original_or_one_decoded_copy() {
     assert_eq!(s(&direct, "mime"), Some("audio/wav"));
     assert!(f(&direct, "duration").is_some_and(|d| (d - 6.0).abs() < 0.05));
 
+    // B76: partial copies left by an earlier run go; this run's own stay.
+    let cache = e.data.join("cache").join("playback");
+    std::fs::create_dir_all(&cache).unwrap();
+    let stale = cache.join("track-99-abc.1-0.part");
+    let mine = cache.join(format!("track-98-abc.{}-0.part", std::process::id()));
+    std::fs::write(&stale, b"half").unwrap();
+    std::fs::write(&mine, b"half").unwrap();
+
     // It does not: the file is decoded once into SONORA's cache and reused.
     let before = hash(&src);
     let decoded = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": ["mp3"]}}"#));
@@ -452,6 +511,8 @@ fn playback_uses_the_original_or_one_decoded_copy() {
     let facts = sonora_engine::meta::probe_file(&path, &Default::default()).unwrap();
     assert_eq!(facts.container_name, "WAV");
     assert!(facts.header_duration_secs.is_some_and(|d| (d - 6.0).abs() < 0.05), "{:?}", facts.header_duration_secs);
+    assert!(!stale.exists(), "an earlier run's partial copy is removed");
+    assert!(mine.exists(), "a copy being made now is left alone");
     let again = call(&app, "playback.prepare", &format!(r#"{{"id": {tid}, "playable": [], "decode": true}}"#));
     assert_eq!(s(&again, "path"), s(&decoded, "path"));
     assert_eq!(hash(&src), before, "the original is only read");
@@ -485,4 +546,34 @@ fn equally_good_copies_keep_the_chosen_track() {
     // Both chosen: one recording, exported once.
     let plan = call(&app, "djexport.plan", &format!(r#"{{"ids": [{wav}, {aiff}], "format": "aiff"}}"#));
     assert_eq!(plan.get("exported").and_then(Value::as_i64), Some(1), "{}", plan.to_string_compact());
+}
+
+/// Always says "too many requests".
+struct BusyDiscogs;
+
+impl sonora_core::discogs::Transport for BusyDiscogs {
+    fn get(&self, _url: &str, _headers: &[(&str, String)]) -> Result<sonora_core::discogs::Response, String> {
+        Ok(sonora_core::discogs::Response { status: 429, body: String::new() })
+    }
+}
+
+#[test]
+fn a_discogs_lookup_stopped_while_it_waits_says_it_was_stopped() {
+    // B90: stopping during the rate-limit wait reported the rate limit.
+    let e = env("discogs-stop");
+    write(&e.music.join("Ana Ruiz - Night Drive.wav"), synth(124.0, 0.0, false), None);
+    let app = open(&e);
+    import(&app, &e.music);
+    let ids: Vec<i64> = rows(&app, "null", "title").iter().map(id).collect();
+    app.discogs.set_transport(Arc::new(FakeDiscogs { asked: std::sync::Mutex::new(Vec::new()), status: 200 }));
+    call(&app, "discogs.setToken", r#"{"token": "abc123"}"#);
+    app.discogs.set_transport(Arc::new(BusyDiscogs));
+    call(&app, "discogs.lookup", &format!(r#"{{"ids": {ids:?}}}"#));
+    std::thread::sleep(Duration::from_millis(1500));
+    call(&app, "discogs.cancel", "");
+    wait("the lookup", || call(&app, "discogs.status", "").get("running").and_then(Value::as_bool) == Some(false));
+    let last = call(&app, "discogs.status", "").get("last").cloned().unwrap();
+    assert_eq!(last.get("cancelled").and_then(Value::as_bool), Some(true), "{}", last.to_string_compact());
+    assert!(last.get("error").is_none_or(Value::is_null), "{}", last.to_string_compact());
+    assert_eq!(last.get("notFound").and_then(Value::as_i64), Some(0));
 }

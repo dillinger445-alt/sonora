@@ -16,8 +16,10 @@ pub enum AnalysisError {
     NoAudio,
     /// A required external decoder (FFmpeg) is not available.
     DecoderUnavailable(String),
-    /// The audio exceeds the configured maximum duration.
-    TooLong { seconds: f64, limit: f64 },
+    /// The audio exceeds the configured maximum duration. `known` when
+    /// `seconds` is the file's whole length (declared in its header), not
+    /// just how far decoding got before it passed the limit.
+    TooLong { seconds: f64, limit: f64, known: bool },
     /// The operation was cancelled by the user.
     Cancelled,
     /// Unexpected internal failure.
@@ -53,8 +55,15 @@ impl fmt::Display for AnalysisError {
             AnalysisError::Corrupt(m) => write!(f, "File appears to be corrupt: {m}"),
             AnalysisError::NoAudio => write!(f, "No decodable audio stream found"),
             AnalysisError::DecoderUnavailable(m) => write!(f, "Decoder unavailable: {m}"),
-            AnalysisError::TooLong { seconds, limit } => {
-                write!(f, "Audio is {:.0} min long, above the {:.0} min analysis limit", seconds / 60.0, limit / 60.0)
+            AnalysisError::TooLong { seconds, limit, known } => {
+                // B37: never "2 min long, above the 2 min limit".
+                let length = if *seconds < 90.0 { format!("{seconds:.0} s") } else { format!("{:.0} min", seconds / 60.0) };
+                let cap = if *limit < 90.0 { format!("{limit:.0} s") } else { format!("{:.0} min", limit / 60.0) };
+                if *known && length != cap {
+                    write!(f, "Audio is {length} long, above the {cap} analysis limit")
+                } else {
+                    write!(f, "Audio is longer than the {cap} analysis limit")
+                }
             }
             AnalysisError::Cancelled => write!(f, "Analysis cancelled"),
             AnalysisError::Internal(m) => write!(f, "Internal error: {m}"),

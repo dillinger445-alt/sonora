@@ -129,7 +129,7 @@ pub fn parse_header_from<R: Read + Seek>(f: &mut R, file_len: u64, stop_at_audio
                 if size < 4096 {
                     let mut b = vec![0u8; size as usize];
                     let n = read_up_to(f, &mut b)?;
-                    let text = String::from_utf8_lossy(&b[..n]).trim_end_matches('\0').trim().to_string();
+                    let text = crate::util::text_utf8_or_latin1(&b[..n]).trim_end_matches('\0').trim().to_string();
                     let key = match &id {
                         b"NAME" => "title",
                         b"AUTH" => "artist",

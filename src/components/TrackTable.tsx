@@ -128,6 +128,10 @@ export function TrackTable({
 
   const cache = useRef(new Map<number, TrackRow[]>());
   const stale = useRef(new Map<number, TrackRow[]>());
+  /** `stale` holds the previous query's rows (shown until the new ones come). */
+  const foreign = useRef(false);
+  /** A new query whose first page will prune the selection and the active track. */
+  const prune = useRef<string | null>(null);
   const inflight = useRef(new Set<number>());
   const generation = useRef(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -159,6 +163,11 @@ export function TrackTable({
         .then(
           (res) => {
             if (gen !== generation.current) return;
+            // The previous query's rows were only stand-ins until now.
+            if (foreign.current) {
+              stale.current = new Map();
+              foreign.current = false;
+            }
             cache.current.set(p, res.rows);
             stale.current.delete(p);
             setTotal(res.total);
@@ -167,6 +176,11 @@ export function TrackTable({
           },
           (e: unknown) => {
             if (gen !== generation.current) return;
+            if (foreign.current) {
+              stale.current = new Map();
+              foreign.current = false;
+              setTotal(null);
+            }
             setLoadError(e instanceof Error ? e.message : String(e));
             // A move waiting for these rows cannot finish; keep the keyboard usable.
             if (pending.current?.kind === 'replace') setActiveRow(null);
@@ -206,18 +220,21 @@ export function TrackTable({
     return null;
   }, []);
 
-  // New query: start over at the top.
+  // New query: start over at the top. The rows on screen stay until the new
+  // ones arrive, so the table does not blank on every keystroke and a click
+  // in between lands on a row; the selection and the active track keep what
+  // is in the new results (B24).
   useLayoutEffect(() => {
     generation.current += 1;
+    stale.current = new Map([...stale.current, ...cache.current]);
+    foreign.current = true;
     cache.current = new Map();
-    stale.current = new Map();
     inflight.current = new Set();
-    setTotal(null);
     setLoadError(null);
     setActive(-1);
-    setActiveRow(null);
     anchor.current = { index: -1, id: null };
     pending.current = null;
+    prune.current = key;
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     setScrollTop(0);
     fetchPage(0);
@@ -400,6 +417,30 @@ export function TrackTable({
   useLayoutEffect(() => {
     const p = pending.current;
     const { active: cur, activeRow: row, total: n } = latest.current;
+    // A new query's first page: keep only what is in the new results.
+    const first = cache.current.get(0);
+    if (prune.current != null && prune.current === keyRef.current && first && n != null) {
+      const query = prune.current;
+      prune.current = null;
+      const keep = (ids: Set<number>) => {
+        if (query !== keyRef.current) return;
+        const sel = selectionRef.current;
+        const next = new Set([...sel].filter((id) => ids.has(id)));
+        if (next.size !== sel.size) onSelection(next);
+        const r = latest.current.activeRow;
+        if (r && !ids.has(r.id)) {
+          setActiveRow(null);
+          setActive(-1);
+        }
+      };
+      if (n <= first.length) keep(new Set(first.map((r) => r.id)));
+      else if (selectionRef.current.size > 0 || row) {
+        client.ids(filterRef.current).then(
+          (r) => keep(new Set(r.ids)),
+          () => undefined,
+        );
+      }
+    }
     if (p?.kind === 'index') {
       const idx = n != null ? Math.min(p.index, n - 1) : p.index;
       const r = idx >= 0 ? rowAt(idx) : undefined;

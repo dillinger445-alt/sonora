@@ -328,9 +328,16 @@ fn ogg_opus() {
     // ffprobe does not subtract the pre-skip; ours is the true 3.000 s.
     assert_close(o.duration_secs.unwrap(), p.duration, 0.05, "duration");
     assert_close(o.duration_secs.unwrap(), 3.0, 0.001, "duration minus pre-skip");
-    // Opus is VBR: compare with ffprobe's file-level rate (size / duration).
+    // Opus is VBR: compare with ffprobe's file-level rate (size / duration),
+    // which also counts the headers.
     let file_kbps = p.format_bit_rate.unwrap() / 1000.0;
-    assert_close(o.avg_bitrate_kbps.unwrap(), file_kbps, file_kbps * 0.02, "bitrate");
+    assert_close(o.avg_bitrate_kbps.unwrap(), file_kbps, file_kbps * 0.04, "bitrate");
+    // B36: a large picture (here a long comment) in the headers is not audio.
+    let meta = workdir().join("big-tags.txt");
+    std::fs::write(&meta, format!(";FFMETADATA1\nDESCRIPTION={}\n", "x".repeat(300_000))).unwrap();
+    let args = ["-i", meta.to_str().unwrap(), "-map", "0:a", "-map_metadata", "1", "-c:a", "libopus", "-b:a", "128k"];
+    let fat = ogg::parse_file(&encode("opus-big-tags.opus", &args)).unwrap();
+    assert_close(fat.avg_bitrate_kbps.unwrap(), o.avg_bitrate_kbps.unwrap(), o.avg_bitrate_kbps.unwrap() * 0.05, "bitrate with a large comment");
     assert_eq!(tag(&o.tags, "title"), Some("Night Drive"));
     assert_eq!(tag(&o.tags, "bpm"), Some("128"));
 

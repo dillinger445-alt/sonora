@@ -292,7 +292,8 @@ export function Inspector({
         </div>
         <div>
           <dt>Cutoff</dt>
-          <dd className="num">{row.cutoffHz ? formatHz(row.cutoffHz) : 'None detected'}</dd>
+          {/* "None detected" only for what was analysed (B67). */}
+          <dd className="num">{row.cutoffHz ? formatHz(row.cutoffHz) : row.status === 'done' ? 'None detected' : DASH}</dd>
         </div>
         <div>
           <dt>Size</dt>

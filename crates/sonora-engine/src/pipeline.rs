@@ -76,13 +76,18 @@ fn reconcile(facts: &mut FileFacts, info: &crate::decode::StreamInfo) {
 pub fn analyze_file(path: &Path, opts: &AnalyzeOptions, ctl: &mut Control) -> Result<FileAnalysis, AnalysisError> {
     let started = Instant::now();
     let mut facts = probe_file(path, &opts.tools)?;
+    // Longer than the limit by its own header: said at once, before hashing
+    // and decoding (B37).
+    if let Some(d) = facts.header_duration_secs.filter(|d| *d > ctl.max_duration_secs) {
+        return Err(AnalysisError::TooLong { seconds: d, limit: ctl.max_duration_secs, known: true });
+    }
     let file_hash = if opts.hash_file { Some(hash_file(path, ctl.cancel)?) } else { None };
     let frames_hint = match (facts.header_duration_secs, facts.sample_rate) {
         (Some(d), sr) if d > 0.0 && sr > 0 => Some((d * sr as f64) as u64),
         _ => None,
     };
     let lossless = facts.lossless == Some(true);
-    let req = DecodeRequest { lossless_int: lossless && !facts.float_samples, lossless_float: lossless && facts.float_samples, frames_hint };
+    let req = DecodeRequest { lossless_int: lossless && !facts.float_samples, lossless_float: lossless && facts.float_samples, frames_hint, lossy: facts.lossless == Some(false) };
     let mut src = open_source(path, facts.container, &opts.tools, req)?;
     reconcile(&mut facts, src.info());
     let bits = if facts.lossless == Some(true) { facts.bit_depth } else { None };

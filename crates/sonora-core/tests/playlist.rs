@@ -54,6 +54,8 @@ struct World {
     asked: Vec<String>,
     transfers: Vec<Transfer>,
     next: u64,
+    /// Searches to refuse (slskd restarting), before answering again.
+    refuse: usize,
 }
 
 struct FakeSlskd {
@@ -158,6 +160,13 @@ impl Http for FakeSlskd {
                 "shares" => obj! { "directories" => 1, "files" => 10 },
             }),
             ("POST", ["searches"]) => {
+                {
+                    let mut w = self.world.lock().unwrap();
+                    if w.refuse > 0 {
+                        w.refuse -= 1;
+                        return Ok(Response { status: 503, body: String::new() });
+                    }
+                }
                 let text = sonora_json::parse(req.body.as_deref().unwrap_or("")).ok().and_then(|b| b.get("searchText").and_then(Value::as_str).map(str::to_string)).unwrap_or_default();
                 let mut w = self.world.lock().unwrap();
                 w.next += 1;
@@ -271,7 +280,10 @@ struct Env {
 }
 
 fn env(name: &str) -> Env {
-    std::env::set_var("SONORA_SOURCE_POLL_SECONDS", "1");
+    // The folder watcher looks only when asked (an hour is never reached
+    // here): downloads must arrive through the run's own requests to look,
+    // as they do in the app between its 20-second looks (B01).
+    std::env::set_var("SONORA_SOURCE_POLL_SECONDS", "3600");
     std::env::set_var("SONORA_SECRET_STORE", "file");
     std::env::set_var("SONORA_YOUTUBE_BASE", "https://tube.test");
     let root = std::env::temp_dir().join(format!("sonora-playlist-it-{}-{name}", std::process::id()));
@@ -390,8 +402,11 @@ fn a_playlist_is_read_searched_downloaded_and_checked() {
     let paused = call(&app, "playlist.pause", &obj! { "id" => id });
     assert_eq!(s(&paused, "state"), "paused");
     std::thread::sleep(Duration::from_millis(300));
+    // Rules changed while paused apply from then on (B16).
+    call(&app, "settings.update", &obj! { "values" => obj! { "playlistRules" => obj! { "maxDownloads" => 3, "searchSeconds" => 15, "retryNotFound" => false } } });
     let run = call(&app, "playlist.resume", &obj! { "id" => id });
     assert_eq!(s(&run, "state"), "running");
+    assert_eq!(run.get("rules").and_then(|r| r.get("maxDownloads")).and_then(Value::as_i64), Some(3), "resumed with the rules in use now");
 
     let run = wait_state(&app, id, &["finished", "cancelled", "failed", "review", "waiting"], 180);
     assert_eq!(s(&run, "state"), "finished", "{:?} {:?}", run.get("error"), run.get("counts"));
@@ -521,6 +536,114 @@ fn a_run_can_be_stopped() {
     assert_eq!(s(&run, "state"), "running");
     call(&app, "playlist.cancel", &obj! { "id" => id });
     wait_state(&app, id, &["cancelled"], 30);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+/// Keeps only the named tracks of a fetched run.
+fn only(app: &Arc<App>, id: i64, keep: &[&str]) {
+    let run = call(app, "playlist.get", &obj! { "id" => id });
+    let out: Vec<Value> = items_of(&run).iter().filter(|i| i.get("included") == Some(&Value::Bool(true)) && !keep.contains(&s(i, "title"))).map(|i| Value::Int(i.get("id").and_then(Value::as_i64).unwrap())).collect();
+    call(app, "playlist.include", &obj! { "id" => id, "itemIds" => Value::Array(out), "included" => false });
+}
+
+fn wait_for(what: &str, secs: u64, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn one_run_works_at_a_time_and_the_others_are_left_as_they_were() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("turns");
+    let (app, fake) = open(&e);
+    setup(&app, &e);
+    let a = call(&app, "playlist.fetch", &obj! { "source" => "PLfixtureLateNight" }).get("id").and_then(Value::as_i64).unwrap();
+    wait_state(&app, a, &["draft"], 20);
+    let b = call(&app, "playlist.fetch", &obj! { "source" => "PLfixtureLateNight" }).get("id").and_then(Value::as_i64).unwrap();
+    wait_state(&app, b, &["draft"], 20);
+    // A looks for the track nobody has, and will look again later.
+    only(&app, a, &["Shades Of Jae"]);
+    call(&app, "settings.update", &obj! { "values" => obj! { "playlistRules" => obj! { "searchSeconds" => 15, "retryNotFound" => true } } });
+    call(&app, "playlist.start", &obj! { "id" => a });
+
+    // B03: B is refused and stays exactly as it was.
+    let before = call(&app, "playlist.get", &obj! { "id" => b });
+    assert_eq!(call_err(&app, "playlist.start", &obj! { "id" => b }).0, "busy");
+    assert_eq!(call_err(&app, "playlist.retry", &obj! { "id" => b }).0, "busy");
+    let after = call(&app, "playlist.get", &obj! { "id" => b });
+    assert_eq!(s(&after, "state"), "draft");
+    assert_eq!(after.get("rules"), before.get("rules"), "the rules were not written");
+    assert_eq!(after.get("counts"), before.get("counts"));
+
+    // A waits to look again; its worker is still on it, so B still waits.
+    wait_state(&app, a, &["waiting"], 120);
+    assert_eq!(call_err(&app, "playlist.start", &obj! { "id" => b }).0, "busy");
+    assert_eq!(s(&call(&app, "playlist.get", &obj! { "id" => b }), "state"), "draft");
+
+    // B55: Start on a waiting run looks again at once, not 30 s later.
+    let asked = fake.world.lock().unwrap().asked.len();
+    let run = call(&app, "playlist.start", &obj! { "id" => a });
+    assert_eq!(s(&run, "state"), "running");
+    wait_for("a new search", 5, || fake.world.lock().unwrap().asked.len() > asked);
+    wait_state(&app, a, &["waiting"], 120);
+
+    // B54: a run waiting to look again can be removed, and B gets its turn.
+    call(&app, "playlist.delete", &obj! { "id" => a });
+    assert_eq!(call_err(&app, "playlist.get", &obj! { "id" => a }).0, "not_found");
+    wait_for("the worker to end", 10, || app.playlist.is_active().is_none());
+    let run = call(&app, "playlist.start", &obj! { "id" => b });
+    assert_eq!(s(&run, "state"), "running");
+    call(&app, "playlist.cancel", &obj! { "id" => b });
+    wait_state(&app, b, &["cancelled"], 30);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_run_gets_over_slskd_restarting_and_a_track_removed_while_checked() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("hiccups");
+    let (app, fake) = open(&e);
+    setup(&app, &e);
+    let id = call(&app, "playlist.fetch", &obj! { "source" => "PLfixtureLateNight" }).get("id").and_then(Value::as_i64).unwrap();
+    wait_state(&app, id, &["draft"], 20);
+    only(&app, id, &["Rain"]);
+    call(&app, "settings.update", &obj! { "values" => obj! { "playlistRules" => obj! { "searchSeconds" => 15, "retryNotFound" => false } } });
+
+    // B14: the first search finds slskd restarting; once it answers, the
+    // run no longer says it could not reach it.
+    fake.world.lock().unwrap().refuse = 1;
+    call(&app, "playlist.start", &obj! { "id" => id });
+    wait_for("the error", 10, || !s(&call(&app, "playlist.get", &obj! { "id" => id }), "error").is_empty());
+    // Still working (downloading or checking Rain), and no longer saying it.
+    wait_for("the error to go while the run works", 60, || {
+        let r = call(&app, "playlist.get", &obj! { "id" => id });
+        s(&r, "state") == "running" && r.get("error") == Some(&Value::Null) && !matches!(s(item(&r, "Rain"), "status"), "pending" | "searching")
+    });
+    let run = wait_state(&app, id, &["finished", "failed", "cancelled"], 120);
+    assert_eq!(s(&run, "state"), "finished");
+    assert_eq!(run.get("error"), Some(&Value::Null), "{:?}", run.get("error"));
+    assert_eq!(count(&run, "done"), 1);
+
+    // B13: a track removed from the library while it is being checked
+    // ends its check instead of keeping the run going for ever.
+    let rain = item(&run, "Rain");
+    let (item_id, track_id) = (rain.get("id").and_then(Value::as_i64).unwrap(), rain.get("trackId").and_then(Value::as_i64).unwrap());
+    {
+        let c = app.db.write();
+        c.execute("UPDATE playlist_items SET status = 'verifying', note = NULL, progress_at = ? WHERE id = ?", sonora_core::params![sonora_core::db::now_ms(), item_id]).unwrap();
+        c.execute("UPDATE playlist_runs SET state = 'paused', finished_at = NULL WHERE id = ?", sonora_core::params![id]).unwrap();
+    }
+    call(&app, "tracks.remove", &obj! { "ids" => Value::Array(vec![Value::Int(track_id)]) });
+    call(&app, "playlist.resume", &obj! { "id" => id });
+    let run = wait_state(&app, id, &["finished"], 30);
+    let rain = item(&run, "Rain");
+    assert_eq!(s(rain, "status"), "done");
+    assert!(s(rain, "note").contains("removed it from the library"), "{:?}", rain.get("note"));
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }

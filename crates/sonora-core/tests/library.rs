@@ -484,7 +484,7 @@ fn query_search_sort_filter_export_and_duplicates() {
     let csv = call(&app, "export.csv", r#"{"filter": {"search": "groove"}}"#);
     let text = s(&csv, "csv");
     assert_eq!(text.lines().count(), 5, "header + 4 rows");
-    assert!(text.lines().next().unwrap().starts_with("path,file_name,title"));
+    assert!(text.lines().next().unwrap().starts_with("\u{FEFF}path,file_name,title"), "a byte-order mark first, for Excel");
     let out = e.root.join("report.csv");
     call(&app, "export.csv", &sonora_json::obj! { "path" => out.to_string_lossy().to_string() }.to_string_compact());
     assert!(std::fs::read_to_string(&out).unwrap().contains("Groove CLIPPED.wav"));
@@ -727,6 +727,197 @@ fn requeued_and_removed_tracks_keep_the_scan_counts_right() {
     assert_eq!((int(&q, "queued"), int(&q, "missing")), (1, 0));
     wait_idle(&app);
     assert_eq!(s(&call(&app, "scan.history", r#"{"limit": 1}"#).as_array().unwrap()[0], "state"), "completed");
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+fn wait_for(what: &str, secs: u64, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+
+/// A folder of `n` files that count as audio by name and sniff as nothing:
+/// slow enough to read that an import can be caught while it runs.
+fn junk_folder(dir: &Path, n: usize) {
+    std::fs::create_dir_all(dir).unwrap();
+    for i in 0..n {
+        std::fs::write(dir.join(format!("j{i:05}.flac")), b"not audio at all").unwrap();
+    }
+}
+
+#[test]
+fn tracks_added_to_a_running_scan_get_every_worker() {
+    // B29: workers that found the queue empty ended and were never started
+    // again; B68: a track starting is announced with its row.
+    let e = env("workers");
+    write(&e.music.join("long.wav"), 1, 120.0);
+    let more = e.root.join("More");
+    std::fs::create_dir_all(&more).unwrap();
+    for i in 0..6 {
+        write(&more.join(format!("short{i}.wav")), 10 + i, 4.0);
+    }
+    let app = open(&e);
+    let started = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen = started.clone();
+    app.subscribe(Box::new(move |name, payload| {
+        if name == "scan.item" && payload.contains(r#""outcome":"running""#) {
+            seen.lock().unwrap().push(payload.to_string());
+        }
+    }));
+    call(&app, "settings.update", r#"{"values": {"workers": 4}}"#);
+    call(&app, "library.import", &sonora_json::obj! { "paths" => vec![e.music.to_string_lossy().to_string()] }.to_string_compact());
+    wait_for("the long file to start", 30, || call(&app, "scan.status", "").get("running").and_then(Value::as_i64) == Some(1));
+    std::thread::sleep(Duration::from_millis(300));
+    call(&app, "library.import", &sonora_json::obj! { "paths" => vec![more.to_string_lossy().to_string()] }.to_string_compact());
+    let mut most = 0;
+    wait_for("the scan", 120, || {
+        let st = call(&app, "scan.status", "");
+        most = most.max(st.get("running").and_then(Value::as_i64).unwrap_or(0));
+        s(&st, "state") == "idle" && st.get("indexing").is_none_or(Value::is_null)
+    });
+    assert!(most >= 3, "only {most} worker(s) took the added tracks");
+    let started = started.lock().unwrap().clone();
+    assert_eq!(started.len(), 7, "{started:?}");
+    assert!(started.iter().all(|p| p.contains(r#""status":"analyzing""#)), "{started:?}");
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn cancel_stops_imports_waiting_their_turn_and_folders_not_read_yet() {
+    let e = env("cancelwait");
+    let big = e.root.join("Big");
+    junk_folder(&big, 6000);
+    let late = e.root.join("Late");
+    std::fs::create_dir_all(&late).unwrap();
+    write(&late.join("late.wav"), 7, 4.0);
+    let second_root = e.root.join("Second");
+    std::fs::create_dir_all(&second_root).unwrap();
+    write(&second_root.join("second.wav"), 8, 4.0);
+    let app = open(&e);
+    let import = |paths: Vec<String>| call(&app, "library.import", &sonora_json::obj! { "paths" => paths }.to_string_compact());
+    let path = |p: &Path| p.to_string_lossy().to_string();
+
+    // B71 + B30: a two-folder import, and a second import waiting behind it
+    // (asked for once the first is reading, so it is second in line).
+    import(vec![path(&big), path(&second_root)]);
+    std::thread::sleep(Duration::from_millis(300));
+    import(vec![path(&late)]);
+    // B72: a folder cannot be removed while folders are being read.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(call(&app, "scan.status", "").get("indexing").is_some_and(|v| !v.is_null()), "still reading the big folder");
+    let folders = call(&app, "folders.list", "");
+    if let Some(f) = folders.as_array().and_then(|a| a.first()) {
+        let id = f.get("id").and_then(Value::as_i64).unwrap();
+        assert_eq!(call_err(&app, "folders.remove", &format!(r#"{{"id": {id}, "removeTracks": false}}"#)), "busy");
+    }
+    call(&app, "scan.cancel", "");
+    wait_idle(&app);
+    let names: Vec<String> = rows(&app, "null").iter().map(|r| s(r, "fileName").to_string()).collect();
+    assert!(!names.contains(&"late.wav".to_string()), "the waiting import ran after Cancel");
+    assert!(!names.contains(&"second.wav".to_string()), "the folder not read yet was read");
+    let folders = call(&app, "folders.list", "");
+    let paths: Vec<String> = folders.as_array().unwrap().iter().map(|f| s(f, "path").to_string()).collect();
+    assert!(!paths.contains(&path(&late)) && !paths.contains(&path(&second_root)), "{paths:?}");
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_scans_problem_tabs_list_only_what_it_analysed_and_a_pause_is_not_its_time() {
+    let e = env("tabs");
+    for i in 0..4 {
+        write(&e.music.join(format!("a{i}.wav")), 30 + i, 15.0);
+    }
+    // A clipped track, last in the queue.
+    let hot: Vec<f32> = track(40, 15.0).iter().map(|x| (x * 6.0).clamp(-1.0, 1.0)).collect();
+    write_wav(&e.music.join("z_hot.wav"), 44_100, 2, 16, false, &quantize16(&hot)).unwrap();
+    let app = open(&e);
+    import(&app, &e.music);
+    assert_eq!(rows(&app, r#"{"flags": ["clipping"]}"#).len(), 1, "the clipped file is flagged");
+
+    // Analysed again, one at a time, paused before the clipped file.
+    call(&app, "settings.update", r#"{"values": {"workers": 1}}"#);
+    call(&app, "library.import", &sonora_json::obj! { "paths" => vec![e.music.to_string_lossy().to_string()], "force" => true }.to_string_compact());
+    wait_for("the scan to run", 30, || s(&call(&app, "scan.status", ""), "state") == "running");
+    assert_eq!(call(&app, "scan.pause", "").get("ok").and_then(Value::as_bool), Some(true));
+    let scan = call(&app, "scan.status", "").get("id").and_then(Value::as_i64).unwrap();
+    let total = |filter: &str| call(&app, "scan.items", &format!(r#"{{"id": {scan}, "filter": "{filter}"}}"#)).get("total").and_then(Value::as_i64).unwrap();
+    // B31: queued tracks are not this scan's results, whatever they were before.
+    assert_eq!(total("clipping"), 0);
+    assert_eq!(total("problems"), 0);
+    // B69: a scan cancelled while paused counts the time it analysed.
+    std::thread::sleep(Duration::from_millis(2000));
+    call(&app, "scan.cancel", "");
+    wait_idle(&app);
+    assert_eq!(total("clipping"), 0, "cancelled tracks are not results either");
+    let hist = call(&app, "scan.history", r#"{"limit": 1}"#);
+    let ms = hist.as_array().unwrap()[0].get("summary").and_then(|v| v.get("elapsedMs")).and_then(Value::as_i64).unwrap();
+    assert!(ms < 1800, "elapsed {ms} ms includes the pause");
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_file_gone_before_its_turn_is_missing_not_failed() {
+    // B32: the track keeps its analysis and is marked missing.
+    let e = env("gone");
+    write(&e.music.join("stays.wav"), 50, 6.0);
+    write(&e.music.join("goes.wav"), 51, 6.0);
+    let app = open(&e);
+    import(&app, &e.music);
+    let before = call(&app, "app.overview", "");
+    let failed_present = |o: &Value| o.get("tracks").and_then(|t| t.get("failedPresent")).and_then(Value::as_i64);
+    let goes = rows(&app, "null").into_iter().find(|r| s(r, "fileName") == "goes.wav").unwrap();
+    let id = goes.get("id").and_then(Value::as_i64).unwrap();
+    std::fs::remove_file(e.music.join("goes.wav")).unwrap();
+    call(&app, "tracks.rescan", &format!(r#"{{"ids": [{id}]}}"#));
+    wait_idle(&app);
+    let t = call(&app, "tracks.get", &format!(r#"{{"id": {id}}}"#));
+    let row = t.get("track").unwrap();
+    assert_eq!(s(row, "status"), "done", "{}", row.to_string_compact());
+    assert_eq!(row.get("missing").and_then(Value::as_bool), Some(true));
+    assert!(t.get("analysis").is_some_and(|a| !a.is_null()), "the earlier analysis stays");
+    assert_eq!(failed_present(&call(&app, "app.overview", "")), failed_present(&before));
+    // B66: a track that failed and whose file is gone is one problem, not two.
+    app.db.write().execute("UPDATE tracks SET status = 'failed' WHERE id = ?", sonora_core::params![id]).unwrap();
+    let f = &call(&app, "folders.list", "").as_array().unwrap()[0].clone();
+    let n = |k: &str| f.get(k).and_then(Value::as_i64).unwrap();
+    assert_eq!((n("failed"), n("missing"), n("problems")), (1, 1, 1));
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn two_settings_changed_at_once_both_stay() {
+    // B87: each change read the settings, waited for the database, and saved
+    // them all, so the later one put the other key back.
+    let e = env("settings");
+    let app = open(&e);
+    let before = call(&app, "settings.get", "");
+    assert_eq!((before.get("skipHidden").and_then(Value::as_bool), before.get("followSymlinks").and_then(Value::as_bool)), (Some(true), Some(false)));
+    let db = app.db.write();
+    let threads: Vec<_> = [r#"{"values": {"skipHidden": false}}"#, r#"{"values": {"followSymlinks": true}}"#]
+        .into_iter()
+        .map(|p| {
+            let app = Arc::clone(&app);
+            std::thread::spawn(move || app.call("settings.update", p).unwrap())
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    drop(db);
+    for t in threads {
+        t.join().unwrap();
+    }
+    let after = call(&app, "settings.get", "");
+    assert_eq!((after.get("skipHidden").and_then(Value::as_bool), after.get("followSymlinks").and_then(Value::as_bool)), (Some(false), Some(true)));
+    drop(app);
+    let app = open(&e);
+    let saved = call(&app, "settings.get", "");
+    assert_eq!((saved.get("skipHidden").and_then(Value::as_bool), saved.get("followSymlinks").and_then(Value::as_bool)), (Some(false), Some(true)), "both saved");
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }

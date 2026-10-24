@@ -220,8 +220,11 @@ fn match_words(name_words: &[String], dir_words: &[String], w: &Want) -> (f64, b
     (overlap, artist_in)
 }
 
+/// Megabytes as the rest of SONORA shows them (1 MB = 1,000,000 bytes).
+const MB: i64 = 1_000_000;
+
 fn mb(n: i64) -> String {
-    format!("{:.1} MB", n as f64 / 1_048_576.0)
+    format!("{:.1} MB", n as f64 / MB as f64)
 }
 
 /// Judges every file in the results for `w`: the ones that pass the rules
@@ -278,7 +281,7 @@ pub fn rank(folders: &[FoundFolder], w: &Want, rules: &PlaylistRules) -> Vec<Can
             }
             if rejected.is_none() {
                 if let Some(max) = rules.max_size_mb {
-                    if x.size > max * 1_048_576 {
+                    if x.size > max * MB {
                         rejected = Some(format!("{} is above the {max} MB limit", mb(x.size)));
                     }
                 }
@@ -418,6 +421,18 @@ mod tests {
         let low = vec![folder("low", true, 0, 900_000, vec![file("Rain (Original Mix)", "mp3", 5_000_000, None, None, Some(192), Some(432))])];
         assert!(rank(&low, &want(), &r)[0].rejected.as_deref().unwrap().contains("below the 320 kbps"));
         assert!(!sufficient(&rank(&low, &want(), &r)));
+    }
+
+    #[test]
+    fn sizes_are_decimal_megabytes_as_everywhere_else() {
+        // B18: a 52,000,000-byte file is 52.0 MB in the candidates table, so
+        // a 50 MB limit leaves it out, and the reason says 52.0 MB too.
+        let rules = PlaylistRules { max_size_mb: Some(50), size_check: false, ..Default::default() };
+        let mk = |user: &str, size: i64| folder(user, true, 0, 900_000, vec![file("01 Rain (Original Mix)", "flac", size, Some(16), Some(44_100), None, Some(432))]);
+        let c = rank(&[mk("over", 52_000_000), mk("under", 49_900_000)], &want(), &rules);
+        let why = c.iter().find(|x| x.username == "over").unwrap().rejected.clone();
+        assert_eq!(why.as_deref(), Some("52.0 MB is above the 50 MB limit"));
+        assert!(c.iter().find(|x| x.username == "under").unwrap().rejected.is_none());
     }
 
     #[test]

@@ -317,6 +317,8 @@ export interface Folder {
   analyzed: number;
   missing: number;
   failed: number;
+  /** Tracks that failed or whose file is missing, each counted once. */
+  problems: number;
   avgOverall: number | null;
   bytes: number;
   /** Files in it removed from the library, which rescans leave out. */
@@ -1152,7 +1154,10 @@ export interface OrganizeResult {
   playlists: number;
   tracks: number;
   without: number;
+  /** Groups (genres) past the most one folder holds, left out. */
   leftOut: number;
+  /** Tracks left out because their file is missing. */
+  missing: number;
 }
 
 // ---------------------------------------------------------------- USB

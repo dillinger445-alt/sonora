@@ -177,8 +177,11 @@ export function SettingsView() {
   const checkTools = async () => {
     setChecking(true);
     try {
-      await client.refreshTools();
+      const tools = await client.refreshTools();
       await refreshInfo();
+      // Say what was found, also when nothing changed (B85).
+      if (tools.ffmpeg.available) toast({ tone: 'success', title: 'FFmpeg found', body: tools.ffmpeg.version ? `Version ${tools.ffmpeg.version}.` : undefined });
+      else toast({ tone: 'warning', title: 'FFmpeg is still not found', body: 'Install FFmpeg on your PATH, then check again.' });
     } catch (e) {
       toast({ tone: 'error', title: 'Could not check for FFmpeg', body: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -314,7 +317,7 @@ export function SettingsView() {
 
         <Group title="Library" description={<>Folders are managed on the <a className="link" href={formatRoute({ view: 'folders' })}>Folders</a> page.</>}>
           <Row label="Library database" description={<span className="selectable mono-path">{info.dbPath}</span>}>
-            <Button size="sm" icon={LuFolderSearch} onClick={() => void bridge.reveal(info.dbPath).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: String(e) }))}>
+            <Button size="sm" icon={LuFolderSearch} onClick={() => void bridge.reveal(info.dbPath).catch((e: unknown) => toast({ tone: 'error', title: 'Could not open the folder', body: e instanceof Error ? e.message : String(e) }))}>
               {revealLabel(bridge.platform)}
             </Button>
           </Row>

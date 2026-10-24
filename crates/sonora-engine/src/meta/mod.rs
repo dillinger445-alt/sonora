@@ -338,7 +338,7 @@ pub fn probe_file(path: &Path, tools: &ToolPaths) -> Result<FileFacts, AnalysisE
                 facts.lossless = Some(true);
                 facts.bitrate_kbps = Some(h.sample_rate as f64 * h.block_align as f64 * 8.0 / 1000.0);
                 facts.bitrate_mode = Some("CBR".into());
-                facts.header_duration_secs = h.frames().map(|f| f as f64 / h.sample_rate as f64);
+                facts.header_duration_secs = h.declared_frames().map(|f| f as f64 / h.sample_rate as f64);
             } else {
                 facts.codec_id = h.codec_name().to_string();
                 facts.lossless = codec_is_lossless(h.codec_name());
@@ -394,6 +394,9 @@ pub fn probe_file(path: &Path, tools: &ToolPaths) -> Result<FileFacts, AnalysisE
                 facts.bitrate_kbps = m.avg_bitrate_kbps;
                 facts.encoder = m.encoder.clone();
                 facts.encoder_lowpass_hz = m.lowpass_hz;
+                // The declared length, so an MP3 cut short (an incomplete
+                // download) is found truncated (B33).
+                facts.header_duration_secs = m.declared_secs();
                 native_ok = true;
             }
             native_tags.extend(read_leading_id3(path));

@@ -502,6 +502,9 @@ pub fn parse_file(path: &Path) -> Result<OggInfo, AnalysisError> {
         }
     }
     apply_comment_packets(codec, &pk.packets, &mut info);
+    // Where the audio starts: after the header packets, which can hold a
+    // large cover picture (B36).
+    let audio_start = reader.pos.max(start);
 
     let (granule, last_serial) = last_granule(&mut f, file_len, serial)?;
     if last_serial.map(|s| !bos.iter().any(|(b, _, _)| *b == s)).unwrap_or(false) {
@@ -514,7 +517,7 @@ pub fn parse_file(path: &Path) -> Result<OggInfo, AnalysisError> {
         }
     }
     if let Some(d) = info.duration_secs.filter(|d| *d > 0.0) {
-        info.avg_bitrate_kbps = Some(file_len.saturating_sub(start) as f64 * 8.0 / d / 1000.0);
+        info.avg_bitrate_kbps = Some(file_len.saturating_sub(audio_start) as f64 * 8.0 / d / 1000.0);
     }
     if info.sample_rate == 0 || info.channels == 0 {
         return Err(AnalysisError::Corrupt("the Ogg stream header declares no audio".into()));

@@ -318,6 +318,14 @@ jobs:
           if [ "$status" -ne 0 ]; then awk -f .github/scripts/cargo-annotations.awk build-output.txt; fi
           exit "$status"
 
+      # The shell is its own workspace (its window needs system libraries the
+      # Linux test job does not install), so its unit tests run here, once the
+      # build has made the interface it embeds. Intel macOS is covered by the
+      # Apple silicon row.
+      - name: Test the desktop shell
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --target ${{ matrix.target }}
+
       - name: Collect the bundles
         env:
           BUILD_TARGET: ${{ matrix.target }}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PlaylistCandidate, PlaylistItem, PlaylistRun } from '../api/types.ts';
-import { itemWords, matches, pickOf, quality, runWords, trackName } from './playlist.ts';
+import { canInclude, itemWords, matches, pickOf, quality, runWords, trackName } from './playlist.ts';
 
 const candidate = (over: Partial<PlaylistCandidate> = {}): PlaylistCandidate => ({
   username: 'good',
@@ -79,6 +79,8 @@ test('a track is named by artist and title, and its pick is the chosen candidate
   assert.equal(pickOf(item({ candidates: [a, b], chosen: 1 })), b);
   assert.equal(pickOf(item({ candidates: [a, b] })), a, 'the first when none was chosen');
   assert.equal(pickOf(item()), null);
+  // B53: a not-found track's best file was turned down by the rules: no pick.
+  assert.equal(pickOf(item({ status: 'not_found', candidates: [candidate({ rejected: 'lossy formats are off' })] })), null);
   assert.equal(quality(candidate()), '16-bit / 44.1 kHz');
   assert.equal(quality(candidate({ bitDepth: null, sampleRate: null })), 'resolution not reported');
   assert.equal(quality(candidate({ lossless: false, bitRate: 320 })), '320 kbps');
@@ -131,4 +133,16 @@ test('filters pick the rows they say', () => {
   assert.deepEqual(ids('not_found'), [5]);
   assert.deepEqual(ids('failed'), [6]);
   assert.deepEqual(ids('left_out'), [7]);
+});
+
+test('a left-out video can be put back only while the run can still look for it', () => {
+  // B17: ticked in a finished run, it waited for ever.
+  const left = item({ included: false, leftOut: 'A Short, not a track.', status: 'pending' });
+  assert.equal(canInclude(left, 'draft'), true);
+  assert.equal(canInclude(left, 'running'), true);
+  assert.equal(canInclude(left, 'paused'), true);
+  assert.equal(canInclude(left, 'finished'), false);
+  assert.equal(canInclude(left, 'cancelled'), false);
+  assert.equal(canInclude(item({ status: 'not_found' }), 'finished'), true, 'Retry looks for it again');
+  assert.equal(canInclude(item({ status: 'done' }), 'running'), false);
 });

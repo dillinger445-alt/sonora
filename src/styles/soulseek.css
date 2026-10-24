@@ -775,6 +775,11 @@
   font-size: 12px;
 }
 
+.pl-quick-note {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
 .pl-filters {
   padding-top: 2px;
 }

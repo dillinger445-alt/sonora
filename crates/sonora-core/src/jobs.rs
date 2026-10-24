@@ -109,6 +109,9 @@ struct RunState {
     dropped: i64,
     next_seq: i64,
     slots: Vec<Option<Slot>>,
+    /// Which worker slots have a thread (a worker that found the queue
+    /// empty ends; more work starts it again).
+    alive: Vec<bool>,
     recent: VecDeque<f64>,
     workers_alive: usize,
     handles: Vec<JoinHandle<()>>,
@@ -135,6 +138,7 @@ impl RunState {
             dropped: 0,
             next_seq: 0,
             slots: Vec::new(),
+            alive: Vec::new(),
             recent: VecDeque::new(),
             workers_alive: 0,
             handles: Vec::new(),
@@ -193,6 +197,10 @@ pub struct Shared {
     wake: Condvar,
     cancel: AtomicBool,
     index_cancel: AtomicBool,
+    /// Imports are numbered as they are asked for; Cancel stops every one
+    /// asked for before it, also those still waiting for their turn (B30).
+    index_seq: std::sync::atomic::AtomicU64,
+    index_cancel_upto: std::sync::atomic::AtomicU64,
     shutdown: AtomicBool,
     index_lock: Mutex<()>,
 }
@@ -217,6 +225,8 @@ impl ScanManager {
                 wake: Condvar::new(),
                 cancel: AtomicBool::new(false),
                 index_cancel: AtomicBool::new(false),
+                index_seq: std::sync::atomic::AtomicU64::new(0),
+                index_cancel_upto: std::sync::atomic::AtomicU64::new(0),
                 shutdown: AtomicBool::new(false),
                 index_lock: Mutex::new(()),
             }),
@@ -252,6 +262,7 @@ impl ScanManager {
         let shared = Arc::clone(&self.shared);
         let kind = kind.to_string();
         let opts = self.import_options();
+        let seq = shared.index_seq.fetch_add(1, Ordering::SeqCst) + 1;
         {
             let mut st = lock(&shared.state);
             st.pending_index_jobs += 1;
@@ -266,7 +277,8 @@ impl ScanManager {
             .name("sonora-index".into())
             .spawn(move || {
                 let _serial = lock(&shared.index_lock);
-                shared.index_cancel.store(false, Ordering::Relaxed);
+                // Cancelled while it waited for the import before it.
+                shared.index_cancel.store(seq <= shared.index_cancel_upto.load(Ordering::SeqCst), Ordering::SeqCst);
                 let result = match &job {
                     IndexJob::Paths(p) => library::import_paths(&shared.db, p, &opts, &shared.index_cancel),
                     IndexJob::Folders(ids) => library::rescan_folders(&shared.db, ids.as_deref(), &opts, &shared.index_cancel),
@@ -334,10 +346,12 @@ impl ScanManager {
     pub fn remove_folder(&self, id: i64, with_tracks: bool) -> Result<Option<u64>, StoreError> {
         let mut st = lock(&self.shared.state);
         let mut n = 0;
+        // Not while folders are being read: the reading adds tracks to the
+        // folder it is removing (B72).
+        if st.phase == Phase::Indexing || st.pending_index_jobs > 0 {
+            return Ok(None);
+        }
         if with_tracks {
-            if st.phase == Phase::Indexing || st.pending_index_jobs > 0 {
-                return Ok(None);
-            }
             let ids = self.shared.db.read().query("SELECT id FROM tracks WHERE folder_id = ?", params![id], |r| r.i64(0))?;
             let (free, busy) = split_busy(&st, &ids);
             if busy > 0 {
@@ -494,7 +508,8 @@ impl ScanManager {
 
     pub fn cancel(&self) -> bool {
         let mut st = lock(&self.shared.state);
-        self.shared.index_cancel.store(true, Ordering::Relaxed);
+        self.shared.index_cancel_upto.store(self.shared.index_seq.load(Ordering::SeqCst), Ordering::SeqCst);
+        self.shared.index_cancel.store(true, Ordering::SeqCst);
         if st.scan_id.is_none() {
             return st.phase == Phase::Indexing;
         }
@@ -737,6 +752,7 @@ fn enqueue(shared: &Arc<Shared>, kind: &str, ids: &[i64], roots: &[String], skip
     let want = shared.settings.read().unwrap_or_else(|p| p.into_inner()).workers.max(1);
     if st.workers_alive == 0 {
         st.slots = vec![None; want];
+        st.alive = vec![true; want];
         for w in 0..want {
             let sh = Arc::clone(shared);
             st.workers_alive += 1;
@@ -744,6 +760,7 @@ fn enqueue(shared: &Arc<Shared>, kind: &str, ids: &[i64], roots: &[String], skip
                 Ok(h) => st.handles.push(h),
                 Err(e) => {
                     st.workers_alive -= 1;
+                    st.alive[w] = false;
                     log_error(&format!("could not start worker: {e}"));
                 }
             }
@@ -757,6 +774,26 @@ fn enqueue(shared: &Arc<Shared>, kind: &str, ids: &[i64], roots: &[String], skip
             return Queued::default();
         }
     } else {
+        // Workers that found the queue empty have ended: start them again,
+        // so new tracks are not left to the one still busy (B29).
+        if st.slots.len() < want {
+            st.slots.resize(want, None);
+            st.alive.resize(want, false);
+        }
+        for w in 0..want {
+            if st.alive.get(w).copied().unwrap_or(true) {
+                continue;
+            }
+            let sh = Arc::clone(shared);
+            match std::thread::Builder::new().name(format!("sonora-worker-{w}")).spawn(move || worker(sh, w)) {
+                Ok(h) => {
+                    st.handles.push(h);
+                    st.alive[w] = true;
+                    st.workers_alive += 1;
+                }
+                Err(e) => log_error(&format!("could not start worker: {e}")),
+            }
+        }
         shared.wake.notify_all();
     }
     emit_progress(shared, &mut st, true);
@@ -793,6 +830,10 @@ fn claim(shared: &Arc<Shared>, slot: usize) -> Option<Claim> {
         if slot < st.slots.len() {
             st.slots[slot] = Some(Slot { track_id, file_name, path, started: Instant::now(), fraction: 0.0 });
         }
+        // The table, the details panel and the track's page show it as
+        // being analysed now, not only when it ends (B68).
+        let row = library::get_track(&shared.db.read(), track_id).ok().flatten();
+        shared.events.emit("scan.item", &obj! { "scanId" => scan_id, "trackId" => track_id, "outcome" => "running", "error" => Value::Null, "track" => row });
         emit_progress(shared, &mut st, false);
         return Some(Claim { track_id });
     }
@@ -825,6 +866,9 @@ fn worker(shared: Arc<Shared>, slot: usize) {
     if slot < st.slots.len() {
         st.slots[slot] = None;
     }
+    if let Some(a) = st.alive.get_mut(slot) {
+        *a = false;
+    }
     st.workers_alive = st.workers_alive.saturating_sub(1);
     if st.workers_alive == 0 {
         finish_scan(&shared, &mut st);
@@ -850,6 +894,20 @@ fn process(shared: &Arc<Shared>, slot: usize, track_id: i64) {
         let s = shared.settings.read().unwrap_or_else(|p| p.into_inner());
         (s.keep_visuals, s.dj_config())
     };
+    // The file is gone (deleted, or its drive disconnected) since it was
+    // queued: the track keeps its earlier analysis, and a deleted file is
+    // marked missing, as a rescan would (B32).
+    if !Path::new(&path).exists() {
+        let deleted = Path::new(&path).parent().is_some_and(Path::is_dir);
+        let _ = shared.db.write().execute(
+            "UPDATE tracks SET status = CASE WHEN id IN (SELECT track_id FROM analyses) THEN 'done' ELSE 'pending' END, \
+             missing_since = CASE WHEN ? THEN COALESCE(missing_since, ?) ELSE missing_since END WHERE id = ?",
+            params![deleted, now_ms(), track_id],
+        );
+        let msg = if deleted { "the file no longer exists at this location" } else { "its folder is not available (is the drive connected?)" };
+        record_outcome(shared, slot, track_id, "failed", Some(("io_error".into(), msg.into())), started);
+        return;
+    }
     let sh = Arc::clone(shared);
     let mut last = Instant::now() - PROGRESS_INTERVAL;
     let mut progress = move |f: f64| {
@@ -988,7 +1046,9 @@ fn finish_scan(shared: &Arc<Shared>, st: &mut RunState) {
         .ok()
         .flatten()
         .unwrap_or(Value::Null);
-    let elapsed = st.started.elapsed().saturating_sub(st.paused_total);
+    // A pause still going on (cancelled while paused) is not analysis time (B69).
+    let paused = st.paused_total + st.paused_at.map(|p| p.elapsed()).unwrap_or(Duration::ZERO);
+    let elapsed = st.started.elapsed().saturating_sub(paused);
     let mut summary = agg;
     summary.set("elapsedMs", elapsed.as_millis() as i64);
     let _ = c.execute("UPDATE scans SET state = ?, finished_at = ?, summary = ? WHERE id = ?", params![state, now_ms(), summary.to_string_compact(), scan_id]);
@@ -999,6 +1059,7 @@ fn finish_scan(shared: &Arc<Shared>, st: &mut RunState) {
     snap.set("summary", summary);
     st.scan_id = None;
     st.slots.clear();
+    st.alive.clear();
     st.handles.retain(|h| !h.is_finished());
     shared.cancel.store(false, Ordering::Relaxed);
     if st.pending_index_jobs > 0 {
@@ -1018,7 +1079,7 @@ fn status_json(_shared: &Shared, st: &RunState) -> Value {
     } else {
         Duration::ZERO
     };
-    let workers = st.slots.len().max(1) as f64;
+    let workers = st.workers_alive.max(1) as f64;
     let avg = if st.recent.is_empty() { None } else { Some(st.recent.iter().sum::<f64>() / st.recent.len() as f64) };
     let eta_ms = avg.map(|a| ((pending as f64 + running_count(st) as f64 * 0.5) * a / workers * 1000.0) as i64);
     let rate = if elapsed.as_secs_f64() > 1.0 { Some((st.completed + st.failed) as f64 / elapsed.as_secs_f64() * 60.0) } else { None };
@@ -1045,7 +1106,7 @@ fn status_json(_shared: &Shared, st: &RunState) -> Value {
         "elapsedMs" => elapsed.as_millis() as i64,
         "etaMs" => eta_ms,
         "ratePerMin" => rate.map(|r| num(r, 1)).unwrap_or(Value::Null),
-        "workers" => st.slots.len(),
+        "workers" => st.workers_alive,
         "indexing" => st.indexing,
     }
 }
@@ -1091,6 +1152,9 @@ const QUEUE_WAIT: Duration = Duration::from_secs(60 * 60);
 /// A finished download that the folder watcher has not taken in this long
 /// is given up on (the watcher looks every 20 seconds).
 const ARRIVAL_WAIT: Duration = Duration::from_secs(10 * 60);
+/// A file that arrived but has not been checked after this (its analysis
+/// cancelled, say) is left as it is, with a note, so the run can end.
+const CHECK_WAIT: Duration = Duration::from_secs(30 * 60);
 /// Tries per track (the first pick and fallbacks).
 pub const MAX_ATTEMPTS: i64 = 3;
 /// Tracks not found are looked for again after this, up to `MAX_PASSES` times.
@@ -1105,6 +1169,9 @@ const PLAYLIST_PROGRESS: Duration = Duration::from_millis(400);
 struct PlaylistInner {
     /// The run a worker is on.
     active: Mutex<Option<i64>>,
+    /// Set (under `active`) when the run of a worker that is on its way out
+    /// was started again: the worker carries on instead of ending.
+    again: AtomicBool,
     cancel: AtomicBool,
     stop: AtomicBool,
     woken: Mutex<bool>,
@@ -1135,7 +1202,7 @@ fn pl_log(level: &str, msg: &str, fields: Value) {
 }
 
 /// One item as the database has it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Item {
     id: i64,
     run_id: i64,
@@ -1461,11 +1528,33 @@ impl PlaylistJobs {
 
     /// Removes a run and everything noted about it. Not while it runs.
     pub fn delete(&self, app: &App, id: i64) -> Result<(), ApiError> {
-        if *lock(&self.inner.active) == Some(id) {
-            return Err(ApiError::new("busy", "Stop the run before removing it."));
+        let active = lock(&self.inner.active);
+        if *active == Some(id) {
+            // A run waiting to look again has nothing on its way: its worker
+            // only sleeps, and ends when it finds the run gone.
+            let c = app.db.write();
+            let state = c.query_row("SELECT state FROM playlist_runs WHERE id = ?", params![id], |r| r.text(0))?;
+            if state.as_deref() != Some("waiting") {
+                return Err(ApiError::new("busy", "Stop the run before removing it."));
+            }
+            c.execute("DELETE FROM playlist_runs WHERE id = ?", params![id])?;
+            drop(c);
+            drop(active);
+            self.wake();
+            return Ok(());
         }
         app.db.write().execute("DELETE FROM playlist_runs WHERE id = ?", params![id])?;
         Ok(())
+    }
+
+    /// Refuses (before anything is changed) when a worker is on another
+    /// run. The caller keeps the guard until it has spawned.
+    fn claim(&self, run_id: i64) -> Result<MutexGuard<'_, Option<i64>>, ApiError> {
+        let active = lock(&self.inner.active);
+        match *active {
+            Some(other) if other != run_id => Err(ApiError::new("busy", "Another playlist is being searched. Wait for it to finish, or stop it first.")),
+            _ => Ok(active),
+        }
     }
 
     /// Puts videos in or out of the tracks to look for (a draft, or a run
@@ -1493,6 +1582,7 @@ impl PlaylistJobs {
     /// (kept with the run). One run searches at a time.
     pub fn start(&self, app: &Arc<App>, run_id: i64) -> Result<Value, ApiError> {
         let rules = app.settings().playlist_rules;
+        let mut active = self.claim(run_id)?;
         {
             let c = app.db.write();
             let state = c.query_row("SELECT state FROM playlist_runs WHERE id = ?", params![run_id], |r| r.text(0))?.ok_or_else(|| ApiError::new("not_found", "That playlist run is gone."))?;
@@ -1511,7 +1601,9 @@ impl PlaylistJobs {
             // Searched again from the start: what was not found gets another look.
             c.execute("UPDATE playlist_items SET status = 'pending', updated_at = ? WHERE run_id = ? AND included = 1 AND status = 'not_found'", params![now, run_id])?;
         }
-        self.spawn(app, run_id)?;
+        self.spawn_locked(&mut active, app, run_id)?;
+        drop(active);
+        self.wake();
         self.emit_run(app, run_id, true);
         Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
     }
@@ -1534,25 +1626,37 @@ impl PlaylistJobs {
     }
 
     fn spawn(&self, app: &Arc<App>, run_id: i64) -> Result<(), ApiError> {
-        let mut active = lock(&self.inner.active);
-        if let Some(other) = *active {
-            if other != run_id {
-                return Err(ApiError::new("busy", "Another playlist is being searched. Wait for it to finish, or stop it first."));
-            }
+        let mut active = self.claim(run_id)?;
+        self.spawn_locked(&mut active, app, run_id)
+    }
+
+    fn spawn_locked(&self, active: &mut MutexGuard<'_, Option<i64>>, app: &Arc<App>, run_id: i64) -> Result<(), ApiError> {
+        if active.is_some() {
+            // The worker is on this run already; if it is about to end, it
+            // looks at the run once more.
+            self.inner.again.store(true, Ordering::SeqCst);
             return Ok(());
         }
         self.inner.cancel.store(false, Ordering::SeqCst);
+        self.inner.again.store(false, Ordering::SeqCst);
         let weak: Weak<App> = Arc::downgrade(app);
         let inner = Arc::clone(&self.inner);
         let spawned = std::thread::Builder::new().name("sonora-playlist".into()).spawn(move || {
             let worker = Worker { inner: Arc::clone(&inner), run_id };
-            worker.run(weak);
-            *lock(&inner.active) = None;
+            loop {
+                worker.run(weak.clone());
+                let mut active = lock(&inner.active);
+                if inner.again.swap(false, Ordering::SeqCst) && !inner.stop.load(Ordering::SeqCst) && !inner.cancel.load(Ordering::SeqCst) {
+                    continue;
+                }
+                *active = None;
+                break;
+            }
         });
         if spawned.is_err() {
             return Err(ApiError::new("internal", "SONORA could not start the playlist worker."));
         }
-        *active = Some(run_id);
+        **active = Some(run_id);
         Ok(())
     }
 
@@ -1571,13 +1675,20 @@ impl PlaylistJobs {
         Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
     }
 
+    /// Carries on with a paused run, with the rules in use now (changed
+    /// while it was paused, say): they apply from the next search on.
     pub fn resume_run(&self, app: &Arc<App>, run_id: i64) -> Result<Value, ApiError> {
-        let n = app.db.write().execute("UPDATE playlist_runs SET state = 'running', updated_at = ? WHERE id = ? AND state IN ('paused', 'waiting')", params![now_ms(), run_id])?;
+        let rules = app.settings().playlist_rules;
+        let mut active = self.claim(run_id)?;
+        let n = app.db.write().execute(
+            "UPDATE playlist_runs SET state = 'running', rules = ?, confirmed = (confirmed OR ?), retry_at = NULL, updated_at = ? WHERE id = ? AND state IN ('paused', 'waiting')",
+            params![rules.to_json().to_string_compact(), rules.mode == "automatic", now_ms(), run_id],
+        )?;
         if n == 0 {
             return Err(ApiError::new("invalid_params", "Only a paused playlist can be resumed."));
         }
-        app.db.write().execute("UPDATE playlist_runs SET retry_at = NULL WHERE id = ?", params![run_id])?;
-        self.spawn(app, run_id)?;
+        self.spawn_locked(&mut active, app, run_id)?;
+        drop(active);
         self.wake();
         self.emit_run(app, run_id, true);
         Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
@@ -1604,11 +1715,13 @@ impl PlaylistJobs {
     /// In review mode: the picks are downloaded.
     pub fn confirm(&self, app: &Arc<App>, run_id: i64) -> Result<Value, ApiError> {
         let now = now_ms();
+        let mut active = self.claim(run_id)?;
         let n = app.db.write().execute("UPDATE playlist_runs SET confirmed = 1, state = 'running', updated_at = ? WHERE id = ? AND state IN ('review', 'running', 'paused')", params![now, run_id])?;
         if n == 0 {
             return Err(ApiError::new("invalid_params", "This run has no picks waiting."));
         }
-        self.spawn(app, run_id)?;
+        self.spawn_locked(&mut active, app, run_id)?;
+        drop(active);
         self.wake();
         self.emit_run(app, run_id, true);
         Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
@@ -1625,6 +1738,8 @@ impl PlaylistJobs {
         if candidate >= accepted {
             return Err(ApiError::new("invalid_params", "That file was rejected by the rules; choose one that passed."));
         }
+        // Refused before anything is cancelled when another run is working.
+        drop(self.claim(run_id)?);
         if matches!(item.status.as_str(), "downloading") {
             if let (Some(u), Some(t)) = (&item.transfer_user, &item.transfer_id) {
                 if let Err(e) = app.slskd.cancel_transfer(app, u, t, false) {
@@ -1635,6 +1750,7 @@ impl PlaylistJobs {
         let pick = &item.candidates[candidate as usize];
         let note = format!("You chose {} from {}.", pick.name, pick.username);
         let now = now_ms();
+        let mut active = self.claim(run_id)?;
         {
             let c = app.db.write();
             c.execute(
@@ -1644,7 +1760,8 @@ impl PlaylistJobs {
             // A finished run takes the new pick up again.
             c.execute("UPDATE playlist_runs SET state = 'running', confirmed = 1, finished_at = NULL, updated_at = ? WHERE id = ? AND state IN ('finished', 'cancelled', 'waiting')", params![now, run_id])?;
         }
-        self.spawn(app, run_id)?;
+        self.spawn_locked(&mut active, app, run_id)?;
+        drop(active);
         self.wake();
         self.emit_item(app, item_id);
         self.emit_run(app, run_id, true);
@@ -1654,6 +1771,7 @@ impl PlaylistJobs {
     /// Looks again for tracks that were not found (all of them, or `item_ids`).
     pub fn retry(&self, app: &Arc<App>, run_id: i64, item_ids: Option<&[i64]>) -> Result<Value, ApiError> {
         let now = now_ms();
+        let mut active = self.claim(run_id)?;
         {
             let c = app.db.write();
             let n = match item_ids {
@@ -1671,7 +1789,8 @@ impl PlaylistJobs {
             }
             c.execute("UPDATE playlist_runs SET state = 'running', retry_at = NULL, finished_at = NULL, updated_at = ? WHERE id = ? AND state IN ('finished', 'cancelled', 'waiting', 'review')", params![now, run_id])?;
         }
-        self.spawn(app, run_id)?;
+        self.spawn_locked(&mut active, app, run_id)?;
+        drop(active);
         self.wake();
         self.emit_run(app, run_id, true);
         Ok(run_json(&app.db.read(), run_id)?.unwrap_or(Value::Null))
@@ -1687,6 +1806,12 @@ impl PlaylistJobs {
     pub fn is_active(&self) -> Option<i64> {
         *lock(&self.inner.active)
     }
+}
+
+/// Whether an item read a moment ago (`seen`) is still on the same pick
+/// as it is now: same status, same file asked for, same candidate.
+fn still_the_pick(seen: &Item, now: &Item) -> bool {
+    seen.status == now.status && seen.transfer_file == now.transfer_file && seen.chosen == now.chosen
 }
 
 /// What happens to one item in one tick.
@@ -1779,7 +1904,14 @@ impl Worker {
             let next = load_items(&app.db.read(), self.run_id, "included = 1 AND status = 'pending'").ok().and_then(|v| v.into_iter().next());
             if let Some(item) = next {
                 match self.search(&app, &item, &rules) {
-                    Ok(()) => slskd_down = None,
+                    Ok(()) => {
+                        slskd_down = None;
+                        // slskd answers again: the earlier "could not reach" goes.
+                        let cleared = app.db.write().execute("UPDATE playlist_runs SET error = NULL WHERE id = ? AND state = 'running' AND error IS NOT NULL", params![self.run_id]).unwrap_or(0);
+                        if cleared > 0 {
+                            app.playlist.emit_run(&app, self.run_id, true);
+                        }
+                    }
                     Err(e) => {
                         // slskd is not answering: say so, and try the same track again in a while.
                         let now = now_ms();
@@ -1979,7 +2111,12 @@ impl Worker {
     /// The pick did not work out: the next candidate is tried (up to
     /// `MAX_ATTEMPTS` in all), or the track is given up on.
     fn fallback(&self, app: &Arc<App>, item: &Item, why: &str, count: bool) {
-        let fresh = load_item(&app.db.read(), item.id).ok().flatten().unwrap_or_else(|| item.clone());
+        let Some(fresh) = load_item(&app.db.read(), item.id).ok().flatten() else { return };
+        // The person chose another file (or the run moved on) since `item`
+        // was read: this verdict is about a pick that is no longer there.
+        if !still_the_pick(item, &fresh) {
+            return;
+        }
         let accepted = fresh.accepted().len() as i64;
         let next = fresh.chosen.unwrap_or(0) + 1;
         let attempts = fresh.attempts + if count { 1 } else { 0 };
@@ -2046,7 +2183,10 @@ impl Worker {
                 // The size slskd reports at the end is the file's (what the
                 // other person's client announced may have been off).
                 let size = if t.size > 0 { t.size } else { item.transfer_size.unwrap_or(0) };
-                let _ = app.db.write().execute("UPDATE playlist_items SET status = 'verifying', transfer_size = ?, bytes_seen = ?, progress_at = ?, updated_at = ? WHERE id = ?", params![size, size, now, now, item.id]);
+                let _ = app.db.write().execute(
+                    "UPDATE playlist_items SET status = 'verifying', transfer_size = ?, bytes_seen = ?, progress_at = ?, updated_at = ? WHERE id = ? AND status = 'downloading' AND transfer_file IS ?",
+                    params![size, size, now, now, item.id, item.transfer_file.clone()],
+                );
                 Tick::Done
             }
             "failed" | "cancelled" => {
@@ -2057,7 +2197,10 @@ impl Worker {
             _ => {
                 let moved = t.bytes > item.bytes_seen.unwrap_or(0);
                 if moved {
-                    let _ = app.db.write().execute("UPDATE playlist_items SET bytes_seen = ?, progress_at = ?, updated_at = ? WHERE id = ?", params![t.bytes, now, now, item.id]);
+                    let _ = app.db.write().execute(
+                        "UPDATE playlist_items SET bytes_seen = ?, progress_at = ?, updated_at = ? WHERE id = ? AND status = 'downloading' AND transfer_file IS ?",
+                        params![t.bytes, now, now, item.id, item.transfer_file.clone()],
+                    );
                     return Tick::Done;
                 }
                 let since = item.progress_at.map(|p| (now - p).max(0)).unwrap_or(0) as u128;
@@ -2090,7 +2233,7 @@ impl Worker {
                 return Tick::Done;
             }
             // SONORA's watcher looks every 20 seconds; asked to look now.
-            app.sources.wake();
+            app.sources.nudge();
             return Tick::Wait;
         };
         match local.state.as_str() {
@@ -2107,10 +2250,25 @@ impl Worker {
                 Tick::Done
             }
             _ => {
-                let Some(track_id) = local.track_id else { return Tick::Wait };
+                let waited = item.progress_at.map(|p| (now - p).max(0)).unwrap_or(0) as u128;
+                let gone = |why: &str| {
+                    let _ = app.db.write().execute("UPDATE playlist_items SET status = 'done', note = ?, updated_at = ? WHERE id = ? AND status = 'verifying'", params![why, now, item.id]);
+                    pl_log("info", "arrived track not checked", obj! { "run" => self.run_id, "item" => item.id });
+                    Tick::Done
+                };
+                let Some(track_id) = local.track_id else {
+                    if local.state == "imported" {
+                        return gone("It arrived; you removed it from the library since.");
+                    }
+                    if waited > CHECK_WAIT.as_millis() {
+                        return gone("It arrived, but SONORA could not add it to the library to check it.");
+                    }
+                    return Tick::Wait;
+                };
                 let track = match library::get_track(&app.db.read(), track_id) {
                     Ok(Some(t)) => t,
-                    _ => return Tick::Wait,
+                    Ok(None) => return gone("It arrived; you removed it from the library since."),
+                    Err(_) => return Tick::Wait,
                 };
                 match track.status.as_str() {
                     "done" => {
@@ -2145,9 +2303,30 @@ impl Worker {
                         self.fallback(app, item, &format!("it could not be analysed ({})", track.error_message.clone().unwrap_or_default()), false);
                         Tick::Done
                     }
+                    _ if waited > CHECK_WAIT.as_millis() => {
+                        let _ = app.db.write().execute("UPDATE playlist_items SET track_id = ? WHERE id = ?", params![track_id, item.id]);
+                        gone("It is in the library, but its analysis has not run, so it was not checked. Analyze it from the library.")
+                    }
                     _ => Tick::Wait,
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod playlist_tests {
+    use super::*;
+
+    #[test]
+    fn a_verdict_on_an_earlier_pick_does_not_overrule_the_persons_choice() {
+        // B15: the run looked at a download; meanwhile the person chose
+        // another file, so the item is 'found' with a new pick.
+        let seen = Item { status: "downloading".into(), chosen: Some(0), transfer_file: Some("@@a\\x.flac".into()), ..Item::default() };
+        let chose = Item { status: "found".into(), chosen: Some(2), transfer_file: None, ..Item::default() };
+        assert!(!still_the_pick(&seen, &chose));
+        assert!(still_the_pick(&seen, &seen.clone()));
+        let other_file = Item { transfer_file: Some("@@b\\y.flac".into()), ..seen.clone() };
+        assert!(!still_the_pick(&seen, &other_file));
     }
 }

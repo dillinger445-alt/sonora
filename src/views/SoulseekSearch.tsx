@@ -189,7 +189,7 @@ function FolderBlock({
           data-tip={owned > 0 ? `${plural(owned, 'file')} already in your library ${owned === 1 ? 'is' : 'are'} left out` : a.label}
           onClick={() => onDownload(f, wanted)}
         >
-          {wanted.length === 0 ? 'All asked for' : wanted.length === f.files.length ? `Download ${plural(wanted.length, 'file')}` : `Download the other ${formatCount(wanted.length)}`}
+          {wanted.length === 0 ? (owned === f.files.length ? 'All in your library' : 'All asked for') : wanted.length === f.files.length ? `Download ${plural(wanted.length, 'file')}` : `Download the other ${formatCount(wanted.length)}`}
         </Button>
       </header>
       <table className="list-table sk-files">
@@ -298,28 +298,45 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
   // when the search ends; until then it tells how many people answered. A
   // search that slskd never finishes is left after three minutes.
   const [stuck, setStuck] = useState(false);
+  /** Asks for the results now (after Stop search). */
+  const poke = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!search) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
     const since = Date.now();
     setStuck(false);
+    const schedule = (ms: number) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void tick(), ms);
+    };
     const tick = async () => {
       try {
         const r = await client.slskdResults(search.id, lossless);
         if (stopped) return;
+        failures = 0;
         setResults(r);
         setError(null);
         if (r.state !== 'searching') return;
         if (Date.now() - since > 180_000) setStuck(true);
-        else timer = setTimeout(() => void tick(), 1200);
+        else schedule(1200);
       } catch (e) {
-        if (!stopped) setError(message(e));
+        if (stopped) return;
+        setError(message(e));
+        // One failed look (slskd restarting, a time-out) is not the end of
+        // the search: keep asking, more slowly (B19).
+        failures += 1;
+        if (Date.now() - since < 180_000) schedule(Math.min(5000, 1200 * 2 ** failures));
       }
+    };
+    poke.current = () => {
+      if (!stopped) schedule(0);
     };
     void tick();
     return () => {
       stopped = true;
+      poke.current = null;
       if (timer) clearTimeout(timer);
     };
   }, [client, search, lossless]);
@@ -356,6 +373,8 @@ export function SoulseekSearch({ state }: { state: SoulseekState }) {
     if (!search) return;
     try {
       await client.slskdStop(search.id);
+      // Its results come at once, also after polling gave up (B19).
+      poke.current?.();
     } catch (e) {
       toast({ tone: 'error', title: 'Could not stop the search', body: message(e) });
     }

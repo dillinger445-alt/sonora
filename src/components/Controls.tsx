@@ -2,6 +2,7 @@
 
 import { forwardRef, useEffect, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { LuSearch, LuX } from 'react-icons/lu';
+import { parseStepValue } from '../lib/stepper.ts';
 import { formatCount } from '../lib/format.ts';
 
 export interface SegmentedOption<T extends string> {
@@ -249,7 +250,10 @@ export function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="kbd">{children}</kbd>;
 }
 
-/** A number with − and + buttons; typed values are clamped to the range on Enter or blur. */
+/** A number with − and + buttons; typed values are clamped to the range on
+ *  Enter or blur. An emptied field goes back to the saved value (B46), and
+ *  − and + step from what is typed or was just chosen, not from a value
+ *  still being saved (B86). */
 export function NumberStepper({ value, min, max, step = 1, onChange, label, unit }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; label: string; unit?: string }) {
   const [text, setText] = useState(String(value));
   const [lastValue, setLastValue] = useState(value);
@@ -257,19 +261,22 @@ export function NumberStepper({ value, min, max, step = 1, onChange, label, unit
     setLastValue(value);
     setText(String(value));
   }
+  const current = parseStepValue(text, min, max, step) ?? value;
+  const emit = (v: number) => {
+    setText(String(v));
+    if (v !== value) onChange(v);
+  };
   const commit = (raw: string) => {
-    const v = Number(raw);
-    if (!Number.isFinite(v)) {
+    const v = parseStepValue(raw, min, max, step);
+    if (v == null) {
       setText(String(value));
       return;
     }
-    const clamped = Math.max(min, Math.min(max, Math.round(v / step) * step));
-    setText(String(clamped));
-    if (clamped !== value) onChange(clamped);
+    emit(v);
   };
   return (
     <div className="stepper">
-      <button type="button" className="stepper-btn" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - step))}>
+      <button type="button" className="stepper-btn" aria-label={`Decrease ${label}`} disabled={current <= min} onClick={() => emit(Math.max(min, current - step))}>
         −
       </button>
       <input
@@ -281,17 +288,21 @@ export function NumberStepper({ value, min, max, step = 1, onChange, label, unit
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
+          if (e.key === 'Escape' && text !== String(value)) {
+            e.preventDefault();
+            setText(String(value));
+          }
           if (e.key === 'ArrowUp') {
             e.preventDefault();
-            onChange(Math.min(max, value + step));
+            emit(Math.min(max, current + step));
           }
           if (e.key === 'ArrowDown') {
             e.preventDefault();
-            onChange(Math.max(min, value - step));
+            emit(Math.max(min, current - step));
           }
         }}
       />
-      <button type="button" className="stepper-btn" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + step))}>
+      <button type="button" className="stepper-btn" aria-label={`Increase ${label}`} disabled={current >= max} onClick={() => emit(Math.min(max, current + step))}>
         +
       </button>
       {unit ? <span className="stepper-unit faint">{unit}</span> : null}

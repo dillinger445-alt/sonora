@@ -25,6 +25,18 @@ pub struct sqlite3_stmt {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+pub struct sqlite3_context {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct sqlite3_value {
+    _private: [u8; 0],
+}
+
+type ScalarFn = unsafe extern "C" fn(ctx: *mut sqlite3_context, argc: c_int, argv: *mut *mut sqlite3_value);
+
 #[cfg_attr(all(not(feature = "external-sqlite"), not(windows)), link(name = "sqlite3"))]
 #[cfg_attr(all(not(feature = "external-sqlite"), windows), link(name = "winsqlite3"))]
 extern "C" {
@@ -52,6 +64,23 @@ extern "C" {
     fn sqlite3_changes(db: *mut sqlite3) -> c_int;
     fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> i64;
     fn sqlite3_libversion() -> *const c_char;
+    #[allow(clippy::too_many_arguments)]
+    fn sqlite3_create_function_v2(
+        db: *mut sqlite3,
+        name: *const c_char,
+        n_arg: c_int,
+        text_rep: c_int,
+        app: *mut c_void,
+        func: Option<ScalarFn>,
+        step: Option<ScalarFn>,
+        last: Option<unsafe extern "C" fn(ctx: *mut sqlite3_context)>,
+        destroy: Option<unsafe extern "C" fn(app: *mut c_void)>,
+    ) -> c_int;
+    fn sqlite3_value_type(v: *mut sqlite3_value) -> c_int;
+    fn sqlite3_value_text(v: *mut sqlite3_value) -> *const c_uchar;
+    fn sqlite3_value_bytes(v: *mut sqlite3_value) -> c_int;
+    fn sqlite3_result_text(ctx: *mut sqlite3_context, text: *const c_char, n: c_int, destructor: isize);
+    fn sqlite3_result_null(ctx: *mut sqlite3_context);
 }
 
 const SQLITE_OK: c_int = 0;
@@ -63,6 +92,32 @@ const SQLITE_OPEN_CREATE: c_int = 0x0000_0004;
 const SQLITE_OPEN_NOMUTEX: c_int = 0x0000_8000;
 /// `SQLITE_TRANSIENT`: SQLite copies bound text/blobs immediately.
 const SQLITE_TRANSIENT: isize = -1;
+const SQLITE_UTF8: c_int = 1;
+const SQLITE_DETERMINISTIC: c_int = 0x800;
+
+/// `sonora_fold(text)`: the text in lower case, for every script (SQLite's
+/// own `lower()` and `LIKE` only know ASCII letters). NULL stays NULL.
+unsafe extern "C" fn sonora_fold(ctx: *mut sqlite3_context, argc: c_int, argv: *mut *mut sqlite3_value) {
+    if argc != 1 || argv.is_null() {
+        sqlite3_result_null(ctx);
+        return;
+    }
+    let v = *argv;
+    if sqlite3_value_type(v) == SQLITE_NULL {
+        sqlite3_result_null(ctx);
+        return;
+    }
+    // Text first, then its length (the order SQLite documents).
+    let p = sqlite3_value_text(v);
+    let n = sqlite3_value_bytes(v);
+    if p.is_null() || n <= 0 {
+        sqlite3_result_text(ctx, c"".as_ptr(), 0, SQLITE_TRANSIENT);
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(p, n as usize);
+    let folded = String::from_utf8_lossy(bytes).to_lowercase();
+    sqlite3_result_text(ctx, folded.as_ptr() as *const c_char, folded.len() as c_int, SQLITE_TRANSIENT);
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DbError {
@@ -370,6 +425,11 @@ impl Connection {
         }
         unsafe {
             sqlite3_busy_timeout(db, 5000);
+        }
+        let name = cstring("sonora_fold")?;
+        let rc = unsafe { sqlite3_create_function_v2(db, name.as_ptr(), 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, ptr::null_mut(), Some(sonora_fold), None, None, None) };
+        if rc != SQLITE_OK {
+            return Err(conn.error(rc));
         }
         Ok(conn)
     }

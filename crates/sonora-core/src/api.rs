@@ -362,10 +362,12 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             let filter = p.get("filter").and_then(Value::as_str).unwrap_or("all");
             let cond = match filter {
                 "all" => "i.outcome IN ('done', 'failed')",
-                "problems" => "(i.outcome = 'failed' OR t.flags LIKE '%,attention,%' OR t.flags LIKE '%,review,%')",
+                // Only what this scan finished: queued or cancelled tracks still
+                // carry the flags of an earlier analysis (B31).
+                "problems" => "(i.outcome = 'failed' OR (i.outcome = 'done' AND (t.flags LIKE '%,attention,%' OR t.flags LIKE '%,review,%')))",
                 "failed" => "i.outcome = 'failed'",
-                "clipping" => "t.flags LIKE '%,clipping,%'",
-                "source" => "t.flags LIKE '%,source_concern,%'",
+                "clipping" => "i.outcome = 'done' AND t.flags LIKE '%,clipping,%'",
+                "source" => "i.outcome = 'done' AND t.flags LIKE '%,source_concern,%'",
                 other => return Err(ApiError::invalid(format!("unknown filter '{other}'"))),
             };
             let limit = p.get("limit").and_then(Value::as_i64).unwrap_or(200).clamp(1, 2000);
@@ -556,7 +558,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
                 "betterCopies" => items.iter().filter(|i| i.skip.is_none() && i.source.id != i.track.id).count(),
                 "withWarnings" => items.iter().filter(|i| i.skip.is_none() && !i.warnings.is_empty()).count(),
                 "problem" => problem,
-                "running" => app.exporter.is_running(),
+                // Either job blocks a new export (B48).
+                "running" => app.exporter.is_running() || app.syncer.is_running(),
             })
         }
         "djexport.start" => {
@@ -631,6 +634,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             Ok(crate::sources::status_json(app)?)
         }
         "sources.configure" => {
+            let _change = app.settings_change();
             let mut s = app.settings();
             if let Some(v) = p.get("folder") {
                 if v.is_null() {
@@ -699,6 +703,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
             if let Some(v) = p.get("url") {
                 let url = v.as_str().ok_or_else(|| ApiError::invalid("url must be a web address"))?;
                 let url = crate::slskd::normalize_url(url).map_err(ApiError::invalid)?;
+                let _change = app.settings_change();
                 let mut s = app.settings();
                 s.slskd_url = url;
                 s.save(&app.db.write())?;
@@ -980,6 +985,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, p: &Value) -> R {
         "settings.get" => Ok(app.settings().to_json()),
         "settings.update" => {
             let values = p.get("values").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("values must be an object"))?;
+            let _change = app.settings_change();
             let mut s = app.settings();
             for (k, v) in values.iter() {
                 s.apply(k, v).map_err(ApiError::invalid)?;

@@ -199,10 +199,29 @@ pub fn clean_title(title: &str) -> String {
     t.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A leading track number ("03 - ", "1. ", "07_", "03 "), and only that:
+/// "808 State", "2 Unlimited" and "50 Cent" keep their names (B91).
+fn strip_track_number(stem: &str) -> &str {
+    let digits = stem.len() - stem.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 || digits > 3 {
+        return stem;
+    }
+    let after = &stem[digits..];
+    let t = after.trim_start();
+    if let Some(r) = t.strip_prefix(['-', '.', '_', ')']) {
+        return r.trim_start_matches(['-', '.', '_', ' ']);
+    }
+    // A zero-padded number before a space is a track number too.
+    if stem.starts_with('0') && after.starts_with(' ') {
+        return t;
+    }
+    stem
+}
+
 /// "Artist - Title" from a file name, when tags are missing.
 pub fn split_file_name(name: &str) -> Option<(String, String)> {
     let stem = std::path::Path::new(name).file_stem()?.to_string_lossy().to_string();
-    let stem = stem.trim_start_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == '.' || c == '-' || c == '_');
+    let stem = strip_track_number(&stem);
     let (a, t) = stem.split_once(" - ")?;
     let (a, t) = (a.trim(), t.trim());
     (!a.is_empty() && !t.is_empty()).then(|| (a.to_string(), t.to_string()))
@@ -445,6 +464,12 @@ impl Discogs {
                         failed += 1;
                     }
                 }
+                // Stopped part way (B90): a cancel, not a track not found or a
+                // rate limit.
+                Ok(None) | Err(LookupError::RateLimited) if self.cancel.load(Ordering::Relaxed) => {
+                    cancelled = true;
+                    break;
+                }
                 Ok(None) => not_found += 1,
                 Err(e @ (LookupError::Unauthorized | LookupError::RateLimited)) => {
                     error = Some(e.to_string());
@@ -480,6 +505,13 @@ mod tests {
         assert_eq!(clean_title("Mercury feat. Ana"), "Mercury");
         assert_eq!(split_file_name("03 - Ana Ruiz - Night Drive (Original Mix).flac"), Some(("Ana Ruiz".into(), "Night Drive (Original Mix)".into())));
         assert_eq!(split_file_name("Night Drive.wav"), None);
+        // B91: digits that are part of the artist's name stay.
+        assert_eq!(split_file_name("808 State - Pacific.flac"), Some(("808 State".into(), "Pacific".into())));
+        assert_eq!(split_file_name("2 Unlimited - Get Ready.mp3"), Some(("2 Unlimited".into(), "Get Ready".into())));
+        assert_eq!(split_file_name("50 Cent - In Da Club.mp3"), Some(("50 Cent".into(), "In Da Club".into())));
+        assert_eq!(split_file_name("1. Ana Ruiz - Night Drive.flac"), Some(("Ana Ruiz".into(), "Night Drive".into())));
+        assert_eq!(split_file_name("07_Ana Ruiz - Night Drive.flac"), Some(("Ana Ruiz".into(), "Night Drive".into())));
+        assert_eq!(split_file_name("03 Ana Ruiz - Night Drive.flac"), Some(("Ana Ruiz".into(), "Night Drive".into())));
         assert_eq!(percent("Ana & Bo/1"), "Ana%20%26%20Bo%2F1");
         assert_eq!(config_value("a \"b\" \\c"), "\"a \\\"b\\\" \\\\c\"");
     }

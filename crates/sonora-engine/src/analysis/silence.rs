@@ -175,25 +175,30 @@ impl SilenceMeter {
             self.block_max = self.block_max.max(peak);
             self.block_pos += 1;
             if self.block_pos == self.block_len {
-                let silent = self.block_max < SILENCE_PEAK;
-                if silent {
-                    self.silent_blocks += 1;
-                    if self.silent_run_start_block.is_none() {
-                        self.silent_run_start_block = Some(self.blocks);
-                    }
-                } else {
-                    if self.first_loud_block.is_none() {
-                        self.first_loud_block = Some(self.blocks);
-                    }
-                    self.last_loud_block = Some(self.blocks);
-                    self.close_silent_region(self.blocks);
-                }
-                self.blocks += 1;
-                self.block_pos = 0;
-                self.block_max = 0.0;
+                self.end_block();
             }
             self.frame += 1;
         }
+    }
+
+    /// Judges the block just ended as silent or loud.
+    fn end_block(&mut self) {
+        let silent = self.block_max < SILENCE_PEAK;
+        if silent {
+            self.silent_blocks += 1;
+            if self.silent_run_start_block.is_none() {
+                self.silent_run_start_block = Some(self.blocks);
+            }
+        } else {
+            if self.first_loud_block.is_none() {
+                self.first_loud_block = Some(self.blocks);
+            }
+            self.last_loud_block = Some(self.blocks);
+            self.close_silent_region(self.blocks);
+        }
+        self.blocks += 1;
+        self.block_pos = 0;
+        self.block_max = 0.0;
     }
 
     fn close_silent_region(&mut self, end_block: u64) {
@@ -209,6 +214,11 @@ impl SilenceMeter {
         let fs = self.sample_rate as f64;
         if let Some(p) = self.pending.take() {
             self.resolve_pending(p);
+        }
+        // The last, partial block counts too: a sound shorter than one
+        // block is not silence (B78).
+        if self.block_pos > 0 {
+            self.end_block();
         }
         let blocks = self.blocks;
         self.close_silent_region(blocks);

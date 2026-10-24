@@ -8,6 +8,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { EVENTS_RECONNECTED } from '../api/bridge.ts';
 import type { CoreEvents, DiscogsReport, ExportProgress, ExportReport, PlaylistRun, UsbProgress, UsbReport } from '../api/types.ts';
 import { formatCount, plural } from '../lib/format.ts';
 import { revealLabel } from '../lib/platform.ts';
@@ -102,15 +103,24 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
   const resync = useCallback(() => {
     client.exportStatus().then(
-      (s) => setExportRunning(s.running),
+      (s) => {
+        setExportRunning(s.running);
+        if (!s.running) setExportProgress(null);
+      },
       () => undefined,
     );
     client.discogsStatus().then(
-      (s) => setDiscogsRunning(s.running),
+      (s) => {
+        setDiscogsRunning(s.running);
+        if (!s.running) setDiscogsProgress(null);
+      },
       () => undefined,
     );
     client.usbStatus().then(
-      (s) => setUsbRunning(s.running),
+      (s) => {
+        setUsbRunning(s.running);
+        if (!s.running) setUsbProgress(null);
+      },
       () => undefined,
     );
     client.playlistList().then(
@@ -121,6 +131,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
   // A job may already run (the interface was reloaded during it).
   useEffect(resync, [resync]);
+
+  // A `*.finished` missed while the event stream was down would leave a job
+  // showing as running (B96).
+  useCoreEvent([EVENTS_RECONNECTED], resync);
 
   useCoreEvent(['djexport.progress', 'djexport.finished', 'discogs.progress', 'discogs.finished', 'usb.progress', 'usb.finished', 'playlist.changed', 'playlist.finished'], (name, payload) => {
     switch (name) {
@@ -150,7 +164,17 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         const r = payload as UsbReport;
         const d = describeUsb(r);
         const folder = r.folder;
-        toast({ ...d, action: folder && !r.error ? { label: revealLabel(bridge.platform), run: () => void bridge.reveal(folder).catch(() => undefined) } : undefined, timeout: d.tone === 'error' ? 0 : 8000 });
+        toast({
+          ...d,
+          action:
+            folder && !r.error
+              ? {
+                  label: revealLabel(bridge.platform),
+                  run: () => void bridge.reveal(folder).catch((e: unknown) => toast({ tone: 'error', title: 'Could not show the files', body: e instanceof Error ? e.message : String(e) })),
+                }
+              : undefined,
+          timeout: d.tone === 'error' ? 0 : 8000,
+        });
         break;
       }
       case 'djexport.progress':

@@ -4,7 +4,7 @@
  * it runs (with a fix for each problem SONORA can name).
  */
 
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { LuCircle, LuCircleAlert, LuCircleCheck, LuCopy, LuExternalLink, LuFileText, LuFolderOpen, LuLoaderCircle, LuRefreshCw, LuSearch, LuWrench } from 'react-icons/lu';
 import type { ManagedSlskd, SetupPlan, SetupRun, SetupStepId, SlskdProcess } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
@@ -76,6 +76,10 @@ export function SetupDialog({ open, onClose, onStarted, update }: { open: boolea
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // The first look after opening fills the form from what was found; looks
+  // after an action (Stop it, Quit the Soulseek app) only refresh the plan,
+  // so a share the person turned off stays off (B04).
+  const seeded = useRef(false);
   const load = () => {
     client.slskdSetupPlan().then(
       (p) => {
@@ -83,10 +87,11 @@ export function SetupDialog({ open, onClose, onStarted, update }: { open: boolea
         setPlanError(null);
         setUsername((u) => u || (p.found?.username ?? ''));
         setDownloads((d) => d || p.downloads);
-        if (p.share) {
+        if (p.share && !seeded.current) {
           setShare((s) => s || (p.share ?? ''));
           setSharing(true);
         }
+        seeded.current = true;
       },
       (e: unknown) => setPlanError(message(e)),
     );
@@ -97,6 +102,7 @@ export function SetupDialog({ open, onClose, onStarted, update }: { open: boolea
     setPlan(null);
     setError(null);
     setPassword('');
+    seeded.current = false;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -310,13 +316,16 @@ export function SetupProgress({ run, others, onChanged }: { run: SetupRun; other
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
-  const act = async (what: string, f: () => Promise<unknown>) => {
+  /** Whether it worked: a form is cleared only then (B60). */
+  const act = async (what: string, f: () => Promise<unknown>): Promise<boolean> => {
     setBusy(what);
     try {
       await f();
       onChanged();
+      return true;
     } catch (e) {
       toast({ tone: 'error', title: 'That did not work', body: message(e) });
+      return false;
     } finally {
       setBusy(null);
     }
@@ -386,7 +395,7 @@ export function SetupProgress({ run, others, onChanged }: { run: SetupRun; other
               className="discogs-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (password) void retry(password).then(() => setPassword(''));
+                if (password) void retry(password).then((ok) => ok && setPassword(''));
               }}
             >
               <input className="text-input" type="password" autoComplete="off" aria-label="Soulseek password" placeholder="Soulseek password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -483,15 +492,18 @@ export function ManagedPanel({ m, state, onUpdate }: { m: ManagedSlskd; state: S
   const c = state.connection;
   const signedIn = c?.ok === true && c.info.loggedIn;
 
-  const act = async (what: string, f: () => Promise<unknown>, done?: string) => {
+  /** Whether it worked: a form is closed only then (B60). */
+  const act = async (what: string, f: () => Promise<unknown>, done?: string): Promise<boolean> => {
     setBusy(what);
     try {
       await f();
       state.managed.reload();
       void state.test();
       if (done) toast({ tone: 'success', title: done });
+      return true;
     } catch (e) {
       toast({ tone: 'error', title: 'That did not work', body: message(e) });
+      return false;
     } finally {
       setBusy(null);
     }
@@ -645,7 +657,8 @@ export function ManagedPanel({ m, state, onUpdate }: { m: ManagedSlskd; state: S
             onSubmit={(e) => {
               e.preventDefault();
               if (!password) return;
-              void act('password', () => client.slskdPassword(password), 'Password changed').then(() => {
+              void act('password', () => client.slskdPassword(password), 'Password changed').then((ok) => {
+                if (!ok) return;
                 setPassword('');
                 setChanging(false);
               });

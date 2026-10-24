@@ -125,6 +125,22 @@ impl Default for PlaylistRules {
 }
 
 impl PlaylistRules {
+    /// The rules as saved, keeping every rule this version takes: a rule it
+    /// does not know or no longer accepts (saved by another version) is
+    /// left out, not all of them (B88).
+    pub fn from_saved(v: &Value) -> PlaylistRules {
+        let Some(o) = v.as_object() else { return PlaylistRules::default() };
+        let mut good = Value::Object(Default::default());
+        for (k, x) in o.iter() {
+            let mut next = good.clone();
+            next.set(k, x.clone());
+            if PlaylistRules::from_json(&next).is_ok() {
+                good = next;
+            }
+        }
+        PlaylistRules::from_json(&good).unwrap_or_default()
+    }
+
     /// Reads the rules from JSON; every key is optional and defaults.
     pub fn from_json(v: &Value) -> Result<PlaylistRules, String> {
         let mut r = PlaylistRules::default();
@@ -257,6 +273,10 @@ impl Settings {
         let rows = c.query("SELECT key, value FROM settings", params![], |r| (r.text(0), r.text(1))).unwrap_or_default();
         for (k, v) in rows {
             if let Ok(val) = sonora_json::parse(&v) {
+                if k == "playlistRules" {
+                    s.playlist_rules = PlaylistRules::from_saved(&val);
+                    continue;
+                }
                 let _ = s.apply(&k, &val);
             }
         }
@@ -412,6 +432,18 @@ impl ToJson for Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_rules_keep_what_this_version_takes() {
+        // B88: one rule from another version used to reset them all.
+        let saved = sonora_json::parse(r#"{"formats":["flac"],"maxQueue":5,"futureRule":1,"maxDownloads":99,"mode":"review"}"#).unwrap();
+        let r = PlaylistRules::from_saved(&saved);
+        assert_eq!(r.formats, vec!["flac".to_string()]);
+        assert_eq!((r.max_queue, r.mode.as_str()), (5, "review"));
+        assert_eq!(r.max_downloads, PlaylistRules::default().max_downloads, "the value out of range is left out");
+        // Changes through the API stay strict.
+        assert!(PlaylistRules::from_json(&saved).is_err());
+    }
 
     #[test]
     fn validate_and_persist() {

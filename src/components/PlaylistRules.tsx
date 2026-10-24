@@ -8,6 +8,7 @@
 import { useId } from 'react';
 import { LuChevronDown, LuChevronUp } from 'react-icons/lu';
 import type { LosslessFormat, PlaylistMode, PlaylistQuality, PlaylistRules } from '../api/types.ts';
+import { formatRateKhz } from '../lib/format.ts';
 import { formatRoute } from '../lib/router.ts';
 import { useCore } from '../state/core.tsx';
 import { useToast } from '../state/toasts.tsx';
@@ -45,8 +46,8 @@ export function usePlaylistRules(): { rules: PlaylistRules | null; set: (patch: 
   return { rules, set };
 }
 
-/** The choices made most often, on the playlist page. */
-export function QuickRules() {
+/** The choices made most often, on the playlist page. `note`: when they take effect, if not at once. */
+export function QuickRules({ note }: { note?: string }) {
   const { rules, set } = usePlaylistRules();
   if (!rules) return null;
   return (
@@ -66,6 +67,7 @@ export function QuickRules() {
       <a className="link pl-quick-all" href={formatRoute({ view: 'settings' })}>
         All rules
       </a>
+      {note ? <span className="pl-quick-note faint">{note}</span> : null}
     </div>
   );
 }
@@ -89,7 +91,6 @@ export function PlaylistRulesForm() {
     if (next.length === 0 && !rules.lossy) return;
     set({ formats: next });
   };
-  const limit = (v: number | null, label: string) => (v == null ? `No ${label} limit` : String(v));
   return (
     <div className="pl-rules">
       <div className="setting-row">
@@ -151,7 +152,11 @@ export function PlaylistRulesForm() {
       <div className="setting-row">
         <div className="switch-text">
           <span className="switch-label">Highest resolution taken</span>
-          <span className="switch-desc">Files above this are left out; {limit(rules.maxBitDepth, 'bit depth').toLowerCase()}, {limit(rules.maxSampleRate, 'sample rate').toLowerCase()}.</span>
+          {/* With their units: "24-bit, 96 kHz", not "24, 96000" (B57). */}
+          <span className="switch-desc">
+            Files above this are left out: {rules.maxBitDepth == null ? 'no bit depth limit' : `${rules.maxBitDepth}-bit`},{' '}
+            {rules.maxSampleRate == null ? 'no sample rate limit' : `${formatRateKhz(rules.maxSampleRate)} kHz`}.
+          </span>
         </div>
         <div className="setting-control pl-limits">
           <Segmented

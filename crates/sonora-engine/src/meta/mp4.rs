@@ -878,7 +878,7 @@ fn parse_trak(body: &[u8], depth: usize) -> Track {
     t
 }
 
-const ID3V1_GENRES: [&str; 148] = [
+pub(crate) const ID3V1_GENRES: [&str; 148] = [
     "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop", "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop",
     "R&B", "Rap", "Reggae", "Rock", "Techno", "Industrial", "Alternative", "Ska", "Death Metal", "Pranks", "Soundtrack", "Euro-Techno",
     "Ambient", "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion", "Trance", "Classical", "Instrumental", "Acid", "House", "Game", "Sound Clip",

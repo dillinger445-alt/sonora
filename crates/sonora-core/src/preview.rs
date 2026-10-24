@@ -906,13 +906,18 @@ fn on_transfer(app: &App, s: &Arc<Session>, t: &TransferInfo, backoff: &mut Opti
             set_phase(app, s, Phase::Complete);
         }
         "cancelled" => {
-            // Cancelled outside SONORA: nothing more will come.
-            let mut st = lock(&s.st);
-            st.transfer = None;
-            if st.owned {
+            // Cancelled outside SONORA: nothing more will come, whether the
+            // preview's own transfer or a download it follows (B21).
+            {
+                let mut st = lock(&s.st);
+                st.transfer = None;
                 st.source_dead = true;
-                st.error = Some("The transfer was stopped in slskd.".into());
+                if st.owned {
+                    st.error = Some("The transfer was stopped in slskd.".into());
+                }
             }
+            s.cv.notify_all();
+            Previews::emit(app, s, true);
         }
         _ => {
             // Failed: try again from where it stopped, unless the other user said no.

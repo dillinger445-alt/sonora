@@ -208,6 +208,8 @@ pub fn generate(out: &Path, seconds: f64, ffmpeg: Option<&Path>) -> Result<Gener
     let Some(ff) = ffmpeg else {
         skipped.push("FFmpeg not found: FLAC/AIFF/lossy variants, transcodes, duplicates and the spliced file were skipped".into());
         let _ = std::fs::remove_dir_all(&tmp);
+        // The manifest lists what was made, with or without FFmpeg (B100).
+        write_manifest(out, seconds, &mut manifest)?;
         return Ok(Generated { manifest, skipped });
     };
     let p = |name: &str| out.join(name).to_string_lossy().to_string();
@@ -315,8 +317,11 @@ pub fn generate(out: &Path, seconds: f64, ffmpeg: Option<&Path>) -> Result<Gener
         if std::fs::create_dir_all(&dupes).is_ok() && std::fs::write(dupes.join("clean_master (copy).flac"), &bytes).is_ok() {
             manifest.push(entry("duplicates/clean_master (copy).flac", "Byte-identical copy of clean_master.flac", &["lossless", "clean", "exact_duplicate"]));
         }
-        let _ = std::fs::copy(&clean_wav, dupes.join("clean_master (export).wav"));
-        manifest.push(entry("duplicates/clean_master (export).wav", "Same audio as clean_master.flac in a WAV container", &["lossless", "clean", "same_audio"]));
+        // A byte-for-byte copy of clean_master_16bit.wav, and listed only
+        // when it was written (B100).
+        if std::fs::copy(&clean_wav, dupes.join("clean_master (export).wav")).is_ok() {
+            manifest.push(entry("duplicates/clean_master (export).wav", "Byte-identical copy of clean_master_16bit.wav (the same audio as clean_master.flac)", &["lossless", "clean", "exact_duplicate", "same_audio"]));
+        }
     }
 
     // An MP3 whose extension says FLAC.
@@ -325,8 +330,35 @@ pub fn generate(out: &Path, seconds: f64, ffmpeg: Option<&Path>) -> Result<Gener
     }
 
     let _ = std::fs::remove_dir_all(&tmp);
-    manifest.sort_by(|a, b| a.get("file").and_then(Value::as_str).cmp(&b.get("file").and_then(Value::as_str)));
-    let doc = obj! { "generator" => "sonora-cli fixtures", "seconds" => seconds, "files" => Value::Array(manifest.clone()) };
-    std::fs::write(out.join("manifest.json"), doc.to_string_pretty()).map_err(|e| e.to_string())?;
+    write_manifest(out, seconds, &mut manifest)?;
     Ok(Generated { manifest, skipped })
+}
+
+fn write_manifest(out: &Path, seconds: f64, manifest: &mut [Value]) -> Result<(), String> {
+    manifest.sort_by(|a, b| a.get("file").and_then(Value::as_str).cmp(&b.get("file").and_then(Value::as_str)));
+    let doc = obj! { "generator" => "sonora-cli fixtures", "seconds" => seconds, "files" => Value::Array(manifest.to_vec()) };
+    std::fs::write(out.join("manifest.json"), doc.to_string_pretty()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_ffmpeg_the_manifest_still_lists_every_file() {
+        // B100: the manifest was only written when FFmpeg was there.
+        let dir = std::env::temp_dir().join(format!("sonora-fixtures-noff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let g = generate(&dir, 20.0, None).unwrap();
+        assert!(!g.skipped.is_empty());
+        let text = std::fs::read_to_string(dir.join("manifest.json")).expect("manifest.json");
+        let doc = sonora_json::parse(&text).unwrap();
+        let files = doc.get("files").and_then(Value::as_array).unwrap();
+        assert_eq!(files.len(), g.manifest.len());
+        for f in files {
+            let name = f.get("file").and_then(Value::as_str).unwrap();
+            assert!(dir.join(name).exists(), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

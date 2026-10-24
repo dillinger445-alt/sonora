@@ -167,7 +167,7 @@ fn write_pcm(req: &ConvertRequest, progress: &mut dyn FnMut(f64)) -> Result<Conv
     let reshaped = f.sample_rate != rate || f.channels > 2;
     let native = matches!(f.container, Container::Wav | Container::Aiff | Container::Flac) && !reshaped;
     let mut src: Box<dyn PcmSource> = if native {
-        let req_d = DecodeRequest { lossless_int: lossless && !f.float_samples, lossless_float: lossless && f.float_samples, frames_hint };
+        let req_d = DecodeRequest { lossless_int: lossless && !f.float_samples, lossless_float: lossless && f.float_samples, frames_hint, lossy: f.lossless == Some(false) };
         match open_source(req.src, f.container, &ToolPaths::none(), req_d) {
             Ok(s) => s,
             // A WAV or AIFF the native decoders do not handle (compressed payloads).

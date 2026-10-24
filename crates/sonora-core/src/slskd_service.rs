@@ -685,8 +685,10 @@ pub struct Settings {
 /// on this computer only and SONORA's key are written into the file as it
 /// is, and everything else in it stays. The shared folders change only when
 /// the person changed the one the setup showed (`old_shares` is what the
-/// file has; the setup shows the first). `None` when the file lacks a line
-/// SONORA needs: it is then written anew (after a backup).
+/// file has; the setup shows the first). Lines SONORA needs that the file
+/// lacks are added. `None` only when the file cannot take them (a key that
+/// holds a value where SONORA needs keys below it): it is then written anew
+/// (after a backup).
 pub fn reconfigure(text: &str, s: &Settings, old_shares: &[String], share: Option<&Path>) -> Option<String> {
     let mut t = text.to_string();
     let port = s.port.to_string();
@@ -702,7 +704,7 @@ pub fn reconfigure(text: &str, s: &Settings, old_shares: &[String], share: Optio
         (&["web", "authentication", "api_keys", "sonora", "key"], quote(&s.api_key)),
     ];
     for (path, value) in values.iter() {
-        t = yaml::replace_scalar(&t, path, value)?;
+        t = yaml::set_scalar(&t, path, value)?;
     }
     let shares: Vec<String> = match share {
         None => Vec::new(),
@@ -722,7 +724,7 @@ pub fn reconfigure(text: &str, s: &Settings, old_shares: &[String], share: Optio
         }
     };
     if shares != old_shares {
-        t = yaml::replace_list(&t, &["shares", "directories"], &shares)?;
+        t = yaml::set_list(&t, &["shares", "directories"], &shares)?;
     }
     Some(t)
 }
@@ -852,7 +854,8 @@ pub fn backup(path: &Path) -> std::io::Result<Option<PathBuf>> {
 /// Changes one value in slskd.yml (after a backup).
 pub fn change_value(config: &Path, path: &[&str], value: &str) -> Result<bool, String> {
     let text = std::fs::read_to_string(config).map_err(|e| format!("slskd.yml could not be read: {e}"))?;
-    let Some(changed) = yaml::replace_scalar(&text, path, &quote(value)) else { return Ok(false) };
+    // Added when the line is missing (B23), so Repair keeps the rest of the file.
+    let Some(changed) = yaml::set_scalar(&text, path, &quote(value)) else { return Ok(false) };
     if changed == text {
         return Ok(true);
     }
@@ -1049,6 +1052,9 @@ struct Run {
     total: u64,
     /// Files and folders this run made (for "remove what the setup made").
     created: Vec<PathBuf>,
+    /// SONORA's settings before this run changed them, and what it wrote
+    /// (B22: put back by "remove what the setup made").
+    settings_before: Option<(crate::settings::Settings, crate::settings::Settings)>,
     request: Option<Request>,
     signed_in_as: Option<String>,
     started_at: Option<i64>,
@@ -1130,6 +1136,7 @@ impl Service {
     }
 
     fn set_stopped(&self, app: &App, on: bool) -> Result<(), String> {
+        let _change = app.settings_change();
         let mut s = app.settings();
         if s.slskd_stopped == on {
             return Ok(());
@@ -1309,8 +1316,8 @@ impl Service {
                 return Err("The setup is already running.".into());
             }
             // What an earlier run that did not finish made can still be removed.
-            let created = if r.finished { Vec::new() } else { std::mem::take(&mut r.created) };
-            *r = Run { active: true, request: Some(req), started_at: Some(crate::db::now_ms()), created, ..Run::default() };
+            let (created, settings_before) = if r.finished { (Vec::new(), None) } else { (std::mem::take(&mut r.created), r.settings_before.take()) };
+            *r = Run { active: true, request: Some(req), started_at: Some(crate::db::now_ms()), created, settings_before, ..Run::default() };
         }
         self.spawn(app);
         Ok(self.run_json())
@@ -1350,13 +1357,37 @@ impl Service {
 
     /// Removes the files and folders the last run made (asked for by the person).
     pub fn discard(&self, app: &App) -> Result<Value, String> {
-        let created = {
+        let (created, settings_before) = {
             let mut r = lock(&self.run);
             if r.active {
                 return Err("Wait for the setup to stop first.".into());
             }
-            std::mem::take(&mut r.created)
+            (std::mem::take(&mut r.created), r.settings_before.take())
         };
+        // The settings the setup changed go back, each one only while it is
+        // still what the setup wrote (the person may have changed it since).
+        if let Some((before, wrote)) = settings_before {
+            let _change = app.settings_change();
+            let mut s = app.settings();
+            let mut changed = false;
+            if s.slskd_url == wrote.slskd_url && s.slskd_url != before.slskd_url {
+                s.slskd_url = before.slskd_url.clone();
+                changed = true;
+            }
+            if s.soulseek_folder == wrote.soulseek_folder && s.soulseek_folder != before.soulseek_folder {
+                s.soulseek_folder = before.soulseek_folder.clone();
+                changed = true;
+            }
+            if s.slskd_background == wrote.slskd_background && s.slskd_background != before.slskd_background {
+                s.slskd_background = before.slskd_background;
+                changed = true;
+            }
+            if changed {
+                s.save(&app.db.write()).map_err(|e| format!("SONORA's settings could not be put back: {e}"))?;
+                *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
+                app.sources.wake();
+            }
+        }
         let layout = self.layout(app);
         let _turn = lock(&self.agent_turn);
         if created.iter().any(|p| Some(p) == layout.plist().as_ref()) {
@@ -1585,7 +1616,9 @@ impl Service {
             self.created(layout.config.clone());
         }
         // SONORA talks to its own slskd, and watches the folder it saves to.
-        let mut s = app.settings();
+        let _change = app.settings_change();
+        let before = app.settings();
+        let mut s = before.clone();
         s.slskd_url = format!("http://127.0.0.1:{}", settings.port);
         if !existed {
             // The first setup runs slskd in the background; later ones keep the person's choice.
@@ -1597,6 +1630,12 @@ impl Service {
             s.soulseek_folder = Some(folder);
         }
         s.save(&app.db.write()).map_err(|e| (format!("SONORA's settings could not be saved: {e}"), "retry"))?;
+        {
+            let mut r = lock(&self.run);
+            // The first change of this run is what goes back.
+            let first = r.settings_before.take().map(|(b, _)| b).unwrap_or(before);
+            r.settings_before = Some((first, s.clone()));
+        }
         *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
         app.sources.wake();
         Ok(())
@@ -1834,10 +1873,13 @@ impl Service {
 
     /// Runs slskd in the background (from login on) or only while SONORA is open.
     pub fn set_background(&self, app: &App, on: bool) -> Result<(), String> {
-        let mut s = app.settings();
-        s.slskd_background = on;
-        s.save(&app.db.write()).map_err(|e| e.to_string())?;
-        *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
+        {
+            let _change = app.settings_change();
+            let mut s = app.settings();
+            s.slskd_background = on;
+            s.save(&app.db.write()).map_err(|e| e.to_string())?;
+            *app.scans.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = s;
+        }
         // Turned off (no launch agent) or stopped: it stays so; the choice
         // applies when it is started.
         let _turn = lock(&self.agent_turn);

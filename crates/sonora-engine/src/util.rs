@@ -138,6 +138,16 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 /// Formats seconds as `m:ss` (or `h:mm:ss`).
+/// Text from a chunk that should be UTF-8 but is often Latin-1 (older
+/// Windows and Mac tools): read as UTF-8 when it is, otherwise as Latin-1,
+/// so "Café" is not "Caf�" (B81).
+pub fn text_utf8_or_latin1(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+    }
+}
+
 pub fn fmt_time(secs: f64) -> String {
     let t = secs.max(0.0).round() as u64;
     let (h, m, s) = (t / 3600, (t / 60) % 60, t % 60);

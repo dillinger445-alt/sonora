@@ -14,7 +14,7 @@ import { useConfirm } from '../components/Dialog.tsx';
 import { EmptyState } from '../components/Layout.tsx';
 import { QuickRules } from '../components/PlaylistRules.tsx';
 import { DASH, formatBytes, formatCount, formatDuration, formatRelative, plural } from '../lib/format.ts';
-import { FILTERS, itemWords, matches, pickOf, quality, runWords, trackName, type Filter } from '../lib/playlist.ts';
+import { FILTERS, canInclude, itemWords, matches, pickOf, quality, runWords, trackName, type Filter } from '../lib/playlist.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
 import { useToast } from '../state/toasts.tsx';
@@ -97,7 +97,7 @@ function Row({
   const draft = run.state === 'draft';
   const words = itemWords(item, run.state === 'review');
   const pick = item.status === 'pending' || item.status === 'searching' ? null : pickOf(item);
-  const editable = draft || ['pending', 'not_found', 'failed'].includes(item.status);
+  const editable = canInclude(item, run.state);
   return (
     <>
       <tr className={item.included ? undefined : 'is-left-out'} data-item={item.id}>
@@ -591,7 +591,8 @@ export function SoulseekPlaylist({ state }: { state: SoulseekState }) {
           <span className={c.failed ? 't-red' : ''}>failed {formatCount(c.failed)}</span>
         </p>
       </div>
-      {run.state === 'review' || run.state === 'paused' ? <QuickRules /> : null}
+      {/* On review the picks are made already (B16); a paused run takes the rules when it resumes. */}
+      {run.state === 'paused' ? <QuickRules note="The run uses these from the next search on, once it resumes." /> : null}
       <div className="chip-tabs pl-filters" role="group" aria-label="Show">
         {FILTERS.map((f) => {
           const n = items.filter((i) => matches(i, f.id)).length;

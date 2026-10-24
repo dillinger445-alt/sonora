@@ -82,7 +82,7 @@ export function ImportProvider({ children }: { children: ReactNode }) {
       (paths) => {
         if (paths && paths.length) void addPaths(paths);
       },
-      (e: unknown) => toast({ tone: 'error', title: 'Could not open the file picker', body: String(e) }),
+      (e: unknown) => toast({ tone: 'error', title: 'Could not open the file picker', body: e instanceof Error ? e.message : String(e) }),
     );
   }, [bridge, addPaths, toast]);
 
@@ -95,7 +95,7 @@ export function ImportProvider({ children }: { children: ReactNode }) {
       (paths) => {
         if (paths && paths.length) void addPaths(paths);
       },
-      (e: unknown) => toast({ tone: 'error', title: 'Could not open the folder picker', body: String(e) }),
+      (e: unknown) => toast({ tone: 'error', title: 'Could not open the folder picker', body: e instanceof Error ? e.message : String(e) }),
     );
   }, [bridge, addPaths, toast]);
 

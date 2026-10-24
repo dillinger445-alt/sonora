@@ -62,6 +62,13 @@ export interface Updater {
 /** What a save dialog saves: its title and file type follow. */
 export type SaveKind = 'csv' | 'backup';
 
+/**
+ * Sent to `subscribe`'s handler, with no payload, when an interrupted event
+ * stream is back: events may have been missed, so state kept from events is
+ * read again.
+ */
+export const EVENTS_RECONNECTED = 'bridge.reconnected';
+
 export interface Bridge {
   readonly kind: 'tauri' | 'http';
   readonly platform: Platform;

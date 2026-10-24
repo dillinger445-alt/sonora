@@ -57,6 +57,9 @@ pub struct App {
     pub previews: Arc<crate::preview::Previews>,
     /// YouTube playlists downloaded from Soulseek, track by track.
     pub playlist: Arc<crate::jobs::PlaylistJobs>,
+    /// Held while the settings are read, changed and saved, so two changes
+    /// at once cannot undo each other (B87).
+    settings_change: std::sync::Mutex<()>,
 }
 
 impl App {
@@ -106,6 +109,7 @@ impl App {
             scans,
             dup_running: Arc::new(AtomicBool::new(false)),
             dup_cancel: Arc::new(AtomicBool::new(false)),
+            settings_change: std::sync::Mutex::new(()),
             exporter: Arc::new(crate::djexport::Exporter::default()),
             syncer: Arc::new(crate::usb::Syncer::default()),
             discogs: Arc::new(crate::discogs::Discogs::new(&version)),
@@ -228,8 +232,11 @@ impl App {
         self.events.unsubscribe(id)
     }
 
-    /// Cancels running work and waits briefly for workers to stop.
+    /// Cancels running work and waits briefly (5 s in all) for workers to
+    /// stop, so an export or a send can put its files in order: no hidden
+    /// partial file left behind, a replaced track back under its name (B12).
     pub fn shutdown(&self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         self.dup_cancel.store(true, Ordering::Relaxed);
         self.sources.stop();
         self.exporter.cancel();
@@ -237,9 +244,17 @@ impl App {
         self.discogs.cancel();
         self.previews.stop_all(self);
         self.playlist.shutdown();
-        self.scans.shutdown(Duration::from_secs(5));
+        self.scans.shutdown(deadline.saturating_duration_since(std::time::Instant::now()));
+        while (self.exporter.is_running() || self.syncer.is_running() || self.discogs.is_running() || self.playlist.is_active().is_some()) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         self.service.on_quit(self);
         logging::log("info", "app", "core stopped");
+    }
+
+    /// Taken before reading settings that are then changed and saved.
+    pub fn settings_change(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.settings_change.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     pub fn settings(&self) -> Settings {
