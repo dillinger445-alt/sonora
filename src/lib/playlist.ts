@@ -58,6 +58,24 @@ export function canInclude(i: PlaylistItem, runState: PlaylistRun['state']): boo
   return i.status === 'pending' && (runState === 'running' || runState === 'paused' || runState === 'waiting');
 }
 
+/** What search number `n` looked for (crates/sonora-core/src/matching.rs, `variations`). */
+export function searchWords(n: number): string {
+  return (
+    [
+      'the title',
+      'the title and its mix name',
+      'the artist and the title',
+      'the artist, the title and its mix name',
+      'the first artist and the title without brackets',
+      'the artist alone',
+      'the title’s main words',
+      'the catalogue number',
+      'the title, simply spelt',
+      'the artist and the title, simply spelt',
+    ][n - 1] ?? `search ${n}`
+  );
+}
+
 /** How a track is going, in words. */
 export function itemWords(i: PlaylistItem, reviewing: boolean): { text: string; tone: '' | 'faint' | 't-lime' | 't-amber' | 't-red' } {
   if (!i.included) return { text: i.leftOut ?? 'Left out', tone: 'faint' };

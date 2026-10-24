@@ -53,23 +53,90 @@ fn search_words(s: &str, plain: bool) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The search texts to try for a track, in order, each with its number:
-/// 1 the title (with its mix name), 2 the artist and the title, 3 the
-/// artist and the title without the mix name, 4 the catalogue number,
-/// 5 the title with punctuation and apostrophes stripped. Repeats and
-/// empty ones are left out.
+/// A name without what is in brackets and without "feat. …": "Song (Edit)
+/// [Label] feat. X" → "Song".
+fn bare(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    let lower = out.to_lowercase();
+    let cut = [" feat. ", " feat ", " ft. ", " ft ", " featuring ", " with "]
+        .iter()
+        .filter_map(|m| lower.find(m))
+        .min()
+        .unwrap_or(out.len());
+    out[..cut].trim().to_string()
+}
+
+/// The first of several artists: "A & B", "A, B", "A x B", "A vs B" → "A".
+fn first_artist(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let cut = [" & ", ", ", " x ", " vs ", " vs. ", " and ", " + "].iter().filter_map(|m| lower.find(m)).min().unwrap_or(s.len());
+    s[..cut].trim().to_string()
+}
+
+/// Accents folded, punctuation and apostrophes dropped, hyphens joined:
+/// "Beyoncé – Don't Stop (Re-Up)" → "beyonce dont stop reup".
+fn simple(s: &str) -> String {
+    let joined: String = s.chars().filter(|c| !matches!(c, '\'' | '’' | '-' | '‐')).collect();
+    norm(&joined.replace('&', " "))
+}
+
+/// The search texts to try for a track, in order, each with its number,
+/// from the most results to the fewest words that still say which track:
+///
+/// 1. the title alone (without its mix name)
+/// 2. the title and its mix name
+/// 3. the artist and the title
+/// 4. the artist, the title and its mix name
+/// 5. the first artist and the bare title (no brackets, no "feat.")
+/// 6. the artist alone: every file of theirs, which the rules then narrow
+///    to those whose names hold the title's words
+/// 7. the title's three longest words, for long titles
+/// 8. the catalogue number
+/// 9. the title, then 10. the artist and the title, with accents and
+///    punctuation simplified
+///
+/// Repeats, empty texts and single words of fewer than four characters
+/// (they match too much to find anything) are left out.
 pub fn variations(w: &Want) -> Vec<(u8, String)> {
     let title_mix = match &w.mix {
         Some(m) => format!("{} {m}", w.title),
         None => w.title.clone(),
     };
     let artist = w.artist.clone().unwrap_or_default();
+    let has_artist = !artist.trim().is_empty();
+    let with_artist = |t: &str| if has_artist { format!("{artist} {t}") } else { String::new() };
+    let long_words = {
+        let words: Vec<String> = search_words(&bare(&w.title), false).split(' ').filter(|x| !x.is_empty()).map(str::to_string).collect();
+        if words.len() > 3 {
+            let mut by_length: Vec<(usize, &String)> = words.iter().enumerate().collect();
+            by_length.sort_by(|a, b| b.1.chars().count().cmp(&a.1.chars().count()).then(a.0.cmp(&b.0)));
+            let mut keep: Vec<(usize, &String)> = by_length.into_iter().take(3).collect();
+            keep.sort_by_key(|x| x.0);
+            keep.into_iter().map(|x| x.1.as_str()).collect::<Vec<_>>().join(" ")
+        } else {
+            String::new()
+        }
+    };
     let raw = [
-        (1u8, search_words(&title_mix, false)),
-        (2, search_words(&format!("{artist} {title_mix}"), false)),
-        (3, search_words(&format!("{artist} {}", w.title), false)),
-        (4, search_words(w.catalogue.as_deref().unwrap_or(""), false)),
-        (5, search_words(&title_mix, true)),
+        (1u8, search_words(&w.title, false)),
+        (2, search_words(&title_mix, false)),
+        (3, search_words(&with_artist(&w.title), false)),
+        (4, search_words(&with_artist(&title_mix), false)),
+        (5, if has_artist { search_words(&format!("{} {}", first_artist(&bare(&artist)), bare(&w.title)), false) } else { String::new() }),
+        (6, search_words(&artist, false)),
+        (7, long_words),
+        (8, search_words(w.catalogue.as_deref().unwrap_or(""), false)),
+        (9, simple(&w.title)),
+        (10, if has_artist { simple(&format!("{artist} {}", w.title)) } else { String::new() }),
     ];
     let mut out: Vec<(u8, String)> = Vec::new();
     for (n, text) in raw {
@@ -77,7 +144,7 @@ pub fn variations(w: &Want) -> Vec<(u8, String)> {
         if text.is_empty() || text.chars().count() > 200 {
             continue;
         }
-        if n == 4 && text.chars().count() < 4 {
+        if !text.contains(' ') && text.chars().count() < 4 {
             continue;
         }
         if out.iter().any(|(_, t)| t.eq_ignore_ascii_case(&text)) {
@@ -377,11 +444,31 @@ mod tests {
     }
 
     #[test]
-    fn search_variations_go_from_fewest_words_to_the_catalogue_number() {
+    fn search_variations_go_from_the_title_alone_to_simplified_spellings() {
         let v = variations(&want());
-        assert_eq!(v, vec![(1, "Rain Original Mix".into()), (2, "Kerri Chandler Rain Original Mix".into()), (3, "Kerri Chandler Rain".into()), (4, "KCT001".into())], "the plain form repeats the first");
+        assert_eq!(
+            v,
+            vec![(1, "Rain".into()), (2, "Rain Original Mix".into()), (3, "Kerri Chandler Rain".into()), (4, "Kerri Chandler Rain Original Mix".into()), (6, "Kerri Chandler".into()), (8, "KCT001".into())],
+            "repeats are left out"
+        );
         let w = Want { artist: None, title: "Don't Stop (Re-Up)".into(), mix: None, catalogue: None, seconds: None };
-        assert_eq!(variations(&w), vec![(1, "Don't Stop Re Up".into()), (5, "Dont Stop ReUp".into())]);
+        assert_eq!(variations(&w), vec![(1, "Don't Stop Re Up".into()), (9, "dont stop reup".into())]);
+        // Several artists, a featured one in the title, accents.
+        let w = Want { artist: Some("Beyoncé & Jay-Z".into()), title: "Drunk in Love feat. Someone Else".into(), mix: Some("Remix".into()), catalogue: None, seconds: None };
+        let v = variations(&w);
+        assert_eq!(v.iter().find(|x| x.0 == 5).map(|x| x.1.as_str()), Some("Beyoncé Drunk in Love"));
+        assert_eq!(v.iter().find(|x| x.0 == 6).map(|x| x.1.as_str()), Some("Beyoncé Jay Z"));
+        assert_eq!(v.iter().find(|x| x.0 == 10).map(|x| x.1.as_str()), Some("beyonce jayz drunk in love feat someone else"));
+        // A long title: its three longest words, in their order.
+        let w = Want { artist: Some("Basement Jaxx".into()), title: "The Sound Of The Underground Tonight".into(), mix: None, catalogue: None, seconds: None };
+        assert_eq!(variations(&w).iter().find(|x| x.0 == 7).map(|x| x.1.as_str()), Some("Sound Underground Tonight"));
+        // One short word finds nothing useful on its own.
+        let w = Want { artist: Some("Orbital".into()), title: "Halo".into(), mix: None, catalogue: None, seconds: None };
+        assert_eq!(variations(&w).first().map(|x| x.1.as_str()), Some("Halo"));
+        let w = Want { artist: Some("Orbital".into()), title: "Lush".into(), mix: Some("3-1".into()), catalogue: None, seconds: None };
+        assert!(variations(&w).iter().all(|x| x.1.chars().count() >= 4));
+        let w = Want { artist: Some("Underworld".into()), title: "Mmm".into(), mix: None, catalogue: None, seconds: None };
+        assert_eq!(variations(&w)[0], (3, "Underworld Mmm".into()), "\"Mmm\" alone is skipped");
         assert_eq!(tokens("Pépé Bradock – Deep Burnt, a 2 B"), ["pepe", "bradock", "deep", "burnt", "2"]);
     }
 

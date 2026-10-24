@@ -366,11 +366,20 @@ A file must pass every rule. Among the files that do, the first format
 wins, then the resolution preference, then a free upload slot, a short
 queue and speed, then how well the name matches the title.
 
-**Searching.** For each track SONORA tries up to five searches, stopping at
-the first that finds a file passing the rules: the title (with its mix
-name), the artist and the title, the artist and the title without the mix
-name, the catalogue number, and the title with punctuation and apostrophes
-stripped. Soulseek matches every word, so fewer words find more. The run
+**Searching.** Soulseek finds only files whose names hold every word
+searched for, so a YouTube title is never searched as it is. For each
+track SONORA tries up to ten searches, one at a time, stopping at the
+first that finds a file passing the rules: the title alone; the title and
+its mix name; the artist and the title; the artist, the title and the mix
+name; the first artist and the title without brackets or "feat."; the
+artist alone (every file of theirs, which the rules then narrow to those
+whose names hold the title's words); the three longest words of a long
+title; the catalogue number; and the title, then the artist and the title,
+with accents and punctuation simplified. Repeats are skipped, and so is a
+single word shorter than four letters, which matches too much to find
+anything. A track that is found costs one search or a few; one that is not
+on Soulseek costs them all, a few minutes. The track's details say which
+search found it. The run
 can be paused (searching stops after the current track; downloads on their
 way go on), resumed and stopped, and it carries on where it was if you quit
 SONORA in the middle. A run shows in the status bar from any page.

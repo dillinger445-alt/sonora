@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PlaylistCandidate, PlaylistItem, PlaylistRun } from '../api/types.ts';
-import { canInclude, itemWords, matches, pickOf, quality, runWords, trackName } from './playlist.ts';
+import { canInclude, itemWords, matches, pickOf, quality, runWords, searchWords, trackName } from './playlist.ts';
 
 const candidate = (over: Partial<PlaylistCandidate> = {}): PlaylistCandidate => ({
   username: 'good',
@@ -145,4 +145,11 @@ test('a left-out video can be put back only while the run can still look for it'
   assert.equal(canInclude(left, 'cancelled'), false);
   assert.equal(canInclude(item({ status: 'not_found' }), 'finished'), true, 'Retry looks for it again');
   assert.equal(canInclude(item({ status: 'done' }), 'running'), false);
+});
+
+test('each search is said in words', () => {
+  assert.equal(searchWords(1), 'the title');
+  assert.equal(searchWords(6), 'the artist alone');
+  assert.equal(searchWords(10), 'the artist and the title, simply spelt');
+  assert.equal(searchWords(11), 'search 11');
 });

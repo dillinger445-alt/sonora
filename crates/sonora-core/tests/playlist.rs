@@ -427,7 +427,7 @@ fn a_playlist_is_read_searched_downloaded_and_checked() {
     assert!(s(track, "path").ends_with("01 Rain (Original Mix).flac"));
 
     let octave = item(&run, "Blackwater");
-    assert_eq!((s(octave, "status"), octave.get("variation").and_then(Value::as_i64)), ("done", Some(2)), "the title alone found only a remix: {octave:?}");
+    assert_eq!((s(octave, "status"), octave.get("variation").and_then(Value::as_i64)), ("done", Some(3)), "the title alone found only a remix; the artist and the title found it: {octave:?}");
 
     let shades = item(&run, "Shades Of Jae");
     assert_eq!(s(shades, "status"), "not_found");
@@ -442,12 +442,13 @@ fn a_playlist_is_read_searched_downloaded_and_checked() {
     let wade = item(&run, "Night Driving");
     assert_eq!(s(wade, "status"), "done", "a radio edit is wanted, so the name may say so: {wade:?}");
 
-    // Every search went through slskd, fewest words first, and the
-    // not-found track was asked for with each of its variations.
+    // Every search went through slskd, the title alone first, and the
+    // not-found track was asked for with each of its variations, down to
+    // the artist alone.
     let asked = fake.world.lock().unwrap().asked.clone();
-    assert_eq!(asked[0], "Rain Original Mix", "{asked:?}");
+    assert_eq!(asked[0], "Rain", "{asked:?}");
     assert!(asked.contains(&"Blackwater".to_string()) && asked.contains(&"Octave One Blackwater".to_string()), "{asked:?}");
-    assert!(asked.contains(&"Shades Of Jae".to_string()) && asked.contains(&"Moodymann Shades Of Jae".to_string()), "{asked:?}");
+    assert!(asked.contains(&"Shades Of Jae".to_string()) && asked.contains(&"Moodymann Shades Of Jae".to_string()) && asked.contains(&"Moodymann".to_string()), "{asked:?}");
     assert!(!asked.iter().any(|a| a.contains('(')), "no punctuation goes to Soulseek: {asked:?}");
 
     // The files are in the library, from Soulseek.
