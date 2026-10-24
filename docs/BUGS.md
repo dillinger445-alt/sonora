@@ -462,6 +462,8 @@ say why, and how the fix was checked instead.
   - Test: `src/lib/format.test.ts`.
 - [x] **B76. Partial decoded playback copies are never removed** (a quit while a track is being prepared). Fix: stale `.part` files are removed.
   - Test: `playback_uses_the_original_or_one_decoded_copy` (crates/sonora-core/tests/dj.rs).
+- [x] **B102. Cancel during the import of a folder holding thousands of files waits until every file is read** (minutes on Windows). Found by CI after the review. Fix: the folder walk looks at Cancel between files, not only between folders.
+  - Test: `a_cancelled_walk_stops_inside_a_big_folder` (crates/sonora-core/src/index.rs).
 
 ### Analysis engine
 

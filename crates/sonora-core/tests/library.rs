@@ -846,14 +846,21 @@ fn a_scans_problem_tabs_list_only_what_it_analysed_and_a_pause_is_not_its_time()
     assert_eq!(call(&app, "scan.pause", "").get("ok").and_then(Value::as_bool), Some(true));
     let scan = call(&app, "scan.status", "").get("id").and_then(Value::as_i64).unwrap();
     let total = |filter: &str| call(&app, "scan.items", &format!(r#"{{"id": {scan}, "filter": "{filter}"}}"#)).get("total").and_then(Value::as_i64).unwrap();
+    // The clipped file counts only once this scan has analysed it: a fast
+    // machine can get to it before the pause takes hold.
+    let hot_done = || {
+        let items = call(&app, "scan.items", &format!(r#"{{"id": {scan}, "filter": "all"}}"#));
+        items.get("rows").and_then(Value::as_array).unwrap().iter().any(|r| s(r, "fileName") == "z_hot.wav" && s(r, "outcome") == "done") as i64
+    };
     // B31: queued tracks are not this scan's results, whatever they were before.
-    assert_eq!(total("clipping"), 0);
-    assert_eq!(total("problems"), 0);
+    let done = hot_done();
+    assert_eq!(total("clipping"), done);
+    assert!(total("problems") <= done);
     // B69: a scan cancelled while paused counts the time it analysed.
     std::thread::sleep(Duration::from_millis(2000));
     call(&app, "scan.cancel", "");
     wait_idle(&app);
-    assert_eq!(total("clipping"), 0, "cancelled tracks are not results either");
+    assert_eq!(total("clipping"), hot_done(), "cancelled tracks are not results either");
     let hist = call(&app, "scan.history", r#"{"limit": 1}"#);
     let ms = hist.as_array().unwrap()[0].get("summary").and_then(|v| v.get("elapsedMs")).and_then(Value::as_i64).unwrap();
     assert!(ms < 1800, "elapsed {ms} ms includes the pause");
