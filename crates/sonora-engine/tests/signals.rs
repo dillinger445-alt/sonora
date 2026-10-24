@@ -594,7 +594,9 @@ fn a_low_sample_rate_is_not_taken_for_a_lossy_source() {
     let d = dir();
     let src = write("rate_src.wav", 16, &quantize16(&white_noise(7, 30 * FS as usize * 2, 0.25)));
     let out = d.join("rate32.wav");
-    ff(&ffm, &["-i", &src.to_string_lossy(), "-af", "aresample=32000:resampler=soxr", "-c:a", "pcm_s16le", &out.to_string_lossy()]);
+    // FFmpeg's own resampler with a long, steep filter, as good resamplers
+    // use (soxr would do too, but not every FFmpeg build has it).
+    ff(&ffm, &["-i", &src.to_string_lossy(), "-af", "aresample=32000:filter_size=256:cutoff=0.98", "-c:a", "pcm_s16le", &out.to_string_lossy()]);
     let a = native(&out);
     assert_eq!(a.facts.sample_rate, 32_000);
     for id in ["lossy_source_suspected", "steep_cutoff"] {
