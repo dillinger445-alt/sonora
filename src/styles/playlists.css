@@ -365,12 +365,20 @@ body.is-dragging * {
   outline: none;
 }
 
-.tl-seg {
+.tl-segs {
   cursor: pointer;
 }
 
-.tl-seg.is-hover rect:first-child {
+/* The block under the pointer, drawn again over the set, brighter. */
+.tl-hover {
   filter: brightness(1.45);
+  pointer-events: none;
+}
+
+.tl-selected {
+  fill: none;
+  stroke: var(--c-text);
+  pointer-events: none;
 }
 
 .tl-key {

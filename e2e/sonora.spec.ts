@@ -880,9 +880,16 @@ test('playlists: made in the sidebar, filled by dragging or from the details pan
 
   // The playlist: the set at a glance, then its tracks in order.
   await warmup.click();
-  await expect(page.getByRole('img', { name: /^The set: 3 tracks/ })).toBeVisible();
+  const set = page.getByRole('img', { name: /^The set: 3 tracks/ });
+  await expect(set).toBeVisible();
   await expect.poll(() => playlistTitles(page)).toEqual(['other_track', 'radio_edit', 'dark_master']);
   await expect(row(page, 'other_track').locator('.tcell-mix')).toHaveText('Opener');
+  // A block on the set picks its track, outlined there too.
+  const box = await set.boundingBox();
+  if (!box) throw new Error('no timeline');
+  await page.mouse.click(box.x + box.width * 0.95, box.y + 20);
+  await expect(row(page, 'dark_master')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.tl-selected')).toHaveCount(1);
 
   // Alt+↑ moves a track up a place; dragging moves it anywhere. The order is kept.
   await row(page, 'dark_master').click();
