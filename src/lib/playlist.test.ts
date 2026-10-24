@@ -112,7 +112,8 @@ test('how the run is going, in words', () => {
   assert.equal(runWords(run({ state: 'finished', counts: { ...run().counts, done: 8, failed: 0, notFound: 0 } })), 'Done: 8 tracks downloaded and checked.');
   assert.equal(runWords(run({ state: 'cancelled' })), 'Stopped.');
   assert.equal(runWords(run({ state: 'failed', error: 'YouTube could not be reached' })), 'YouTube could not be reached');
-  assert.match(runWords(run({ state: 'waiting', retryAt: Date.now() + 3_600_000 })), /looking again at \d/);
+  // An hour from now: a time, or a date and a time once that is tomorrow (it failed in CI just before midnight).
+  assert.match(runWords(run({ state: 'waiting', retryAt: Date.now() + 3_600_000 })), /looking again at (\d|[A-Z][a-z]{2} \d+, \d)/);
 });
 
 test('filters pick the rows they say', () => {
