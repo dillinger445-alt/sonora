@@ -119,8 +119,9 @@ function JobItems() {
   );
 }
 
-export function StatusBar() {
-  const { overview, info } = useCore();
+/** What the core is doing; its own component, as it changes on every scan tick. */
+function ScanLine() {
+  const { overview } = useCore();
   const { scan } = useScan();
   const state = scan?.state ?? 'idle';
   const done = scan?.done ?? 0;
@@ -166,11 +167,16 @@ export function StatusBar() {
     );
   }
 
+  return left;
+}
+
+export function StatusBar() {
+  const { info } = useCore();
   const ffmpeg = info?.ffmpeg;
   return (
     <footer className="statusbar" aria-label="Status">
       <a className="sb-left" href={formatRoute({ view: 'queue' })} aria-live="off">
-        {left}
+        <ScanLine />
       </a>
       <div className="sb-right">
         <UpdateItem />

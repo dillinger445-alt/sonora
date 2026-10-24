@@ -1,15 +1,16 @@
 /** Import queue: live scan progress, controls and results as they arrive. */
 
-import { useId, useState } from 'react';
+import { memo, useId, useMemo, useRef, useState } from 'react';
 import { LuFolderPlus, LuInbox, LuPause, LuPlay, LuPlus, LuRotateCw, LuSquare } from 'react-icons/lu';
 import type { QueueResult } from '../api/client.ts';
-import type { ScanItemFilter, ScanRecord, ScanStatus, ScanSummary } from '../api/types.ts';
+import type { ScanItemFilter, ScanItemRow, ScanRecord, ScanStatus, ScanSummary } from '../api/types.ts';
 import { Button } from '../components/Button.tsx';
 import { ProgressBar, TabList, tabId } from '../components/Controls.tsx';
 import { EmptyState, ErrorState, Section, ViewHeader } from '../components/Layout.tsx';
 import { FlagList, ScoreCell } from '../components/Marks.tsx';
 import { encodingShort, formatClock, formatCount, formatDate, formatEtaShort, formatPercent, formatSpan, formatTimecode, plural } from '../lib/format.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
+import { reuseRows } from '../lib/rows.ts';
 import { useCore, useScan } from '../state/core.tsx';
 import { useImports } from '../state/imports.tsx';
 import { useToast } from '../state/toasts.tsx';
@@ -160,6 +161,49 @@ function Summary({ summary, record }: { summary: ScanSummary | null | undefined;
 /** Results shown at a time. */
 const RESULTS_PAGE = 500;
 
+/**
+ * One result. Memoised: while a scan runs the results are fetched again
+ * about once a second, and only rows that changed (new results) render.
+ */
+const ResultRow = memo(function ResultRow({ t }: { t: ScanItemRow }) {
+  return (
+    <tr className={`is-link ${t.outcome === 'failed' ? 'is-failed' : ''}`} onClick={() => t.status === 'done' && navigate({ view: 'track', id: t.id })}>
+      <td className="cell-title-2">
+        {t.status === 'done' ? (
+          <a className="ellipsis row-link" href={formatRoute({ view: 'track', id: t.id })} onClick={(e) => e.stopPropagation()}>
+            {t.displayTitle}
+          </a>
+        ) : (
+          <span className="ellipsis">{t.displayTitle}</span>
+        )}
+        <span className="ellipsis faint">{t.artist ?? t.fileName}</span>
+      </td>
+      <td>
+        {t.format ?? t.ext.toUpperCase()} <span className="num faint">{t.format ? encodingShort(t) : ''}</span>
+      </td>
+      <td className="is-end">
+        <ScoreCell score={t.overall} emphasis />
+      </td>
+      <td className="is-end">
+        <ScoreCell score={t.dj} />
+      </td>
+      <td className="is-end">
+        <ScoreCell score={t.listening} />
+      </td>
+      <td className="cell-issues">
+        {t.outcome === 'failed' ? (
+          <span className="t-red ellipsis" title={t.errorMessage ?? ''}>
+            {t.errorMessage ?? 'Failed'}
+          </span>
+        ) : (
+          <FlagList flags={t.flags} />
+        )}
+      </td>
+      <td className="is-end faint">{t.finishedAt ? formatClock(t.finishedAt) : ''}</td>
+    </tr>
+  );
+});
+
 export function ScanResults({ scanId, live }: { scanId: number; live: boolean }) {
   const { client } = useCore();
   const idBase = useId();
@@ -186,7 +230,13 @@ export function ScanResults({ scanId, live }: { scanId: number; live: boolean })
       throttleMs: 900,
     },
   );
-  const rows = items.data?.rows ?? [];
+  // Results that did not change keep their objects (and skip rendering).
+  const kept = useRef<ScanItemRow[]>([]);
+  const rows = useMemo(() => {
+    const next = reuseRows(kept.current, items.data?.rows ?? []);
+    kept.current = next;
+    return next;
+  }, [items.data]);
   return (
     <Section
       title="Results"
@@ -222,40 +272,7 @@ export function ScanResults({ scanId, live }: { scanId: number; live: boolean })
             </thead>
             <tbody>
               {rows.map((t) => (
-                <tr key={t.id} className={`is-link ${t.outcome === 'failed' ? 'is-failed' : ''}`} onClick={() => t.status === 'done' && navigate({ view: 'track', id: t.id })}>
-                  <td className="cell-title-2">
-                    {t.status === 'done' ? (
-                      <a className="ellipsis row-link" href={formatRoute({ view: 'track', id: t.id })} onClick={(e) => e.stopPropagation()}>
-                        {t.displayTitle}
-                      </a>
-                    ) : (
-                      <span className="ellipsis">{t.displayTitle}</span>
-                    )}
-                    <span className="ellipsis faint">{t.artist ?? t.fileName}</span>
-                  </td>
-                  <td>
-                    {t.format ?? t.ext.toUpperCase()} <span className="num faint">{t.format ? encodingShort(t) : ''}</span>
-                  </td>
-                  <td className="is-end">
-                    <ScoreCell score={t.overall} emphasis />
-                  </td>
-                  <td className="is-end">
-                    <ScoreCell score={t.dj} />
-                  </td>
-                  <td className="is-end">
-                    <ScoreCell score={t.listening} />
-                  </td>
-                  <td className="cell-issues">
-                    {t.outcome === 'failed' ? (
-                      <span className="t-red ellipsis" title={t.errorMessage ?? ''}>
-                        {t.errorMessage ?? 'Failed'}
-                      </span>
-                    ) : (
-                      <FlagList flags={t.flags} />
-                    )}
-                  </td>
-                  <td className="is-end faint">{t.finishedAt ? formatClock(t.finishedAt) : ''}</td>
-                </tr>
+                <ResultRow key={t.id} t={t} />
               ))}
             </tbody>
           </table>

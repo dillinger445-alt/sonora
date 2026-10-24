@@ -4,7 +4,7 @@ import { Button } from './Button.tsx';
 import { Menu } from './Menu.tsx';
 import { formatCount } from '../lib/format.ts';
 import { formatRoute, type Route, type View } from '../lib/router.ts';
-import { useCore, useScan } from '../state/core.tsx';
+import { useCore, useScan, useScanBusy } from '../state/core.tsx';
 import { useImports } from '../state/imports.tsx';
 import { PlaylistTree } from './PlaylistTree.tsx';
 
@@ -53,21 +53,27 @@ function Wordmark() {
   );
 }
 
+/** The import queue's count: progress while a scan runs. Its own component,
+ *  so the rest of the sidebar does not render again on every tick. */
+function ScanCount() {
+  const { scan } = useScan();
+  const text = scan && scan.total > 0 ? `${formatCount(scan.done)}/${formatCount(scan.total)}` : '…';
+  return <span className="nav-count num t-lime">{text}</span>;
+}
+
 export function Sidebar({ active }: { active: View }) {
   const { overview, duplicateGroups, bridge } = useCore();
-  const { scan } = useScan();
+  const busy = useScanBusy();
   const imports = useImports();
   const mod = bridge.platform === 'macos' ? '⌘' : 'Ctrl+';
-  const busy = scan != null && scan.state !== 'idle';
 
-  const count = (view: View): { text: string; tone?: 'lime' | 'amber' } | null => {
+  const count = (view: View): { text: string; tone?: 'lime' | 'amber' } | 'scan' | null => {
     if (!overview) return null;
     switch (view) {
       case 'library':
         return { text: formatCount(overview.tracks.total) };
       case 'queue':
-        if (busy && scan && scan.total > 0) return { text: `${formatCount(scan.done)}/${formatCount(scan.total)}`, tone: 'lime' };
-        if (busy) return { text: '…', tone: 'lime' };
+        if (busy) return 'scan';
         return overview.tracks.pendingPresent > 0 ? { text: formatCount(overview.tracks.pendingPresent) } : null;
       case 'folders':
         return overview.folders > 0 ? { text: formatCount(overview.folders) } : null;
@@ -94,7 +100,7 @@ export function Sidebar({ active }: { active: View }) {
         >
           <Icon className="nav-icon" aria-hidden />
           <span className="nav-label">{item.label}</span>
-          {c ? <span className={`nav-count num ${c.tone ? `t-${c.tone}` : ''}`}>{c.text}</span> : null}
+          {c === 'scan' ? <ScanCount /> : c ? <span className={`nav-count num ${c.tone ? `t-${c.tone}` : ''}`}>{c.text}</span> : null}
         </a>
       </li>
     );
