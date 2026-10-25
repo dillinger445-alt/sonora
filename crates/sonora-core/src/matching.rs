@@ -32,10 +32,27 @@ pub fn tokens(s: &str) -> Vec<String> {
     norm(s).split(' ').filter(|w| w.chars().count() >= 2 || w.chars().all(|c| c.is_ascii_digit())).map(str::to_string).collect()
 }
 
+/// Initials written with dots become one word: "V.N.E" → "VNE",
+/// "P.A.R.T.Y" → "PARTY" (B107: as single letters, slskd refuses them).
+fn join_initials(s: &str) -> String {
+    s.split(' ')
+        .map(|w| {
+            let parts: Vec<&str> = w.trim_end_matches('.').split('.').collect();
+            if parts.len() >= 2 && parts.iter().all(|p| p.chars().count() == 1 && p.chars().all(char::is_alphanumeric)) {
+                parts.concat()
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The search words: punctuation becomes spaces, apostrophes stay (as
 /// most file names keep them) unless `plain`, which also joins hyphenated
 /// words ("Re-Up" → "ReUp").
 fn search_words(s: &str, plain: bool) -> String {
+    let s = &join_initials(s);
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if c.is_alphanumeric() {
@@ -85,7 +102,7 @@ fn first_artist(s: &str) -> String {
 /// Accents folded, punctuation and apostrophes dropped, hyphens joined:
 /// "Beyoncé – Don't Stop (Re-Up)" → "beyonce dont stop reup".
 fn simple(s: &str) -> String {
-    let joined: String = s.chars().filter(|c| !matches!(c, '\'' | '’' | '-' | '‐')).collect();
+    let joined: String = join_initials(s).chars().filter(|c| !matches!(c, '\'' | '’' | '-' | '‐')).collect();
     norm(&joined.replace('&', " "))
 }
 
@@ -145,6 +162,10 @@ pub fn variations(w: &Want) -> Vec<(u8, String)> {
             continue;
         }
         if !text.contains(' ') && text.chars().count() < 4 {
+            continue;
+        }
+        // slskd refuses a search without a word of two characters or more.
+        if !text.split(' ').any(|w| w.chars().count() >= 2) {
             continue;
         }
         if out.iter().any(|(_, t)| t.eq_ignore_ascii_case(&text)) {
@@ -469,6 +490,15 @@ mod tests {
         assert!(variations(&w).iter().all(|x| x.1.chars().count() >= 4));
         let w = Want { artist: Some("Underworld".into()), title: "Mmm".into(), mix: None, catalogue: None, seconds: None };
         assert_eq!(variations(&w)[0], (3, "Underworld Mmm".into()), "\"Mmm\" alone is skipped");
+        // B107: "V.N.E" was searched as "V N E", which slskd refuses.
+        let w = Want { artist: Some("Force Mass Motion".into()), title: "V.N.E".into(), mix: None, catalogue: None, seconds: None };
+        let v = variations(&w);
+        assert!(v.iter().all(|x| x.1.split(' ').any(|t| t.chars().count() >= 2)), "{v:?}");
+        assert_eq!(v[0], (3, "Force Mass Motion VNE".into()), "{v:?}");
+        let w = Want { artist: Some("Movin' Melodies".into()), title: "P.A.R.T.Y".into(), mix: None, catalogue: None, seconds: None };
+        assert_eq!(variations(&w)[0], (1, "PARTY".into()));
+        let w = Want { artist: None, title: "A B C".into(), mix: None, catalogue: None, seconds: None };
+        assert!(variations(&w).is_empty(), "nothing slskd would take");
         assert_eq!(tokens("Pépé Bradock – Deep Burnt, a 2 B"), ["pepe", "bradock", "deep", "burnt", "2"]);
     }
 

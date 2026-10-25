@@ -1861,6 +1861,9 @@ impl Worker {
 
     fn run(&self, weak: Weak<App>) {
         let mut slskd_down: Option<Instant> = None;
+        // The track whose search keeps failing for another reason than slskd
+        // being away, and how often in a row (B107).
+        let mut failing: (i64, u32) = (0, 0);
         loop {
             let Some(app) = weak.upgrade() else { return };
             if self.inner.stop.load(Ordering::Relaxed) {
@@ -1911,6 +1914,32 @@ impl Worker {
                         if cleared > 0 {
                             app.playlist.emit_run(&app, self.run_id, true);
                         }
+                    }
+                    Err(e) if {
+                        // slskd away or not set up: wait for it, however long.
+                        // An error of slskd's own (it may be starting): skip
+                        // after ten in a row. Anything else: after three.
+                        let limit = match e.code {
+                            "slskd_unreachable" | "slskd_offline" | "slskd_busy" | "slskd_unauthorized" | "slskd_forbidden" | "slskd_not_set_up" | "slskd_too_old" | "secret_store" => u32::MAX,
+                            "slskd_failed" => 10,
+                            _ => 3,
+                        };
+                        failing = if failing.0 == item.id { (item.id, failing.1 + 1) } else { (item.id, 1) };
+                        failing.1 >= limit
+                    } =>
+                    {
+                        // Not slskd being away: this track's search fails. It is
+                        // skipped, with the reason, and the run goes on.
+                        let now = now_ms();
+                        let _ = app.db.write().execute(
+                            "UPDATE playlist_items SET status = 'not_found', error = ?, updated_at = ? WHERE id = ?",
+                            params![format!("Skipped: the search kept failing ({}).", e.message), now, item.id],
+                        );
+                        let _ = app.db.write().execute("UPDATE playlist_runs SET error = NULL, updated_at = ? WHERE id = ?", params![now, self.run_id]);
+                        pl_log("warn", "a track's search kept failing; skipped", obj! { "run" => self.run_id, "item" => item.id, "code" => e.code });
+                        failing = (0, 0);
+                        app.playlist.emit_item(&app, item.id);
+                        app.playlist.emit_run(&app, self.run_id, true);
                     }
                     Err(e) => {
                         // slskd is not answering: say so, and try the same track again in a while.
@@ -2000,6 +2029,9 @@ impl Worker {
         let mut best: Vec<Candidate> = Vec::new();
         let mut responses = 0i64;
         let mut used = None;
+        // Searches slskd refused (B107): skipped, never retried.
+        let mut refused: Option<String> = None;
+        let mut made = 0;
         for (n, text) in matching::variations(&want) {
             if self.stopping() {
                 return Ok(());
@@ -2011,7 +2043,18 @@ impl Worker {
             }
             let _ = app.db.write().execute("UPDATE playlist_items SET variation = ?, updated_at = ? WHERE id = ?", params![n as i64, now_ms(), item.id]);
             app.playlist.emit_run(app, self.run_id, true);
-            let id = app.slskd.search(app, &text)?.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+            let id = match app.slskd.search(app, &text) {
+                Ok(v) => {
+                    made += 1;
+                    v.get("id").and_then(Value::as_str).unwrap_or("").to_string()
+                }
+                Err(e) if e.code == "slskd_rejected" => {
+                    pl_log("warn", "slskd refused a search; trying the next", obj! { "run" => self.run_id, "item" => item.id, "variation" => n as i64 });
+                    refused = Some(e.message);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             let started = Instant::now();
             let mut stopped = false;
             let st = loop {
@@ -2048,7 +2091,12 @@ impl Worker {
         let now = now_ms();
         let found = matching::sufficient(&best);
         let status = if found { "found" } else { "not_found" };
-        let error: Option<String> = (!found).then(|| if best.is_empty() { "No one answered with this track.".to_string() } else { "Every file found failed the rules.".to_string() });
+        let error: Option<String> = (!found).then(|| match (&refused, best.is_empty(), made) {
+            (Some(why), true, 0) => format!("Skipped: no search slskd accepted could be made of this title ({why})."),
+            (None, true, 0) => "Nothing could be searched for in this title.".to_string(),
+            (_, true, _) => "No one answered with this track.".to_string(),
+            _ => "Every file found failed the rules.".to_string(),
+        });
         app.db.write().execute(
             "UPDATE playlist_items SET status = ?, variation = ?, responses = ?, candidates = ?, chosen = ?, attempts = 0, error = ?, updated_at = ? WHERE id = ?",
             params![status, used, responses, candidates_json(&best), if found { Some(0i64) } else { None }, error, now, item.id],

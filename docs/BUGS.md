@@ -91,6 +91,30 @@ say why, and how the fix was checked instead.
     marks, are read too (both in the same playlist).
   - Test: `the_2026_layout_is_read_and_its_notice_is_only_information` (crates/sonora-core/src/youtube.rs), on a page trimmed from a saved copy of the reported playlist.
 
+- [x] **B107. A playlist run stands on "Searching" for good after slskd refuses a search.**
+  Reported by a listener after 0.4.1.
+  - Symptom: the run says "Running", one track says "Searching", and above
+    the counts: "slskd reported an error (400): Search query must contain
+    at least one non-exclusion term with length greater than 1".
+  - Steps: a track titled with initials, "Force Mass Motion – V.N.E".
+  - Cause: "V.N.E" became the search "V N E", three one-letter words,
+    which slskd refuses; and any failed search was taken for slskd being
+    away, so the same track was tried again every 15 s for ever.
+  - Fix: initials written with dots are searched as one word ("VNE"), no
+    search without a word of two letters is made, a search slskd refuses is
+    skipped for the next, and a track whose search keeps failing for any
+    other reason than slskd being away is skipped with the reason (three
+    tries; ten for an error of slskd's own) while the run goes on.
+  - Test: `a_track_whose_search_keeps_failing_is_skipped_and_the_run_goes_on` and `a_playlist_is_read_searched_downloaded_and_checked` (a refused search is skipped) in crates/sonora-core/tests/playlist.rs; `search_variations_go_from_the_title_alone_to_simplified_spellings` (crates/sonora-core/src/matching.rs).
+
+- [x] **B108. On a YouTube playlist, the run's error line runs over the counts, and the playlist's name is small and grey.**
+  Found in the same screenshot.
+  - Cause: the sidebar's playlist section and the YouTube playlist page both
+    use `.pl-head` and `.pl-title`; the sidebar's rules (30 px high, the
+    label size and colour) applied to the page too.
+  - Fix: the sidebar's rules are scoped to its own section.
+  - Test: e2e "a YouTube playlist is read, searched, downloaded…" checks the run's header ends above the counts.
+
 ## High
 
 - [x] **B03. A second playlist started while another works is left "running" with nothing running it.**
