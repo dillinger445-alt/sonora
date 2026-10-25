@@ -296,11 +296,17 @@ fn env(name: &str) -> Env {
 }
 
 fn open(e: &Env) -> (Arc<App>, Arc<FakeSlskd>) {
-    let app = App::open(AppConfig { data_dir: e.data.clone(), tool_dirs: vec![], app_version: "test".into() }).unwrap();
     let fake = Arc::new(FakeSlskd { world: Mutex::new(World::default()), downloads: e.downloads.clone() });
+    (reopen(e, &fake), fake)
+}
+
+/// SONORA opened again with the slskd it had: slskd runs on (and keeps its
+/// downloads) while SONORA is closed.
+fn reopen(e: &Env, fake: &Arc<FakeSlskd>) -> Arc<App> {
+    let app = App::open(AppConfig { data_dir: e.data.clone(), tool_dirs: vec![], app_version: "test".into() }).unwrap();
     app.slskd.set_http(fake.clone());
     app.playlist.set_http(Arc::new(FakeTube));
-    (app, fake)
+    app
 }
 
 fn call(app: &Arc<App>, method: &str, params: &Value) -> Value {
@@ -475,7 +481,7 @@ fn a_playlist_is_read_searched_downloaded_and_checked() {
 fn review_mode_waits_for_the_picks_and_a_run_survives_a_restart() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let e = env("review");
-    let (app, _fake) = open(&e);
+    let (app, fake) = open(&e);
     setup(&app, &e);
     let id = call(&app, "playlist.fetch", &obj! { "source" => "PLfixtureLateNight" }).get("id").and_then(Value::as_i64).unwrap();
     wait_state(&app, id, &["draft"], 20);
@@ -505,7 +511,9 @@ fn review_mode_waits_for_the_picks_and_a_run_survives_a_restart() {
     call(&app, "playlist.confirm", &obj! { "id" => id });
     app.shutdown();
     drop(app);
-    let (app, _fake) = open(&e);
+    // (With a new slskd here, a download queued before the quit was gone:
+    // on a fast machine the run had queued one, and the test failed.)
+    let app = reopen(&e, &fake);
     let run = wait_state(&app, id, &["finished", "failed", "cancelled"], 120);
     assert_eq!(s(&run, "state"), "finished", "{:?}", run.get("counts"));
     assert_eq!(count(&run, "done"), 2, "{:?}", items_of(&run).iter().map(|i| (s(i, "title"), s(i, "status"), s(i, "note"), s(i, "error"))).collect::<Vec<_>>());
