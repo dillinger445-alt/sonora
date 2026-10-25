@@ -965,10 +965,15 @@ fn pump(app: &Arc<App>, s: &Arc<Session>) {
             }
             None => {
                 // Paused (enough ahead), complete, or handed over and not followed yet.
-                if handed_over && !lock(&s.st).source_complete {
+                if handed_over && !lock(&s.st).source_complete && !lock(&s.st).source_dead {
                     if let Ok(list) = app.slskd.user_transfers(app, &s.username) {
-                        if let Some(t) = list.iter().find(|t| t.filename == s.filename && t.active() && !app.previews.is_hidden(&t.id)) {
+                        let mine: Vec<&TransferInfo> = list.iter().filter(|t| t.filename == s.filename && !app.previews.is_hidden(&t.id)).collect();
+                        if let Some(t) = mine.iter().find(|t| t.active()) {
                             lock(&s.st).transfer = Some(t.id.clone());
+                        } else if let Some(t) = mine.first() {
+                            // The download ended before the preview could follow
+                            // it (cancelled within moments, say): as if followed.
+                            on_transfer(app, s, t, &mut backoff_until);
                         }
                     }
                     wait(s, 400);
