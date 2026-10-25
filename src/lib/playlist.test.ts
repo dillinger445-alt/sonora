@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PlaylistCandidate, PlaylistItem, PlaylistRun } from '../api/types.ts';
-import { canInclude, itemWords, matches, pickOf, quality, runWords, trackName } from './playlist.ts';
+import { canInclude, itemWords, matches, pickOf, quality, runWords, searchWords, trackName } from './playlist.ts';
 
 const candidate = (over: Partial<PlaylistCandidate> = {}): PlaylistCandidate => ({
   username: 'good',
@@ -112,7 +112,8 @@ test('how the run is going, in words', () => {
   assert.equal(runWords(run({ state: 'finished', counts: { ...run().counts, done: 8, failed: 0, notFound: 0 } })), 'Done: 8 tracks downloaded and checked.');
   assert.equal(runWords(run({ state: 'cancelled' })), 'Stopped.');
   assert.equal(runWords(run({ state: 'failed', error: 'YouTube could not be reached' })), 'YouTube could not be reached');
-  assert.match(runWords(run({ state: 'waiting', retryAt: Date.now() + 3_600_000 })), /looking again at \d/);
+  // An hour from now: a time, or a date and a time once that is tomorrow (it failed in CI just before midnight).
+  assert.match(runWords(run({ state: 'waiting', retryAt: Date.now() + 3_600_000 })), /looking again at (\d|[A-Z][a-z]{2} \d+, \d)/);
 });
 
 test('filters pick the rows they say', () => {
@@ -145,4 +146,11 @@ test('a left-out video can be put back only while the run can still look for it'
   assert.equal(canInclude(left, 'cancelled'), false);
   assert.equal(canInclude(item({ status: 'not_found' }), 'finished'), true, 'Retry looks for it again');
   assert.equal(canInclude(item({ status: 'done' }), 'running'), false);
+});
+
+test('each search is said in words', () => {
+  assert.equal(searchWords(1), 'the title');
+  assert.equal(searchWords(6), 'the artist alone');
+  assert.equal(searchWords(10), 'the artist and the title, simply spelt');
+  assert.equal(searchWords(11), 'search 11');
 });

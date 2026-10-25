@@ -760,11 +760,15 @@ fn tracks_added_to_a_running_scan_get_every_worker() {
         write(&more.join(format!("short{i}.wav")), 10 + i, 4.0);
     }
     let app = open(&e);
-    let started = Arc::new(Mutex::new(Vec::<String>::new()));
+    // Which thread started each track: events reach subscribers on the
+    // worker's own thread. (Counting how many ran at once by looking at
+    // scan.status missed them on fast machines, where a short file takes
+    // milliseconds.)
+    let started = Arc::new(Mutex::new(Vec::<(std::thread::ThreadId, String)>::new()));
     let seen = started.clone();
     app.subscribe(Box::new(move |name, payload| {
         if name == "scan.item" && payload.contains(r#""outcome":"running""#) {
-            seen.lock().unwrap().push(payload.to_string());
+            seen.lock().unwrap().push((std::thread::current().id(), payload.to_string()));
         }
     }));
     call(&app, "settings.update", r#"{"values": {"workers": 4}}"#);
@@ -772,16 +776,15 @@ fn tracks_added_to_a_running_scan_get_every_worker() {
     wait_for("the long file to start", 30, || call(&app, "scan.status", "").get("running").and_then(Value::as_i64) == Some(1));
     std::thread::sleep(Duration::from_millis(300));
     call(&app, "library.import", &sonora_json::obj! { "paths" => vec![more.to_string_lossy().to_string()] }.to_string_compact());
-    let mut most = 0;
     wait_for("the scan", 120, || {
         let st = call(&app, "scan.status", "");
-        most = most.max(st.get("running").and_then(Value::as_i64).unwrap_or(0));
         s(&st, "state") == "idle" && st.get("indexing").is_none_or(Value::is_null)
     });
-    assert!(most >= 3, "only {most} worker(s) took the added tracks");
     let started = started.lock().unwrap().clone();
     assert_eq!(started.len(), 7, "{started:?}");
-    assert!(started.iter().all(|p| p.contains(r#""status":"analyzing""#)), "{started:?}");
+    assert!(started.iter().all(|(_, p)| p.contains(r#""status":"analyzing""#)), "{started:?}");
+    let workers: std::collections::HashSet<_> = started.iter().filter(|(_, p)| p.contains("short")).map(|(t, _)| *t).collect();
+    assert!(workers.len() >= 2, "only {} worker(s) took the added tracks", workers.len());
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }

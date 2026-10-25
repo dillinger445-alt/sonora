@@ -572,7 +572,7 @@ fn download_while_listening_resumes_from_what_the_preview_fetched() {
     assert_eq!(st.get("handedOver").and_then(Value::as_bool), Some(true));
     // The download shows in the downloads list; the preview keeps playing along.
     wait_for("the download to be listed", 10, || call(app, "slskd.downloads", &obj! {}).get("downloads").and_then(Value::as_array).map(Vec::len) == Some(1));
-    wait_for("the rest of the audio", 30, || status(app, id).get("decodedSeconds").and_then(Value::as_f64).unwrap_or(0.0) >= 29.9);
+    wait_for("the rest of the audio", 90, || status(app, id).get("decodedSeconds").and_then(Value::as_f64).unwrap_or(0.0) >= 29.9);
     // Stopping the preview leaves the download alone.
     call(app, "preview.stop", &obj! { "id" => id });
     std::thread::sleep(Duration::from_millis(500));

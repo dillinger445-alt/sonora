@@ -1458,12 +1458,14 @@ test('a YouTube playlist is read, searched, downloaded by the rules and checked 
     await expect.poll(async () => ((await api<{ playlistRules: { mode: string } }>(page, 'settings.get')).playlistRules.mode)).toBe('review');
     await page.getByRole('radio', { name: 'Automatic' }).click();
 
-    // Start: one search at a time, fewest words first; the pick is downloaded as soon as a track is found.
+    // Start: one search at a time, the title alone first; the pick is downloaded as soon as a track is found.
     await page.getByRole('button', { name: 'Start' }).click();
     await expect(page.locator('.pl-state')).toContainText('Searching for', { timeout: 15_000 });
     await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toBeVisible();
     await expect(page.locator('.pl-state')).toContainText('Done: 2 tracks downloaded and checked, 1 not found.', { timeout: 200_000 });
-    expect(slskd.searches[0]).toBe('Rain Original Mix');
+    expect(slskd.searches[0]).toBe('Rain');
+    // The track no one has is looked for down to the artist alone.
+    expect(slskd.searches).toContain('Someone');
     expect(slskd.searches).toContain('Someone Nowhere To Be Found');
     await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toHaveCount(0);
 
@@ -1473,7 +1475,7 @@ test('a YouTube playlist is read, searched, downloaded by the rules and checked 
     await expect(rain).toContainText('01 Rain (Original Mix).flac');
     await rain.getByRole('button', { name: 'Details of Kerri Chandler – Rain' }).click();
     const rainDetail = page.locator('.pl-detail').first();
-    await expect(rainDetail).toContainText('Found with search 1 of 5');
+    await expect(rainDetail).toContainText('Found by searching for the title.');
     await expect(rainDetail).toContainText('MP3: lossy formats are off');
     await expect(rainDetail.getByText('Downloaded')).toBeVisible();
 

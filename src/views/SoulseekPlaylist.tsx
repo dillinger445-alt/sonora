@@ -14,7 +14,7 @@ import { useConfirm } from '../components/Dialog.tsx';
 import { EmptyState } from '../components/Layout.tsx';
 import { QuickRules } from '../components/PlaylistRules.tsx';
 import { DASH, formatBytes, formatCount, formatDuration, formatRelative, plural } from '../lib/format.ts';
-import { FILTERS, canInclude, itemWords, matches, pickOf, quality, runWords, trackName, type Filter } from '../lib/playlist.ts';
+import { FILTERS, canInclude, itemWords, matches, pickOf, quality, runWords, searchWords, trackName, type Filter } from '../lib/playlist.ts';
 import { formatRoute, navigate } from '../lib/router.ts';
 import { useCore, useCoreEvent } from '../state/core.tsx';
 import { useToast } from '../state/toasts.tsx';
@@ -163,7 +163,7 @@ function Row({
                 </p>
               ) : null}
               <p className="faint pl-detail-meta">
-                {item.variation ? `Found with search ${item.variation} of 5. ` : ''}
+                {item.variation ? `${item.status === 'not_found' ? 'Last searched for' : 'Found by searching for'} ${searchWords(item.variation)}. ` : ''}
                 {item.responses != null ? `${plural(item.responses, 'person', 'people')} answered. ` : ''}
                 {item.attempts ? `${plural(item.attempts, 'download try', 'download tries')}.` : ''}
               </p>

@@ -480,7 +480,7 @@ export interface PlaylistItem {
   /** Why it was left out at first (it can be put back). */
   leftOut: string | null;
   status: PlaylistItemStatus;
-  /** The search variation (1–5) that found it, or the last one tried. */
+  /** The search (1–10, see `searchWords`) that found it, or the last one tried. */
   variation: number | null;
   responses: number | null;
   /** Ranked: the ones that passed first. */

@@ -159,8 +159,8 @@ it again or bring it back from Folders.
   until you accept its notice. See [docs/SOULSEEK.md](docs/SOULSEEK.md).
 - **YouTube playlists from Soulseek**: paste a public or unlisted playlist's
   link; SONORA reads its track list (titles read as artist, title and mix,
-  non-music left out), looks for each track on Soulseek with up to five
-  searches, picks the best file by rules you set (formats in order,
+  non-music left out), looks for each track on Soulseek with up to ten
+  searches (the title alone first, down to the artist alone), picks the best file by rules you set (formats in order,
   resolution, size, who shares it, how well the name matches) and
   downloads it, automatically or after you review the picks. Files that
   arrive wrong (a lossy source, damage) are swapped for the next best, up
@@ -303,8 +303,8 @@ notes. The app runs on macOS 13 or later and on Windows 10 and 11.
 ## Testing
 
 ```sh
-npm run test:rust          # 325 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, YouTube playlists (reading, matching, the run), API
-npm run test:unit          # 61 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, playlist runs in words, smart playlist rules in words, number fields, reused table rows, the set timeline, copying to the clipboard, release notes and the release script)
+npm run test:rust          # 326 Rust tests: DSP, tempo and key, decoders, export writers, scoring, indexing, scan queue, database, playlists, USB sync, Trash, Soulseek downloads, previews and slskd, setting slskd up, YouTube playlists (reading, matching, the run), API
+npm run test:unit          # 62 unit tests (formatting, key notations, mixing, undo in playlists, scores, routing, paths, visual decoding, previews and their queue, playlist runs in words, smart playlist rules in words, number fields, reused table rows, the set timeline, copying to the clipboard, release notes and the release script)
 npm run typecheck          # strict TypeScript, including tests and e2e
 npm run build && npm run test:e2e   # 37 Playwright tests: real interface + real core on a generated corpus, in Chromium and (two checks) in WebKit
 ```
@@ -312,8 +312,8 @@ npm run build && npm run test:e2e   # 37 Playwright tests: real interface + real
 A few Rust tests depend on the system: on macOS and Windows one moves a
 file to the system Trash or Recycle Bin, on Linux one makes the trash
 unusable to check that a file that stays keeps its place in a scan, and
-Unix systems check symlink loops. So macOS and Linux run 325 and Windows
-324. On Windows, CI also runs a test that turns the Recycle Bin off for the
+Unix systems check symlink loops. So macOS and Linux run 326 and Windows
+325. On Windows, CI also runs a test that turns the Recycle Bin off for the
 drive for a moment, to check that Move to Recycle Bin never deletes a file
 for good; on macOS and Windows a test that stores, changes and removes
 a secret in the real keychain or Credential Manager; and on macOS a test
