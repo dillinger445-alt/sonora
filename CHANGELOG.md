@@ -4,6 +4,20 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.4.2
+
+### Fixed
+
+- **A playlist run no longer gets stuck on one track.** A track whose
+  title is written in initials ("V.N.E") was searched as single letters,
+  which slskd refuses, and the run then tried the same search again for
+  ever. Initials are now searched as one word, a search slskd refuses is
+  skipped for the next one, and a track whose search keeps failing is
+  marked skipped, with the reason, while the run goes on to the next
+  track. SONORA still waits when slskd itself is away.
+- **The playlist page's header** no longer lets an error line run over the
+  counts below it, and the playlist's name is shown full size again.
+
 ## 0.4.1
 
 ### Fixed
