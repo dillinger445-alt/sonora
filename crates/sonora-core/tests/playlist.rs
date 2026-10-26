@@ -56,6 +56,10 @@ struct World {
     next: u64,
     /// Searches to refuse (slskd restarting), before answering again.
     refuse: usize,
+    /// Searches slskd did not accept (400).
+    refused: Vec<String>,
+    /// Searches with this word are lost by slskd once started (404 when looked at).
+    lost: Option<&'static str>,
 }
 
 struct FakeSlskd {
@@ -168,6 +172,12 @@ impl Http for FakeSlskd {
                     }
                 }
                 let text = sonora_json::parse(req.body.as_deref().unwrap_or("")).ok().and_then(|b| b.get("searchText").and_then(Value::as_str).map(str::to_string)).unwrap_or_default();
+                // As slskd: no word of two characters, no search (B107). And
+                // one search of the not-found track is refused, to see the run go on.
+                if !text.split(' ').any(|w| w.chars().count() >= 2) || text == "Shades Of Jae" {
+                    self.world.lock().unwrap().refused.push(text);
+                    return Ok(Response { status: 400, body: r#"{"errors":{"query":["Search query must contain at least one non-exclusion term with length greater than 1 (Parameter 'query')"]}}"#.into() });
+                }
                 let mut w = self.world.lock().unwrap();
                 w.next += 1;
                 let id = guid(w.next);
@@ -177,7 +187,11 @@ impl Http for FakeSlskd {
             }
             ("GET", ["searches", id]) => {
                 let mut w = self.world.lock().unwrap();
+                let lost = w.lost;
                 let Some((text, looks)) = w.searches.get_mut(*id) else { return Ok(Response { status: 404, body: String::new() }) };
+                if lost.is_some_and(|l| text.contains(l)) {
+                    return Ok(Response { status: 404, body: String::new() });
+                }
                 *looks += 1;
                 let responses = answers(text);
                 let mut v = obj! { "id" => *id, "searchText" => text.clone(), "responseCount" => responses.len() as i64 };
@@ -454,7 +468,10 @@ fn a_playlist_is_read_searched_downloaded_and_checked() {
     let asked = fake.world.lock().unwrap().asked.clone();
     assert_eq!(asked[0], "Rain", "{asked:?}");
     assert!(asked.contains(&"Blackwater".to_string()) && asked.contains(&"Octave One Blackwater".to_string()), "{asked:?}");
-    assert!(asked.contains(&"Shades Of Jae".to_string()) && asked.contains(&"Moodymann Shades Of Jae".to_string()) && asked.contains(&"Moodymann".to_string()), "{asked:?}");
+    // Its first search was refused by slskd: skipped, and the next ones made (B107).
+    let refused = fake.world.lock().unwrap().refused.clone();
+    assert_eq!(refused, vec!["Shades Of Jae".to_string()]);
+    assert!(asked.contains(&"Moodymann Shades Of Jae".to_string()) && asked.contains(&"Moodymann".to_string()), "{asked:?}");
     assert!(!asked.iter().any(|a| a.contains('(')), "no punctuation goes to Soulseek: {asked:?}");
 
     // The files are in the library, from Soulseek.
@@ -610,6 +627,30 @@ fn one_run_works_at_a_time_and_the_others_are_left_as_they_were() {
     assert_eq!(s(&run, "state"), "running");
     call(&app, "playlist.cancel", &obj! { "id" => b });
     wait_state(&app, b, &["cancelled"], 30);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&e.root);
+}
+
+#[test]
+fn a_track_whose_search_keeps_failing_is_skipped_and_the_run_goes_on() {
+    // B107: a search that failed for another reason than slskd being away
+    // was tried again every 15 s for ever, and the run stood on "Searching".
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    let e = env("skip");
+    let (app, fake) = open(&e);
+    setup(&app, &e);
+    let id = call(&app, "playlist.fetch", &obj! { "source" => "PLfixtureLateNight" }).get("id").and_then(Value::as_i64).unwrap();
+    wait_state(&app, id, &["draft"], 20);
+    only(&app, id, &["Blackwater", "Rain"]);
+    call(&app, "settings.update", &obj! { "values" => obj! { "playlistRules" => obj! { "searchSeconds" => 15, "retryNotFound" => false } } });
+    fake.world.lock().unwrap().lost = Some("Blackwater");
+    call(&app, "playlist.start", &obj! { "id" => id });
+    let run = wait_state(&app, id, &["finished", "failed", "cancelled"], 150);
+    assert_eq!(s(&run, "state"), "finished", "{:?}", run.get("error"));
+    let black = item(&run, "Blackwater");
+    assert_eq!(s(black, "status"), "not_found");
+    assert!(s(black, "error").starts_with("Skipped: the search kept failing"), "{black:?}");
+    assert_eq!(s(item(&run, "Rain"), "status"), "done", "the run went on to the next track");
     app.shutdown();
     let _ = std::fs::remove_dir_all(&e.root);
 }

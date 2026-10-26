@@ -15,7 +15,10 @@
   border-top: 1px solid var(--c-line-faint);
 }
 
-.pl-head {
+/* Scoped to the sidebar's section: the YouTube playlist page has a
+   .pl-head and .pl-title of its own, which these squeezed to 30 px (its
+   error line ran over the counts) and greyed (B108). */
+.pl > .pl-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -23,7 +26,7 @@
   padding: 0 4px 0 8px;
 }
 
-.pl-title {
+.pl > .pl-head .pl-title {
   font-size: var(--fs-label);
   font-weight: var(--w-medium);
   color: var(--c-text-3);

@@ -387,6 +387,12 @@ fn status_error(r: &Response) -> SlskdError {
             "slskd_forbidden",
             "slskd refused the request. A slskd running as a relay agent does not search or download: enter the address of the main slskd. Otherwise give the key the readwrite role in slskd.yml.",
         ),
+        // The request itself was refused (a search of one-letter words, say):
+        // asking again will not change that.
+        400 => {
+            let t = error_text(&r.body);
+            SlskdError::new("slskd_rejected", if t.is_empty() { "slskd did not accept the request.".to_string() } else { format!("slskd did not accept the request: {t}") })
+        }
         404 => SlskdError::new("not_found", "slskd no longer has that. It may have been removed in slskd."),
         409 => SlskdError::new("slskd_offline", "slskd is not connected to Soulseek right now. Check its connection in slskd's web interface."),
         429 => SlskdError::new("slskd_busy", "slskd is busy with another request. Try again in a moment."),

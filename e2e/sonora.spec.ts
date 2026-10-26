@@ -1461,6 +1461,11 @@ test('a YouTube playlist is read, searched, downloaded by the rules and checked 
     // Start: one search at a time, the title alone first; the pick is downloaded as soon as a track is found.
     await page.getByRole('button', { name: 'Start' }).click();
     await expect(page.locator('.pl-state')).toContainText('Searching for', { timeout: 15_000 });
+    // B108: the sidebar's 30 px header style no longer squeezes the run's header (its lines ran over the counts).
+    const head = await page.locator('.pl-view .pl-head').boundingBox();
+    const counts = await page.locator('.pl-counts').boundingBox();
+    expect(head && counts && head.y + head.height <= counts.y).toBe(true);
+    expect(head?.height ?? 0).toBeGreaterThan(30);
     await expect(page.getByRole('status').filter({ hasText: 'Playlist' })).toBeVisible();
     await expect(page.locator('.pl-state')).toContainText('Done: 2 tracks downloaded and checked, 1 not found.', { timeout: 200_000 });
     expect(slskd.searches[0]).toBe('Rain');

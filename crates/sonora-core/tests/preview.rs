@@ -594,7 +594,8 @@ fn a_preview_of_a_download_that_is_cancelled_ends_where_the_audio_stops() {
     wait_for("some audio", 20, || status(app, id).get("ready").and_then(Value::as_bool) == Some(true));
     call(app, "slskd.download", &obj! { "username" => USER, "files" => Value::Array(vec![obj! { "filename" => FILE, "size" => size }]) });
     let download = e.fake.world.lock().unwrap().transfers[1].id.clone();
-    std::thread::sleep(Duration::from_millis(400));
+    // At once: a download cancelled before the preview had looked for it
+    // (on a fast Mac in CI) left the preview waiting to follow it for good.
     call(app, "slskd.cancel", &obj! { "username" => USER, "id" => download });
     wait_for("the preview to end early", 15, || status(app, id).get("endsEarly").and_then(Value::as_bool) == Some(true));
     call(app, "preview.stop", &obj! { "id" => id });
