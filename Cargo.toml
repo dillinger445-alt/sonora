@@ -23,7 +23,7 @@ exclude = ["src-tauri"]
 # One version for the crates, the same as the app's (B97: the browser build
 # and `sonora version` said 0.1.0). scripts/release-lib.ts checks it.
 [workspace.package]
-version = "0.4.2"
+version = "0.4.3"
 
 [profile.dev]
 # DSP code is unbearably slow without optimisation; keep debug info but
