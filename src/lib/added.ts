@@ -47,8 +47,8 @@ export function addedActive(s: AddedSelection): boolean {
 }
 
 /** The filter fields for a selection. */
-export function addedFilter(s: AddedSelection): Pick<LibraryFilter, 'addedPeriod' | 'addedAfter' | 'addedBefore'> {
-  if (s.period) return { addedPeriod: s.period };
+export function addedFilter(s: AddedSelection, now = new Date()): Pick<LibraryFilter, 'addedPeriod' | 'addedAfter' | 'addedBefore' | 'utcOffsetMin'> {
+  if (s.period) return { addedPeriod: s.period, utcOffsetMin: -now.getTimezoneOffset() };
   const out: Pick<LibraryFilter, 'addedAfter' | 'addedBefore'> = {};
   const after = dayStart(s.from);
   const before = dayEnd(s.to);

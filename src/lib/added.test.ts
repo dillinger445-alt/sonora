@@ -8,7 +8,8 @@ const NOW = local(2026, 10, 29) + 15 * 3_600_000;
 test('a period moves with the clock; days are local midnights, the last one included', () => {
   assert.equal(addedActive(NO_ADDED), false);
   assert.deepEqual(addedFilter(NO_ADDED), {});
-  assert.deepEqual(addedFilter({ period: '7d', from: '2026-01-01', to: null }), { addedPeriod: '7d' }, 'a period wins over days');
+  const at = new Date(NOW);
+  assert.deepEqual(addedFilter({ period: '7d', from: '2026-01-01', to: null }, at), { addedPeriod: '7d', utcOffsetMin: -at.getTimezoneOffset() }, 'a period wins over days');
   assert.deepEqual(addedFilter({ period: null, from: '2026-10-01', to: '2026-10-20' }), { addedAfter: local(2026, 10, 1), addedBefore: local(2026, 10, 21) });
   assert.deepEqual(addedFilter({ period: null, from: null, to: '2026-12-31' }), { addedBefore: local(2027, 1, 1) });
   assert.equal(dayStart('2026-02-30'), null, 'no such day');
