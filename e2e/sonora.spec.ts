@@ -146,6 +146,25 @@ test('library: search, sort, filter and keyboard navigation', async ({ page }) =
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await expect(rows(page)).toHaveCount(total);
 
+  // By the date tracks were added: all of them came in today; none in 2020.
+  const addedFilter = page.getByRole('toolbar', { name: 'Filters' }).getByRole('button', { name: /^Added/ });
+  await addedFilter.click();
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await expect(addedFilter).toContainText('Today');
+  await expect(rows(page)).toHaveCount(total);
+  await addedFilter.click();
+  await page.getByLabel('Added on or after').fill('2020-01-01');
+  await page.getByLabel('Added on or before').fill('2020-12-31');
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('No tracks match these filters.')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(rows(page)).toHaveCount(total);
+  // The Added column shows the date and sorts newest first.
+  const addedHead = page.getByRole('columnheader', { name: 'Added' });
+  await expect(addedHead).toBeVisible();
+  await addedHead.getByRole('button').click();
+  await expect(addedHead).toHaveAttribute('aria-sort', 'descending');
+
   // Keyboard: focus the grid, move, open with Enter.
   await page.getByRole('searchbox', { name: 'Search tracks' }).fill('clean_master_24bit');
   await expect(rows(page)).toHaveCount(1);

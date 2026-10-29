@@ -11,6 +11,8 @@ import { AddToPlaylist } from '../components/AddToPlaylist.tsx';
 import { Button, IconButton } from '../components/Button.tsx';
 import { SearchField, Segmented } from '../components/Controls.tsx';
 import { BpmFilter, bpmActive, KeyFilter, keysFor, NO_BPM, NO_KEYS, type BpmRange, type KeySelection } from '../components/DjFilters.tsx';
+import { AddedFilter } from '../components/AddedFilter.tsx';
+import { ADDED_PERIODS, addedActive, addedChip, addedFilter, NO_ADDED, type AddedSelection } from '../lib/added.ts';
 import { Menu, type MenuItem } from '../components/Menu.tsx';
 import { TrackTable, type TrackTableHandle } from '../components/TrackTable.tsx';
 import { formatCount, plural } from '../lib/format.ts';
@@ -99,6 +101,7 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
   const [bpm, setBpm] = useState<BpmRange>(NO_BPM);
   const [keySel, setKeySel] = useState<KeySelection>(NO_KEYS);
   const [genres, setGenres] = useState<string[]>([]);
+  const [added, setAdded] = useState<AddedSelection>(NO_ADDED);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [formats, setFormats] = useState<string[]>([]);
@@ -150,11 +153,20 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
     const keys = keysFor(keySel);
     if (keys.length) f.keys = keys;
     if (genres.length) f.genres = genres;
+    Object.assign(f, addedFilter(added));
     return f;
-  }, [baseFilter, rangeKind, search, formats, flags, statuses, range, showStatusFilter, bpm, keySel, genres]);
+  }, [baseFilter, rangeKind, search, formats, flags, statuses, range, showStatusFilter, bpm, keySel, genres, added]);
 
   const filtersActive =
-    !!search || formats.length > 0 || flags.length > 0 || statuses.length > 0 || range != null || bpmActive(bpm) || keySel.keys.length > 0 || genres.length > 0;
+    !!search ||
+    formats.length > 0 ||
+    flags.length > 0 ||
+    statuses.length > 0 ||
+    range != null ||
+    bpmActive(bpm) ||
+    keySel.keys.length > 0 ||
+    genres.length > 0 ||
+    addedActive(added);
   const clearFilters = () => {
     // The search typed a moment ago must not apply after this (B25).
     applySearch.cancel();
@@ -167,6 +179,7 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
     setBpm(NO_BPM);
     setKeySel(NO_KEYS);
     setGenres([]);
+    setAdded(NO_ADDED);
     // The Clear button goes away: the keyboard goes to the search field (B62).
     searchRef.current?.focus();
   };
@@ -288,6 +301,8 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
     const keys = keySel.keys.map((k) => formatKey(k, notation));
     if (keys.length) parts.push(keys.length <= 3 ? keys.join(' ') : `${keys.length} keys`);
     if (search) parts.push(`“${search}”`);
+    const when = addedChip(added);
+    if (when) parts.push(added.period ? ADDED_PERIODS.find((p) => p.id === added.period)?.label ?? when : `added ${when}`);
     return parts.join(' ') || 'Smart playlist';
   };
 
@@ -378,6 +393,7 @@ export function LibraryBrowser({ baseFilter, prefsKey, defaultSort, showIssueFil
             />
           ) : null}
           {showStatusFilter ? <Menu label="Status filter" items={statusItems} trigger={filterButton('Status', statuses.length)} /> : null}
+          <AddedFilter value={added} onChange={setAdded} />
           <span className="toolbar-sep" aria-hidden />
           <BpmFilter value={bpm} onChange={setBpm} playingBpm={player.track?.djBpm ?? null} />
           <KeyFilter value={keySel} onChange={setKeySel} counts={keyCounts} notation={notation} playingKey={player.track?.djKey ?? null} />

@@ -511,7 +511,17 @@ pub struct Filter {
     pub keys: Vec<u8>,
     /// Genres in use (case-insensitive exact match).
     pub genres: Vec<String>,
+    /// Added to the library within a period that moves with the clock:
+    /// "today", "7d", "30d", "90d" or "year" (this calendar year), in the
+    /// computer's time zone. Kept as words so a smart playlist keeps up.
+    pub added_period: Option<String>,
+    /// Added at or after / before these times (ms since 1970): a range of days.
+    pub added_after: Option<i64>,
+    pub added_before: Option<i64>,
 }
+
+/// The periods `addedPeriod` takes.
+pub const ADDED_PERIODS: [&str; 5] = ["today", "7d", "30d", "90d", "year"];
 
 impl Filter {
     pub fn from_json(v: Option<&Value>) -> Result<Filter, String> {
@@ -553,6 +563,13 @@ impl Filter {
             Some(_) => return Err("keys must be an array".into()),
         };
         f.genres = strings("genres")?;
+        f.added_period = match v.get("addedPeriod") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(p)) if ADDED_PERIODS.contains(&p.as_str()) => Some(p.clone()),
+            Some(_) => return Err(format!("addedPeriod must be one of {}", ADDED_PERIODS.join(", "))),
+        };
+        f.added_after = v.get("addedAfter").and_then(Value::as_i64);
+        f.added_before = v.get("addedBefore").and_then(Value::as_i64);
         Ok(f)
     }
 
@@ -661,6 +678,27 @@ impl Filter {
             for g in &self.genres {
                 p.push(SqlValue::Text(g.clone()));
             }
+        }
+        if let Some(period) = &self.added_period {
+            // SQLite's 'localtime' is the computer's own time zone.
+            w.push(
+                match period.as_str() {
+                    "today" => "added_at >= CAST(strftime('%s', 'now', 'localtime', 'start of day', 'utc') AS INTEGER) * 1000",
+                    "7d" => "added_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 7 * 86400) * 1000",
+                    "30d" => "added_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 30 * 86400) * 1000",
+                    "90d" => "added_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 90 * 86400) * 1000",
+                    _ => "added_at >= CAST(strftime('%s', 'now', 'localtime', 'start of year', 'utc') AS INTEGER) * 1000",
+                }
+                .into(),
+            );
+        }
+        if let Some(t) = self.added_after {
+            w.push("added_at >= ?".into());
+            p.push(SqlValue::Int(t));
+        }
+        if let Some(t) = self.added_before {
+            w.push("added_at < ?".into());
+            p.push(SqlValue::Int(t));
         }
         if w.is_empty() {
             ("1 = 1".into(), p)
@@ -1062,5 +1100,30 @@ mod tests {
         assert_eq!(count("night"), 1, "ASCII words as before");
         assert_eq!(count("HOUSE"), 1);
         assert_eq!(count("день"), 0);
+    }
+
+    #[test]
+    fn tracks_are_found_by_when_they_were_added() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE tracks (id INTEGER PRIMARY KEY, added_at INTEGER NOT NULL);").unwrap();
+        let now = crate::db::now_ms();
+        let day = 86_400_000i64;
+        // Now, 3 days ago, 20 days ago, 60 days ago, two years ago.
+        for (id, at) in [(1, now - 1000), (2, now - 3 * day), (3, now - 20 * day), (4, now - 60 * day), (5, now - 730 * day)] {
+            c.execute("INSERT INTO tracks (id, added_at) VALUES (?, ?)", crate::params![id, at]).unwrap();
+        }
+        let ids = |v: Value| {
+            let f = Filter::from_json(Some(&v)).unwrap();
+            let (w, p) = f.sql();
+            c.query(&format!("SELECT id FROM tracks WHERE {w} ORDER BY id"), &as_params(&p), |r| r.i64(0)).unwrap()
+        };
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "today" }), vec![1]);
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "7d" }), vec![1, 2]);
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "30d" }), vec![1, 2, 3]);
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "90d" }), vec![1, 2, 3, 4]);
+        assert!(ids(sonora_json::obj! { "addedPeriod" => "year" }).iter().all(|i| *i != 5), "two years ago is not this year");
+        // A range of days: from 25 days ago up to (not including) 2 days ago.
+        assert_eq!(ids(sonora_json::obj! { "addedAfter" => now - 25 * day, "addedBefore" => now - 2 * day }), vec![2, 3]);
+        assert!(Filter::from_json(Some(&sonora_json::obj! { "addedPeriod" => "yesterday; DROP TABLE tracks" })).is_err());
     }
 }

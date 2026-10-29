@@ -1050,3 +1050,41 @@ button.link {
   margin-top: 2px;
   font-size: var(--fs-ui);
 }
+
+/* ------------------------------------------------- Added (date) filter */
+
+.added-periods {
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.added-periods .time-chip {
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--fs-sm);
+}
+
+.time-chip.is-on {
+  border-color: var(--c-lime-line);
+  background: var(--c-lime-dim);
+  color: var(--c-lime);
+}
+
+.added-days {
+  display: flex;
+  gap: 10px;
+}
+
+.added-day {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.added-day .text-input {
+  width: 100%;
+  color-scheme: dark;
+}

@@ -268,7 +268,14 @@ export interface LibraryFilter {
   /** Keys 0–23. */
   keys?: number[];
   genres?: string[];
+  /** Added within a period that moves with the clock (a smart playlist keeps up). */
+  addedPeriod?: AddedPeriod;
+  /** Added at or after / before these times (ms): a range of days. */
+  addedAfter?: number;
+  addedBefore?: number;
 }
+
+export type AddedPeriod = 'today' | '7d' | '30d' | '90d' | 'year';
 
 export type SortKey =
   | 'title'

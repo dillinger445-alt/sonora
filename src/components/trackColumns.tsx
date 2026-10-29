@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { LuPause, LuPlay } from 'react-icons/lu';
 import type { KeyNotation, ScoreKind, SortKey, TrackRow } from '../api/types.ts';
-import { DASH, encodingShort, formatDb, formatDuration, formatRateKhz } from '../lib/format.ts';
+import { DASH, encodingShort, formatDay, formatDb, formatDuration, formatRateKhz } from '../lib/format.ts';
 import { confidenceTone } from '../lib/scores.ts';
 import { BpmText, KeyBadge } from './DjMarks.tsx';
 import { FlagList, ScoreCell, StatusMark } from './Marks.tsx';
@@ -23,6 +23,7 @@ export type ColumnId =
   | 'dj'
   | 'listening'
   | 'confidence'
+  | 'added'
   | 'issues';
 
 export interface Column {
@@ -234,6 +235,20 @@ export function trackColumns(scoreKind: ScoreKind): Column[] {
       priority: 6,
       render: (t) =>
         t.confidenceLabel ? <span className={`conf conf-${confidenceTone(t.confidenceLabel) ?? 'none'}`}>{t.confidenceLabel}</span> : <span className="faint">{DASH}</span>,
+    },
+    {
+      id: 'added',
+      label: 'Added',
+      description: 'When the track was added to SONORA',
+      width: '96px',
+      min: 96,
+      sortKey: 'added',
+      priority: 4,
+      render: (t) => (
+        <span className="num muted" title={t.addedAt ? new Date(t.addedAt).toLocaleString() : undefined}>
+          {formatDay(t.addedAt)}
+        </span>
+      ),
     },
     {
       id: 'issues',

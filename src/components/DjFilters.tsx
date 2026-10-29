@@ -21,7 +21,7 @@ export function bpmActive(r: BpmRange): boolean {
   return r.min != null || r.max != null;
 }
 
-function FilterTrigger({ p, text, chip }: { p: PopoverTriggerProps; text: string; chip: string | null }) {
+export function FilterTrigger({ p, text, chip }: { p: PopoverTriggerProps; text: string; chip: string | null }) {
   return (
     <Button size="sm" variant={chip ? 'secondary' : 'ghost'} className={chip ? 'is-filtered' : ''} trailing={<LuChevronDown className="btn-chevron" aria-hidden />} {...p}>
       {text}

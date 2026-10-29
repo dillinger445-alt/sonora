@@ -106,6 +106,16 @@ function dateFormat(opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
 const dateFmt = dateFormat({ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const dateYearFmt = dateFormat({ year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+const dayFmt = dateFormat({ month: 'short', day: 'numeric' });
+const dayYearFmt = dateFormat({ year: 'numeric', month: 'short', day: 'numeric' });
+
+/** The day alone ("Oct 19"; the year only when it differs: "Oct 19, 2025"). */
+export function formatDay(ms: number | null | undefined, now = Date.now()): string {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return DASH;
+  const d = new Date(ms);
+  return d.getFullYear() === new Date(now).getFullYear() ? dayFmt.format(d) : dayYearFmt.format(d);
+}
+
 /** Absolute date and time ("Oct 19, 14:20"; the year only when it differs). */
 export function formatDate(ms: number | null | undefined, now = Date.now()): string {
   if (ms == null || !Number.isFinite(ms) || ms <= 0) return DASH;
