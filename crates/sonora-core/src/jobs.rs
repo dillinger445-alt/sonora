@@ -1427,8 +1427,15 @@ impl PlaylistJobs {
     /// or `failed` with the reason. The run's id.
     pub fn fetch(&self, app: &Arc<App>, source: &str) -> Result<i64, ApiError> {
         let id = youtube::playlist_id(source).map_err(|m| ApiError::new("invalid_params", m))?;
-        if self.inner.fetching.swap(true, Ordering::SeqCst) {
-            return Err(ApiError::new("busy", "A playlist is being read already; wait a moment."));
+        // A list read a moment ago is saved before its reader lets go: a
+        // second fetch right after the first one shows waits that moment
+        // instead of being refused (it failed so in CI on a fast Mac).
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.inner.fetching.swap(true, Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                return Err(ApiError::new("busy", "A playlist is being read already; wait a moment."));
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
         let now = now_ms();
         let run_id = {
