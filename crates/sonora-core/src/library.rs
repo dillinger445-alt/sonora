@@ -511,7 +511,57 @@ pub struct Filter {
     pub keys: Vec<u8>,
     /// Genres in use (case-insensitive exact match).
     pub genres: Vec<String>,
+    /// Added to the library within a period that moves with the clock:
+    /// "today", "7d", "30d", "90d" or "year" (this calendar year), in the
+    /// computer's time zone. Kept as words so a smart playlist keeps up.
+    pub added_period: Option<String>,
+    /// Added at or after / before these times (ms since 1970): a range of days.
+    pub added_after: Option<i64>,
+    pub added_before: Option<i64>,
+    /// The interface's offset from UTC in minutes (east positive), for where
+    /// "today" and "this year" begin. SQLite's own 'localtime' is not the same
+    /// everywhere (Windows' SQLite answered nothing), so SONORA works it out.
+    pub utc_offset_min: i64,
 }
+
+/// Days since 1970-01-01 of a calendar date (proleptic Gregorian).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The year of a day counted from 1970-01-01.
+fn year_of_days(z: i64) -> i64 {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    yoe + era * 400 + if m <= 2 { 1 } else { 0 }
+}
+
+/// Where a period begins (ms since 1970), seen from `now` at `offset_min` from UTC.
+pub fn added_since(period: &str, now: i64, offset_min: i64) -> i64 {
+    const DAY: i64 = 86_400_000;
+    let offset = offset_min * 60_000;
+    let local_day = (now + offset).div_euclid(DAY);
+    match period {
+        "today" => local_day * DAY - offset,
+        "7d" => now - 7 * DAY,
+        "30d" => now - 30 * DAY,
+        "90d" => now - 90 * DAY,
+        _ => days_from_civil(year_of_days(local_day), 1, 1) * DAY - offset,
+    }
+}
+
+/// The periods `addedPeriod` takes.
+pub const ADDED_PERIODS: [&str; 5] = ["today", "7d", "30d", "90d", "year"];
 
 impl Filter {
     pub fn from_json(v: Option<&Value>) -> Result<Filter, String> {
@@ -553,6 +603,14 @@ impl Filter {
             Some(_) => return Err("keys must be an array".into()),
         };
         f.genres = strings("genres")?;
+        f.added_period = match v.get("addedPeriod") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(p)) if ADDED_PERIODS.contains(&p.as_str()) => Some(p.clone()),
+            Some(_) => return Err(format!("addedPeriod must be one of {}", ADDED_PERIODS.join(", "))),
+        };
+        f.utc_offset_min = v.get("utcOffsetMin").and_then(Value::as_i64).filter(|m| m.abs() <= 14 * 60).unwrap_or(0);
+        f.added_after = v.get("addedAfter").and_then(Value::as_i64);
+        f.added_before = v.get("addedBefore").and_then(Value::as_i64);
         Ok(f)
     }
 
@@ -661,6 +719,18 @@ impl Filter {
             for g in &self.genres {
                 p.push(SqlValue::Text(g.clone()));
             }
+        }
+        if let Some(period) = &self.added_period {
+            w.push("added_at >= ?".into());
+            p.push(SqlValue::Int(added_since(period, crate::db::now_ms(), self.utc_offset_min)));
+        }
+        if let Some(t) = self.added_after {
+            w.push("added_at >= ?".into());
+            p.push(SqlValue::Int(t));
+        }
+        if let Some(t) = self.added_before {
+            w.push("added_at < ?".into());
+            p.push(SqlValue::Int(t));
         }
         if w.is_empty() {
             ("1 = 1".into(), p)
@@ -1062,5 +1132,41 @@ mod tests {
         assert_eq!(count("night"), 1, "ASCII words as before");
         assert_eq!(count("HOUSE"), 1);
         assert_eq!(count("день"), 0);
+    }
+
+    #[test]
+    fn tracks_are_found_by_when_they_were_added() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE tracks (id INTEGER PRIMARY KEY, added_at INTEGER NOT NULL);").unwrap();
+        let now = crate::db::now_ms();
+        let day = 86_400_000i64;
+        // Now, 3 days ago, 20 days ago, 60 days ago, two years ago.
+        for (id, at) in [(1, now - 1000), (2, now - 3 * day), (3, now - 20 * day), (4, now - 60 * day), (5, now - 730 * day)] {
+            c.execute("INSERT INTO tracks (id, added_at) VALUES (?, ?)", crate::params![id, at]).unwrap();
+        }
+        let ids = |v: Value| {
+            let f = Filter::from_json(Some(&v)).unwrap();
+            let (w, p) = f.sql();
+            c.query(&format!("SELECT id FROM tracks WHERE {w} ORDER BY id"), &as_params(&p), |r| r.i64(0)).unwrap()
+        };
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "today" }), vec![1]);
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "7d" }), vec![1, 2]);
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "30d" }), vec![1, 2, 3]);
+        assert_eq!(ids(sonora_json::obj! { "addedPeriod" => "90d" }), vec![1, 2, 3, 4]);
+        assert!(ids(sonora_json::obj! { "addedPeriod" => "year" }).iter().all(|i| *i != 5), "two years ago is not this year");
+        // A range of days: from 25 days ago up to (not including) 2 days ago.
+        assert_eq!(ids(sonora_json::obj! { "addedAfter" => now - 25 * day, "addedBefore" => now - 2 * day }), vec![2, 3]);
+        assert!(Filter::from_json(Some(&sonora_json::obj! { "addedPeriod" => "yesterday; DROP TABLE tracks" })).is_err());
+        // Where today and this year begin, seen from Tbilisi (UTC+4) and New York (UTC−4).
+        let at = |y, m, d, h: i64, min: i64| days_from_civil(y, m, d) * 86_400_000 + (h * 60 + min) * 60_000;
+        let now = at(2026, 10, 29, 2, 30); // 06:30 in Tbilisi, 22:30 the day before in New York
+        assert_eq!(added_since("today", now, 240), at(2026, 10, 28, 20, 0));
+        assert_eq!(added_since("today", now, -240), at(2026, 10, 28, 4, 0));
+        assert_eq!(added_since("year", now, 240), at(2025, 12, 31, 20, 0));
+        let new_year = at(2026, 12, 31, 21, 0); // already 2027 in Tbilisi
+        assert_eq!(added_since("year", new_year, 240), at(2026, 12, 31, 20, 0));
+        assert_eq!(added_since("year", new_year, 0), at(2026, 1, 1, 0, 0));
+        assert_eq!(added_since("7d", now, 240), now - 7 * 86_400_000);
+        assert_eq!((year_of_days(days_from_civil(2024, 2, 29)), days_from_civil(1970, 1, 1)), (2024, 0));
     }
 }

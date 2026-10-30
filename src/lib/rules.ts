@@ -4,6 +4,7 @@
  */
 
 import type { KeyNotation, LibraryFilter, SmartRules } from '../api/types.ts';
+import { addedWords } from './added.ts';
 import { formatCount, plural } from './format.ts';
 import { formatBpm, formatKey } from './keys.ts';
 
@@ -28,6 +29,8 @@ export function otherRules(f: LibraryFilter, withScore: boolean): string[] {
   const range = withScore ? scoreRange(f) : null;
   if (range) out.push(range);
   if (f.attention) out.push('needs attention');
+  const added = addedWords(f);
+  if (added) out.push(added);
   return out;
 }
 

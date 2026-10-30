@@ -4,6 +4,17 @@ What changed in each version of SONORA. The section of a version is also
 what the app shows when it offers that version as an update, so it is
 written for the people using SONORA.
 
+## 0.4.3
+
+### New
+
+- **See and filter tracks by when you added them.** The library has an
+  **Added** column with the day each track joined SONORA; click its
+  header to see the newest first. The new **Added** filter keeps tracks
+  added today, in the last 7, 30 or 90 days, this year, or between two
+  days you pick. Saved as a smart playlist, "the last 7 days" keeps up as
+  days pass.
+
 ## 0.4.2
 
 ### Fixed
